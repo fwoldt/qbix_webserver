@@ -52,6 +52,9 @@ jobs:
       - name: Cookies and sessions
         run: bash tests/cookies-sessions.sh
 
+      - name: Shimmed calls inside namespaces
+        run: bash tests/namespaced-scripts.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
