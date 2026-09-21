@@ -191,7 +191,8 @@ class Q_WebServer_Pool
 
 			// Execute the PHP script
 			$resp = self::executeScript($req);
-			self::writeMsg($socket, $resp['status'], $resp['body'], $resp['headers']);
+			self::writeMsg($socket, $resp['status'], $resp['body'],
+				$resp['headers'], $resp['cookies'] ?? array());
 			$handled++;
 
 			if (!$octane) break;
@@ -464,7 +465,17 @@ class Q_WebServer_Pool
 			@ob_clean();
 		}
 		while (@ob_end_clean()) { /* drop removable buffers */ }
-		return compact('status', 'body', 'headers');
+
+		// Cookies live in Q_Response, which is the worker's memory. The
+		// parent used to read its own copy when writing the response and so
+		// found nothing: setcookie() reached the client from no script at
+		// all. Carry them across with the response.
+		$cookies = array();
+		if (class_exists('Q_WebServer_State', false)
+		and method_exists('Q_WebServer_State', 'cookieHeaders')) {
+			$cookies = (array) Q_WebServer_State::cookieHeaders();
+		}
+		return compact('status', 'body', 'headers', 'cookies');
 	}
 
 	// ── Parent-side dispatch ─────────────────────────────
@@ -813,7 +824,8 @@ class Q_WebServer_Pool
 		return $buf;
 	}
 
-	protected static function writeMsg($sock, $status, $body, $headers)
+	protected static function writeMsg($sock, $status, $body, $headers,
+		$cookies = array())
 	{
 		// json_encode() returns false on bytes that are not valid UTF-8, and
 		// strlen(false) is 0, so a binary body used to go out as a length
@@ -822,11 +834,11 @@ class Q_WebServer_Pool
 		// script generated that was not text -- an image, a PDF, a zip --
 		// vanished silently. Base64 carries those bytes through, and only
 		// those: text responses keep their exact previous shape and cost.
-		$j = json_encode(compact('status', 'body', 'headers'));
+		$j = json_encode(compact('status', 'body', 'headers', 'cookies'));
 		if ($j === false) {
 			$b64 = true;
 			$body = base64_encode($body);
-			$j = json_encode(compact('status', 'body', 'headers', 'b64'));
+			$j = json_encode(compact('status', 'body', 'headers', 'cookies', 'b64'));
 		}
 		if ($j === false) {
 			// Headers themselves are not encodable. Say so rather than

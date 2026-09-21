@@ -49,6 +49,9 @@ jobs:
       - name: Binary response bodies
         run: bash tests/binary-response.sh
 
+      - name: Cookies and sessions
+        run: bash tests/cookies-sessions.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
