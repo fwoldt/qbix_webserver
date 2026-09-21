@@ -64,6 +64,9 @@ jobs:
       - name: SCRIPT_NAME below the root
         run: bash tests/script-name.sh
 
+      - name: Lazily initialised statics
+        run: bash tests/lazy-statics.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
