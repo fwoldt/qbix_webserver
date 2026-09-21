@@ -56,7 +56,7 @@ header('Content-Type: text/plain');
 if (!class_exists('Loader', false)) {
     class Loader {
         private static $run;          // implicitly null, like Composer's
-        private static $count = 0;
+        public static $route;         // request state, like a router's
         public static function init() {
             if (self::$run !== null) return;   // build once
             self::$run = static function ($x) { return "RAN:$x"; };
@@ -65,11 +65,13 @@ if (!class_exists('Loader', false)) {
             $f = self::$run;                   // null after a reset
             return $f($x);
         }
-        public static function bump() { return ++self::$count; }
     }
     Loader::init();
 }
-echo Loader::go('ok');
+// Whatever a previous request left behind must be gone by now.
+$seen = Loader::$route === null ? 'fresh' : 'stale';
+Loader::$route = '/page';
+echo Loader::go('ok'), ' ', $seen;
 PHP
 
 # A counter, to show what the reset was for: state that does accumulate.
@@ -99,20 +101,32 @@ body() { curl -s --max-time 15 "http://127.0.0.1:$PORT/lazy.php" 2>/dev/null; }
 code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://127.0.0.1:$PORT/lazy.php" 2>/dev/null; }
 
 r1=$(body)
-[ "$r1" = "RAN:ok" ] && ok "first request builds and uses the static" \
-                    || bad "first request: $r1"
+case "$r1" in "RAN:ok "*) ok "first request builds and uses the static" ;;
+              *) bad "first request: $r1" ;; esac
 
 # The one that used to fail. The class is still declared, so the guarded
 # initialisation is skipped; the static has to have survived on its own.
 r2=$(body)
 case "$r2" in
-    "RAN:ok") ok "second request still has it" ;;
+    "RAN:ok "*) ok "second request still has it" ;;
     *"not callable"*) bad "second request lost the static: $r2" ;;
     *) bad "second request: $r2" ;;
 esac
 
 r3=$(body)
-[ "$r3" = "RAN:ok" ] && ok "third request still has it" || bad "third request: $r3"
+case "$r3" in "RAN:ok "*) ok "third request still has it" ;;
+              *) bad "third request: $r3" ;; esac
+
+# The other half: a scalar holding request state has to be cleared, or an
+# application that records its route in one answers every later request
+# with the first one's page.
+stale=0
+for r in "$r2" "$r3"; do
+    case "$r" in *stale*) stale=1 ;; esac
+done
+[ "$stale" = "0" ] \
+    && ok "request state in a static is cleared between requests" \
+    || bad "a later request saw the previous one's value: $r2 / $r3"
 
 [ "$(code)" = "200" ] && ok "status stays 200" || bad "status became $(code)"
 

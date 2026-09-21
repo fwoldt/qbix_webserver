@@ -150,9 +150,21 @@ class Q_WebServer_Snapshot
 			// own state via shutdown()/init().
 			if ($cls === 'Q_WebServer_Compat') continue;
 			foreach ($props as $name => $val) {
-				self::$reflectors[$cls][$name]->setValue(
-					null, is_object($val) ? clone $val : $val
-				);
+				$prop = self::$reflectors[$cls][$name];
+				// An object in a static is installed behaviour -- a closure, a
+				// service, a handler -- built once and relied on afterwards.
+				// Composer's ClassLoader keeps its include helper there and builds
+				// it behind a null check, so putting the declared null back left
+				// the loader calling null on the next request.
+				//
+				// Scalars and arrays are where request state sits, and those still
+				// go back. Skipping such classes altogether -- the first attempt at
+				// this -- left an application's recorded route standing, so every
+				// later request answered with the first one's page.
+				try {
+					if (is_object($prop->getValue(null))) continue;
+				} catch (\Throwable $ignore) { /* uninitialized typed property */ }
+				$prop->setValue(null, is_object($val) ? clone $val : $val);
 			}
 		}
 	}
