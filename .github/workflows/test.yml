@@ -31,6 +31,48 @@ jobs:
       - name: SAPI suite
         run: php tests/testSapi.php
 
+      - name: Idle worker survival
+        run: bash tests/idle-worker.sh
+
+      - name: Content-Type on PHP responses
+        run: bash tests/content-type.sh
+
+      - name: phpinfo renderer
+        run: php tests/phpinfo.php
+
+      - name: htaccess Options +Indexes
+        run: bash tests/htaccess-indexes.sh
+
+      - name: Document root listing
+        run: bash tests/root-listing.sh
+
+      - name: Binary response bodies
+        run: bash tests/binary-response.sh
+
+      - name: Cookies and sessions
+        run: bash tests/cookies-sessions.sh
+
+      - name: Shimmed calls inside namespaces
+        run: bash tests/namespaced-scripts.sh
+
+      - name: Working directory per request
+        run: bash tests/working-directory.sh
+
+      - name: Autoloaders across requests
+        run: bash tests/autoloader-persistence.sh
+
+      - name: SCRIPT_NAME below the root
+        run: bash tests/script-name.sh
+
+      - name: Lazily initialised statics
+        run: bash tests/lazy-statics.sh
+
+      - name: What a 500 tells you
+        run: bash tests/error-diagnostics.sh
+
+      - name: PATH_INFO on pooled requests
+        run: bash tests/path-info.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true

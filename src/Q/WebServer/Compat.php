@@ -38,6 +38,7 @@ class Q_WebServer_Compat
 		'headers_list'         => 'Q_WebServer_Compat::_headers_list',
 		'header_remove'        => 'Q_WebServer_Compat::_header_remove',
 		'session_start'        => 'Q_WebServer_Compat::_session_start',
+		'session_id'           => 'Q_WebServer_Compat::_session_id',
 		'session_write_close'  => 'Q_WebServer_Compat::_session_write_close',
 		'session_regenerate_id'=> 'Q_WebServer_Compat::_session_regenerate_id',
 		'session_destroy'      => 'Q_WebServer_Compat::_session_destroy',
@@ -48,6 +49,7 @@ class Q_WebServer_Compat
 		'ini_set'              => 'Q_WebServer_Compat::_ini_set',
 		'set_time_limit'       => 'Q_WebServer_Compat::_set_time_limit',
 		'getallheaders'        => 'Q_WebServer_Compat::_getallheaders',
+		'phpinfo'              => 'Q_WebServer_Compat::_phpinfo',
 		'apache_request_headers' => 'Q_WebServer_Compat::_getallheaders',
 		// Octane safety — lifecycle functions that leak state in persistent workers
 		'register_shutdown_function' => 'Q_WebServer_Compat::_register_shutdown_function',
@@ -58,6 +60,7 @@ class Q_WebServer_Compat
 		'spl_autoload_register'=> 'Q_WebServer_Compat::_spl_autoload_register',
 		'spl_autoload_unregister' => 'Q_WebServer_Compat::_spl_autoload_unregister',
 		'putenv'               => 'Q_WebServer_Compat::_putenv',
+		'stream_wrapper_unregister' => 'Q_WebServer_Compat::_stream_wrapper_unregister',
 	);
 
 	/** @var array In-memory transform cache: realpath → ['source' => ..., 'mtime' => ...] */
@@ -74,6 +77,13 @@ class Q_WebServer_Compat
 
 	/** @var bool Whether a session is currently active */
 	private static $sessionActive = false;
+
+	/**
+	 * The session id this layer manages. PHP's own session machinery is
+	 * not used, so its session_id() is not the place to keep it.
+	 * @var string
+	 */
+	private static $sessionId = '';
 
 	/** @var string Current session file path */
 	private static $sessionFile = '';
@@ -199,12 +209,26 @@ class Q_WebServer_Compat
 		}
 		self::$errorHandlerStack = array();
 
-		// ── Restore autoloader stack to boot state ──
-		if (self::$bootAutoloadersCaptured) {
-			foreach (self::$requestAutoloaders as $loader) {
-				spl_autoload_unregister($loader);
-			}
-		}
+		// ── Autoloaders stay registered ──
+		// They used to be unregistered here, to hand the next request the
+		// boot-time stack. But a class declared during a request stays
+		// declared, and an application registers its autoloader behind a
+		// guard on exactly that:
+		//
+		//     if (!class_exists('ezpAutoloader', false)) {
+		//         class ezpAutoloader { ... }
+		//         spl_autoload_register(array('ezpAutoloader', 'autoload'));
+		//     }
+		//
+		// Second request: the class is still there, the block is skipped,
+		// the autoloader is not registered again -- and nothing can be
+		// loaded any more. eZ Publish answered the first request and then
+		// reported "Class eZDB not found" for every one after it.
+		//
+		// Removing half of the pair is what breaks; keeping both matches
+		// what the worker actually is. An autoloader that closes over one
+		// request's state would be a problem, but that is rare, and far
+		// rarer than the guarded registration this used to break.
 		self::$requestAutoloaders = array();
 
 		// ── Restore environment variables ──
@@ -246,6 +270,7 @@ class Q_WebServer_Compat
 		self::$sessionActive = false;
 		self::$sessionFile = '';
 		self::$sessionFp = null;
+		self::$sessionId = '';
 		self::$requestHeaders = array();
 
 		@stream_wrapper_restore('file');
@@ -330,7 +355,7 @@ class Q_WebServer_Compat
 					break;
 				}
 				if ($hasParen) {
-					$out .= self::$replacements[$name];
+					$out .= self::qualified($name);
 					$changed = true;
 					continue;
 				}
@@ -355,7 +380,7 @@ class Q_WebServer_Compat
 				$out = substr($out, 0, -1); // remove the trailing '\'
 			}
 
-			$out .= self::$replacements[$name];
+			$out .= self::qualified($name);
 			$changed = true;
 		}
 
@@ -558,6 +583,33 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Replacement for phpinfo().
+	 *
+	 * phpinfo() renders an HTML page under mod_php and fpm, but the CLI-family
+	 * SAPIs — phpmicro included — emit plain text instead, and the choice is a
+	 * SAPI flag no ini setting reaches. Q_WebServer_PhpInfo parses that text
+	 * back into the familiar tables.
+	 */
+	static function _phpinfo($flags = INFO_ALL)
+	{
+		ob_start();
+		phpinfo($flags);
+		echo self::phpinfoAsHtml((string) ob_get_clean());
+		return true;
+	}
+
+	/**
+	 * Render phpinfo() output as HTML. Markup is returned unchanged, so this
+	 * is safe to call whatever the SAPI produced.
+	 * @param {string} $out Raw phpinfo() output
+	 * @return {string}
+	 */
+	static function phpinfoAsHtml($out)
+	{
+		return Q_WebServer_PhpInfo::render($out);
+	}
+
+	/**
 	 * Replacement for setcookie().
 	 */
 	static function _setcookie(
@@ -645,6 +697,32 @@ class Q_WebServer_Compat
 	 * Replacement for session_start().
 	 * File-based sessions with proper locking for concurrent requests.
 	 */
+	/**
+	 * Replacement for session_id().
+	 *
+	 * Reports, and before the session starts sets, the id this layer uses.
+	 * The native function is no use here: it refuses to set once output has
+	 * begun, and it would answer for a session that is never started.
+	 *
+	 * @param {string} $id New id, or null to only read
+	 * @return {string|false} The previous id, or false if it could not be set
+	 */
+	static function _session_id($id = null)
+	{
+		$previous = self::$sessionId;
+		if ($id !== null) {
+			if (self::$sessionActive) {
+				trigger_error(
+					'session_id(): Session ID cannot be changed when a session is active',
+					E_USER_WARNING
+				);
+				return false;
+			}
+			self::$sessionId = (string) $id;
+		}
+		return $previous;
+	}
+
 	static function _session_start($options = array())
 	{
 		if (self::$sessionActive) return true;
@@ -658,14 +736,21 @@ class Q_WebServer_Compat
 		$maxLifetime = (int) ($options['gc_maxlifetime']
 			?? self::_ini_get('session.gc_maxlifetime')
 			?: 1440);
-		$id = $_COOKIE[$name] ?? '';
+		// An id set by session_id() before the session starts wins over
+		// the cookie, which is what PHP does.
+		$id = self::$sessionId ?: ($_COOKIE[$name] ?? '');
 
 		if (!$id || !preg_match('/^[a-zA-Z0-9,-]{22,256}$/', $id)) {
 			$id = bin2hex(random_bytes(16));
 			self::_setcookie($name, $id, 0, '/');
 		}
 
-		session_id($id);
+		// Deliberately not session_id($id): this layer runs the session
+		// itself, PHP's own is never started, and the native setter refuses
+		// once output has begun -- which under a persistent worker it has,
+		// so every session_start() printed "Session ID cannot be changed
+		// after headers have already been sent" into the response body.
+		self::$sessionId = $id;
 		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $id;
 
 		// Read with exclusive lock (held until write_close)
@@ -720,7 +805,7 @@ class Q_WebServer_Compat
 		if (!self::$sessionActive) return false;
 
 		$oldFile = self::$sessionFile;
-		$oldId = session_id();
+		$oldId = self::$sessionId;
 		$newId = bin2hex(random_bytes(16));
 
 		// Write current data and release lock on old file
@@ -739,8 +824,8 @@ class Q_WebServer_Compat
 			@unlink($oldFile);
 		}
 
-		// Set new ID
-		session_id($newId);
+		// Set new ID — ours, for the same reason as in _session_start()
+		self::$sessionId = $newId;
 		$savePath = dirname(self::$sessionFile);
 		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $newId;
 
@@ -1010,6 +1095,47 @@ class Q_WebServer_Compat
 			}
 		}
 		return $result;
+	}
+
+	/**
+	 * Replacement for stream_wrapper_unregister().
+	 *
+	 * Hardened applications drop the phar wrapper -- eZ Publish, Drupal and
+	 * others have done it since the 2018 phar deserialisation work:
+	 *
+	 *     if (PHP_SAPI !== 'cli' && in_array('phar', stream_get_wrappers())) {
+	 *         stream_wrapper_unregister('phar');
+	 *     }
+	 *
+	 * Under a single-file build the server itself lives in that phar and
+	 * autoloads its own classes from phar:// paths, so the call takes the
+	 * server down with it. Not visibly: the classes already preloaded keep
+	 * working and only a request that needs a new one fails, with whatever
+	 * that request happened to be looking for -- "Class eZDB not found" for
+	 * a missing autoloader, nothing pointing at the wrapper. And a worker
+	 * outlives the request, so one page view degrades every later request
+	 * that worker handles, for every site it serves.
+	 *
+	 * So phar and file are kept. The call reports success, because an
+	 * application that hardens itself has no way to carry on if it fails and
+	 * nothing useful to do about a refusal.
+	 *
+	 * The application's intent is not served by this, and cannot be while
+	 * the server runs from a phar: the wrapper it wants gone is the one the
+	 * runtime is read through. What that hardening protects against --
+	 * deserialisation via an attacker-supplied phar:// path -- remains worth
+	 * handling where such paths are accepted.
+	 *
+	 * @param {string} $protocol
+	 * @return {boolean}
+	 */
+	static function _stream_wrapper_unregister($protocol)
+	{
+		$p = strtolower((string) $protocol);
+		if ($p === 'phar' or $p === 'file') {
+			return true;
+		}
+		return stream_wrapper_unregister($protocol);
 	}
 
 	/**
@@ -1338,17 +1464,8 @@ class Q_WebServer_Compat
 	{
 		if (!is_file($htaccessPath)) return null;
 
-		static $cache = array();
-		$cacheKey = $htaccessPath;
-		if (!isset($cache[$cacheKey]) || filemtime($htaccessPath) > ($cache[$cacheKey]['mtime'] ?? 0)) {
-			$cache[$cacheKey] = array(
-				'mtime' => filemtime($htaccessPath),
-				'rules' => self::parseHtaccess(file_get_contents($htaccessPath)),
-			);
-		}
-
-		$parsed = $cache[$cacheKey]['rules'];
-		if (!$parsed['engine']) return null;
+		$parsed = self::htaccessRules($htaccessPath);
+		if (!$parsed or !$parsed['engine']) return null;
 
 		$base = $parsed['base'] ?: '/';
 		$env = array();
@@ -1377,17 +1494,81 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Parsed rules for one .htaccess, cached until the file changes.
+	 * Shared by the rewrite chain and the Options lookup so a file is
+	 * read and parsed once per worker rather than once per caller.
+	 *
+	 * @method htaccessRules
+	 * @static
+	 * @param {string} $htaccessPath
+	 * @return {array|null} null when the file is gone
+	 */
+	static function htaccessRules($htaccessPath)
+	{
+		static $cache = array();
+		if (!is_file($htaccessPath)) return null;
+		$mtime = filemtime($htaccessPath);
+		if (!isset($cache[$htaccessPath])
+		or $mtime > $cache[$htaccessPath]['mtime']) {
+			$cache[$htaccessPath] = array(
+				'mtime' => $mtime,
+				'rules' => self::parseHtaccess(file_get_contents($htaccessPath)),
+			);
+		}
+		return $cache[$htaccessPath]['rules'];
+	}
+
+	/**
+	 * The replacement to write for a function name, fully qualified.
+	 *
+	 * The table holds plain names like Q_WebServer_Compat::_header. Written
+	 * as they are, a file that declares a namespace resolves them inside it:
+	 * Composer's autoloader, which is namespaced, asked PHP for
+	 * Composer\Autoload\Q_WebServer_Compat and got a fatal. A leading
+	 * backslash costs nothing in global code and is required in namespaced
+	 * code.
+	 *
+	 * @method qualified
+	 * @static
+	 * @protected
+	 * @param {string} $name Lowercased function name
+	 * @return {string}
+	 */
+	protected static function qualified($name)
+	{
+		$to = self::$replacements[$name];
+		return $to[0] === '\\' ? $to : '\\' . $to;
+	}
+
+	/**
 	 * Parse .htaccess content into structured rules.
 	 */
 	private static function parseHtaccess($content)
 	{
-		$result = array('engine' => false, 'base' => '', 'blocks' => array());
+		$result = array('engine' => false, 'base' => '', 'blocks' => array(),
+			'indexes' => null);
 		$lines = preg_split('/\r?\n/', $content);
 		$pendingConds = array();
 
 		foreach ($lines as $line) {
 			$line = trim($line);
 			if ($line === '' || $line[0] === '#') continue;
+
+			// Options [+|-]Indexes — the one Options token that means
+			// anything here. Apache reads the whole line, so "Options
+			// -Indexes +FollowSymLinks" is honoured for the part we know
+			// and the rest ignored. Bare "Options Indexes" sets it, and
+			// "Options None" clears it.
+			if (preg_match('/^Options\s+(.+)$/i', $line, $m)) {
+				foreach (preg_split('/\s+/', trim($m[1])) as $opt) {
+					if (strcasecmp($opt, 'None') === 0) {
+						$result['indexes'] = false;
+					} else if (preg_match('/^([+-]?)Indexes$/i', $opt, $o)) {
+						$result['indexes'] = ($o[1] !== '-');
+					}
+				}
+				continue;
+			}
 
 			// RewriteEngine On/Off
 			if (preg_match('/^RewriteEngine\s+(On|Off)/i', $line, $m)) {
@@ -1621,6 +1802,47 @@ class Q_WebServer_Compat
 		return null;
 	}
 
+	/**
+	 * Whether .htaccess turns directory listings on or off for a URL path.
+	 *
+	 * Walks the chain the way Apache does — the document root first, then
+	 * each directory down to the requested one — with the deepest file
+	 * winning, so a subdirectory can switch listings back off.
+	 *
+	 * @method htaccessIndexes
+	 * @static
+	 * @param {string} $urlPath The request path
+	 * @param {string} $rootDir Document root, with a trailing separator
+	 * @return {boolean|null} null when no .htaccess in the chain says
+	 */
+	static function htaccessIndexes($urlPath, $rootDir)
+	{
+		$rootDir = rtrim((string) $rootDir, '/\\') . DIRECTORY_SEPARATOR;
+		$found = null;
+
+		$read = function ($dir) {
+			$file = $dir . '.htaccess';
+			if (!is_file($file)) return null;
+			$rules = self::htaccessRules($file);
+			return isset($rules['indexes']) ? $rules['indexes'] : null;
+		};
+
+		$v = $read($rootDir);
+		if ($v !== null) $found = $v;
+
+		$parts = explode('/', trim((string) $urlPath, '/'));
+		$dir = $rootDir;
+		foreach ($parts as $part) {
+			if ($part === '' or $part === '.' or $part === '..') continue;
+			$dir .= $part . DIRECTORY_SEPARATOR;
+			if (!is_dir($dir)) break;
+			$v = $read($dir);
+			if ($v !== null) $found = $v; // deepest wins
+		}
+
+		return $found;
+	}
+
 	// ── Helpers ─────────────────────────────────────────
 
 	/**
@@ -1649,6 +1871,18 @@ class Q_WebServer_Compat
  */
 class Q_WebServer_CompatFileWrapper
 {
+	/**
+	 * Set by PHP on every wrapper instance that is opened with a stream
+	 * context. Declaring it keeps PHP 8.2+ from reporting the assignment
+	 * as a dynamic property -- a deprecation notice that, with the default
+	 * display_errors, is written into the response body. Text responses
+	 * merely carried a stray paragraph; a generated image came out with
+	 * 1.5KB of notices in front of its PNG signature and would not open.
+	 *
+	 * @var resource|null
+	 */
+	public $context;
+
 	/** @var resource The underlying file handle */
 	private $handle;
 	/** @var string Buffered transformed content for reading */

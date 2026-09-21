@@ -167,6 +167,11 @@ class Q_WebServer_Pool
 	protected static function childRun($socket, $octane = false, $maxReqs = 0)
 	{
 		stream_set_blocking($socket, true);
+		// An octane worker blocks on readExact() between requests, sometimes
+		// for minutes. Without this, PHP's default_socket_timeout (60s) makes
+		// that read return '' and the worker exits, so the first request after
+		// an idle period gets a 502. There is no deadline on waiting for work.
+		stream_set_timeout($socket, 86400);
 		$handled = 0;
 
 		do {
@@ -186,7 +191,8 @@ class Q_WebServer_Pool
 
 			// Execute the PHP script
 			$resp = self::executeScript($req);
-			self::writeMsg($socket, $resp['status'], $resp['body'], $resp['headers']);
+			self::writeMsg($socket, $resp['status'], $resp['body'],
+				$resp['headers'], $resp['cookies'] ?? array());
 			$handled++;
 
 			if (!$octane) break;
@@ -205,14 +211,23 @@ class Q_WebServer_Pool
 			}
 
 			// Static properties: the snapshot captures the clean state the parent
-			// had after preloading. restoreStatics() resets all user-defined class
-			// statics via ReflectionProperty::setValue — 0.05ms, vs 8ms for fork.
+			// had after preloading. restoreStatics() resets those statics via
+			// ReflectionProperty::setValue — 0.05ms, vs 8ms for fork.
+			//
+			// Classes that appear later are deliberately left alone. They were
+			// tracked too, using their declaration defaults, which is not a
+			// state they were ever in: Composer's ClassLoader builds its
+			// include helper once, behind a null check, and having it set back
+			// to the declared null made the loader call null on the next
+			// request -- "Value of type null is not callable", raised from
+			// class_exists() in vendor code, with nothing connecting it to a
+			// static being cleared between requests.
+			//
+			// A class declared during a request survives the request; its
+			// statics are part of it and there is no earlier value to return
+			// them to. That does mean such a class keeps whatever it
+			// accumulates, the same as it would under any persistent worker.
 			if (class_exists('Q_WebServer_Snapshot', false)) {
-				// Auto-introspect: scripts may declare new classes (e.g. inline
-				// class definitions). These weren't in the original snapshot
-				// because they didn't exist at preload time. Detect and add them
-				// so their statics get reset on subsequent requests.
-				Q_WebServer_Snapshot::updateNewClasses();
 				Q_WebServer_Snapshot::restoreStatics();
 			}
 
@@ -297,6 +312,7 @@ class Q_WebServer_Pool
 				&& strncmp($k, 'DOCUMENT_', 9) !== 0
 				&& strncmp($k, 'REMOTE_', 7) !== 0
 				&& strncmp($k, 'QUERY_', 6) !== 0
+				&& strncmp($k, 'PATH_', 5) !== 0
 			) {
 				unset($_SERVER[$k]);
 			}
@@ -306,8 +322,22 @@ class Q_WebServer_Pool
 		$_SERVER['REQUEST_URI'] = $req['uri'];
 		$_SERVER['QUERY_STRING'] = $req['query'] ?? '';
 		$_SERVER['SCRIPT_FILENAME'] = $req['scriptFilename'];
-		$_SERVER['SCRIPT_NAME'] = $req['scriptName'] ?? '/index.php';
-		$_SERVER['PHP_SELF'] = $req['scriptName'] ?? '/index.php';
+		$scriptName = $req['scriptName'] ?? '/index.php';
+		$pathInfo = (string) ($req['pathInfo'] ?? '');
+		$_SERVER['SCRIPT_NAME'] = $scriptName;
+		// PHP_SELF carries the path info, SCRIPT_NAME does not. Frameworks
+		// route off one or the other and legacy code often off PHP_SELF, so
+		// the difference matters. Pooled requests used to leave PATH_INFO
+		// unset entirely -- the server computes it for the CGI and in-process
+		// paths, but never passed it to a worker, which is the default mode.
+		$_SERVER['PHP_SELF'] = $scriptName . $pathInfo;
+		if ($pathInfo !== '') {
+			$_SERVER['PATH_INFO'] = $pathInfo;
+			$_SERVER['PATH_TRANSLATED'] =
+				rtrim((string) ($req['documentRoot'] ?? ''), '/\\') . $pathInfo;
+		} else {
+			unset($_SERVER['PATH_INFO'], $_SERVER['PATH_TRANSLATED']);
+		}
 		$_SERVER['DOCUMENT_ROOT'] = $req['documentRoot'] ?? '';
 		$_SERVER['SERVER_NAME'] = $req['headers']['host'] ?? 'localhost';
 		$_SERVER['SERVER_PORT'] = $req['serverPort'] ?? '8080';
@@ -407,6 +437,19 @@ class Q_WebServer_Pool
 		ob_start(null, 0, 0);
 		$status = 200;
 		$headers = array();
+		// mod_php and fpm run a script with its own directory as the working
+		// directory. A persistent worker has no reason to change directory at
+		// all, so it kept the one the server was started in -- and an
+		// application resolving a relative path got the server's directory
+		// instead of its own. eZ Publish wrote its template cache into the
+		// server's tree, read a half-written file back and died on a parse
+		// error pointing at a file it had never heard of.
+		$prevCwd = getcwd();
+		$scriptDir = dirname($req['scriptFilename']);
+		if ($scriptDir !== '' and is_dir($scriptDir)) {
+			@chdir($scriptDir);
+		}
+
 		try {
 			include($req['scriptFilename']);
 			// Collect headers from native header() (works in fpm, no-op in CLI)
@@ -449,8 +492,27 @@ class Q_WebServer_Pool
 		} catch (\Throwable $e) {
 			$status = 500;
 			if (ob_get_level()) ob_clean();
-			echo $e->getMessage();
+			// The message on its own says nothing about where it came from.
+			// "Value of type null is not callable" with no file and no line
+			// is the kind of thing that costs an afternoon, so always say
+			// where, and say how it got there when --debug asks.
+			echo $e->getMessage(), ' in ', $e->getFile(), ':', $e->getLine();
+			if (Q_Config::get('Q', 'webserver', 'debug', false)) {
+				echo "\n\n", get_class($e), "\n", $e->getTraceAsString(), "\n";
+				for ($prev = $e->getPrevious(); $prev; $prev = $prev->getPrevious()) {
+					echo "\nCaused by ", get_class($prev), ': ',
+						$prev->getMessage(), ' in ', $prev->getFile(),
+						':', $prev->getLine(), "\n",
+						$prev->getTraceAsString(), "\n";
+				}
+			}
 		}
+		// Back to where the worker started, so the next request is not
+		// affected by where this one went.
+		if ($prevCwd !== false) {
+			@chdir($prevCwd);
+		}
+
 		// ob_get_contents reads the non-removable buffer; ob_get_clean would
 		// return false. Then drop any buffers we can.
 		$body = '';
@@ -459,10 +521,52 @@ class Q_WebServer_Pool
 			@ob_clean();
 		}
 		while (@ob_end_clean()) { /* drop removable buffers */ }
-		return compact('status', 'body', 'headers');
+
+		// Cookies live in Q_Response, which is the worker's memory. The
+		// parent used to read its own copy when writing the response and so
+		// found nothing: setcookie() reached the client from no script at
+		// all. Carry them across with the response.
+		$cookies = array();
+		if (class_exists('Q_WebServer_State', false)
+		and method_exists('Q_WebServer_State', 'cookieHeaders')) {
+			$cookies = (array) Q_WebServer_State::cookieHeaders();
+		}
+		return compact('status', 'body', 'headers', 'cookies');
 	}
 
 	// ── Parent-side dispatch ─────────────────────────────
+
+	/**
+	 * The URL path of a script, for SCRIPT_NAME and PHP_SELF.
+	 *
+	 * This used to be '/' . basename($scriptPath), which is right only for a
+	 * script sitting in the document root. Anything in a subdirectory lost
+	 * it: an application under /shop/ was told it lived at /, and every
+	 * absolute URL it built from SCRIPT_NAME -- stylesheets, form actions,
+	 * redirects -- pointed one or more directories too high. The page still
+	 * rendered, which is what made it hard to see: it just arrived without
+	 * its styling, and posting a form landed somewhere else.
+	 *
+	 * mod_php and fpm report the script's path below the document root, so
+	 * that is what is built here.
+	 *
+	 * @method scriptName
+	 * @static
+	 * @protected
+	 * @param {string} $scriptPath Absolute path of the script on disk
+	 * @return {string}
+	 */
+	protected static function scriptName($scriptPath)
+	{
+		$root = rtrim(str_replace('\\', '/', (string) (Q_WebServer::$rootDir ?? '')), '/');
+		$path = str_replace('\\', '/', (string) $scriptPath);
+		if ($root !== '' and strpos($path, $root . '/') === 0) {
+			return '/' . ltrim(substr($path, strlen($root)), '/');
+		}
+		// Outside the document root -- an alias or a rewrite target. The
+		// basename is all that can honestly be said about it.
+		return '/' . basename($path);
+	}
 
 	/**
 	 * Send a request to an idle worker. Queues if all busy.
@@ -507,8 +611,9 @@ class Q_WebServer_Pool
 			'rawHeaders'     => $parsed['rawHeaders'] ?? array(),
 			'body'           => $parsed['body'],
 			'scriptFilename' => $scriptPath,
-			'scriptName'     => '/' . basename($scriptPath),
-			'documentRoot'   => Q_WebServer::$rootDir ?? '',
+			'scriptName'     => self::scriptName($scriptPath),
+			'pathInfo'       => $parsed['_pathInfo'] ?? '',
+			'documentRoot'   => rtrim(Q_WebServer::$rootDir ?? '', '/\\'),
 			'serverPort'     => (string)($_SERVER['SERVER_PORT'] ?? '8080'),
 			'remoteAddr'     => '127.0.0.1'
 		));
@@ -551,6 +656,12 @@ class Q_WebServer_Pool
 		// Got complete response
 		$json = substr($buf, 4, $len);
 		$response = json_decode($json, true);
+
+		// Binary bodies travel base64-encoded; see writeMsg().
+		if ($response and !empty($response['b64'])) {
+			$response['body'] = base64_decode($response['body']);
+			unset($response['b64']);
+		}
 
 		// Check for cache messages piggybacked on the response
 		if ($response && !empty($response['_cacheMessages'])) {
@@ -788,15 +899,45 @@ class Q_WebServer_Pool
 		$buf = '';
 		while (strlen($buf) < $n) {
 			$c = fread($sock, $n - strlen($buf));
-			if ($c === false || $c === '') return false;
+			if ($c === false || $c === '') {
+				// '' means EOF only when feof() says so. A read timeout —
+				// or a signal interrupting the read — also yields '', and
+				// treating that as EOF kills a perfectly healthy worker.
+				if (feof($sock)) return false;
+				$meta = @stream_get_meta_data($sock);
+				if (!empty($meta['timed_out'])) continue;
+				return false;
+			}
 			$buf .= $c;
 		}
 		return $buf;
 	}
 
-	protected static function writeMsg($sock, $status, $body, $headers)
+	protected static function writeMsg($sock, $status, $body, $headers,
+		$cookies = array())
 	{
-		$j = json_encode(compact('status', 'body', 'headers'));
+		// json_encode() returns false on bytes that are not valid UTF-8, and
+		// strlen(false) is 0, so a binary body used to go out as a length
+		// prefix of zero and nothing else: the parent read an empty frame and
+		// answered with an empty response while still logging 200. Anything a
+		// script generated that was not text -- an image, a PDF, a zip --
+		// vanished silently. Base64 carries those bytes through, and only
+		// those: text responses keep their exact previous shape and cost.
+		$j = json_encode(compact('status', 'body', 'headers', 'cookies'));
+		if ($j === false) {
+			$b64 = true;
+			$body = base64_encode($body);
+			$j = json_encode(compact('status', 'body', 'headers', 'cookies', 'b64'));
+		}
+		if ($j === false) {
+			// Headers themselves are not encodable. Say so rather than
+			// hanging up on the client.
+			$j = json_encode(array(
+				'status' => 500,
+				'body' => 'Response could not be encoded',
+				'headers' => array('Content-Type' => 'text/plain')
+			));
+		}
 		fwrite($sock, pack('N', strlen($j)) . $j);
 	}
 }

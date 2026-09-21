@@ -123,23 +123,42 @@ class Q_WebServer_Headers
 			$headers = self::stripInternal($headers);
 		}
 
-		// ── Compression ──────────────────────────────────
+		// ── Content-Type ─────────────────────────────────
+		// A script that never calls header() leaves us with no Content-Type:
+		// headers_list() is a no-op under CLI and Q_WebServer_State only holds
+		// what the script set itself. mod_php/fpm fall back to PHP's
+		// default_mimetype here, and without it browsers download the response
+		// instead of rendering it. 204 and 304 carry no body, so they keep none.
 		$ct = '';
 		foreach ($headers as $k => $v) {
 			if (strtolower($k) === 'content-type') $ct = $v;
 		}
+		if ($ct === '' && $status != 204 && $status != 304) {
+			$mime = (string) ini_get('default_mimetype');
+			if ($mime === '') $mime = 'text/html';
+			$charset = (string) ini_get('default_charset');
+			$ct = $charset === '' ? $mime : $mime . '; charset=' . $charset;
+			$headers['Content-Type'] = $ct;
+		}
+
+		// ── Compression ──────────────────────────────────
 		$body = self::maybeCompress($body, $ct, $requestHeaders, $headers);
 
 		// ── Send response ────────────────────────────────
 		$headers['Content-Length'] = strlen($body);
 		$headers['Connection'] = 'close';
 
-		// Merge Q_Response cookies into Set-Cookie headers
-		if (class_exists('Q_Response', false)) {
+		// Cookies set by the script. A pooled response carries them, because
+		// they were built in the worker and this process has none of its own;
+		// the in-process paths still read the local state.
+		$cookieHeaders = array();
+		if (isset($response['cookies']) and is_array($response['cookies'])) {
+			$cookieHeaders = $response['cookies'];
+		} else if (class_exists('Q_Response', false)) {
 			$cookieHeaders = Q_WebServer_State::cookieHeaders();
-			foreach ($cookieHeaders as $ch) {
-				$headers['Set-Cookie'] = $ch; // last one wins for single-value
-			}
+		}
+		foreach ($cookieHeaders as $ch) {
+			$headers['Set-Cookie'] = $ch; // one of them; the rest are added below
 		}
 
 		static $reasons = array(
@@ -157,14 +176,11 @@ class Q_WebServer_Headers
 			$out .= "$k: $v\r\n";
 		}
 		// Multiple Set-Cookie headers (can't use the associative array for dupes)
-		if (class_exists('Q_Response', false)) {
-			$cookieHeaders = Q_WebServer_State::cookieHeaders();
-			if (count($cookieHeaders) > 1) {
-				// Remove the single Set-Cookie we added above
-				$out = preg_replace("/Set-Cookie:.*\r\n/", "", $out);
-				foreach ($cookieHeaders as $ch) {
-					$out .= "Set-Cookie: $ch\r\n";
-				}
+		if (count($cookieHeaders) > 1) {
+			// Remove the single Set-Cookie we added above
+			$out = preg_replace("/Set-Cookie:.*\r\n/", "", $out);
+			foreach ($cookieHeaders as $ch) {
+				$out .= "Set-Cookie: $ch\r\n";
 			}
 		}
 		@fwrite($client, $out . "\r\n" . $body);

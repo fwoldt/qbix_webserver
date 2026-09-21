@@ -1147,7 +1147,7 @@ class Q_WebServer
 		if ($path === '/Q/phpinfo') {
 			ob_start();
 			phpinfo();
-			$html = ob_get_clean();
+			$html = self::phpinfoHtml(ob_get_clean());
 			return array('status' => 200, 'body' => $html,
 				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
 		}
@@ -1203,8 +1203,11 @@ class Q_WebServer
 				if (is_file($ip)) { $fsPath = $ip; break; }
 			}
 			if (is_dir($fsPath)) {
-				// Root path with no index → show welcome page
-				if ($path === '/') {
+				// Root path with no index → welcome page, unless the root was
+				// explicitly made listable. The welcome page used to return
+				// unconditionally, which left the listing below unreachable
+				// for '/' however it was configured.
+				if ($path === '/' and !self::isIndexed($path)) {
 					$welcome = __DIR__ . DS . 'welcome.php';
 					if (file_exists($welcome)) {
 						ob_start();
@@ -1214,7 +1217,7 @@ class Q_WebServer
 					}
 				}
 				// Show directory listing if indexed
-				if (self::isIndexed($path) || $path === '/') {
+				if (self::isIndexed($path)) {
 					return array('status'=>200,
 						'body'=>self::renderDirectoryListing($fsPath, $path),
 						'headers'=>array('Content-Type'=>'text/html; charset=utf-8',
@@ -1534,7 +1537,7 @@ class Q_WebServer
 			if ($path === '/Q/phpinfo') {
 				ob_start();
 				phpinfo();
-				$html = ob_get_clean();
+				$html = self::phpinfoHtml(ob_get_clean());
 				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8');
 				return false;
 			}
@@ -1674,8 +1677,11 @@ class Q_WebServer
 				}
 			}
 			if (is_dir($fsPath)) {
-				// Root path with no index → show welcome page
-				if ($path === '/') {
+				// Root path with no index → welcome page, unless the root was
+				// explicitly made listable. The welcome page used to return
+				// unconditionally, which left the listing below unreachable
+				// for '/' however it was configured.
+				if ($path === '/' and !self::isIndexed($path)) {
 					$welcome = __DIR__ . DS . 'welcome.php';
 					if (file_exists($welcome)) {
 						ob_start();
@@ -1685,8 +1691,8 @@ class Q_WebServer
 						return false;
 					}
 				}
-				// Show directory listing if indexed OR if it's the root path
-				if (self::isIndexed($path) || $path === '/') {
+				// Show directory listing if indexed
+				if (self::isIndexed($path)) {
 					$html = self::renderDirectoryListing($fsPath, $path);
 					self::sendResponse($client, 200, $html, 'text/html; charset=utf-8',
 						array('Cache-Control' => 'no-store'));
@@ -2829,14 +2835,23 @@ WORKER;
 	 * Check if a URL path allows directory listing.
 	 *
 	 * Directory listings are OFF by default (more secure).
-	 * Only paths matching regexes in
-	 * Q.web.indexed.paths get listings. Default: /img/.
 	 *
-	 * Config:
-	 *   "Q": { "web": { "indexed": { "paths": {
-	 *     "#^/img/#": true,
-	 *     "#^/downloads/#": true
-	 *   }}}}
+	 * Two ways to turn them on, checked in this order:
+	 *
+	 * 1. An .htaccess in the directory or above it:
+	 *      Options +Indexes      (and -Indexes to switch back off)
+	 *    The deepest file wins, as the nearer directive does in Apache.
+	 *    How much .htaccess may do is capped by Q.web.indexed.allowOverride:
+	 *      true        enable and disable (default)
+	 *      "restrict"  disable only — +Indexes is ignored
+	 *      false       .htaccess ignored, the config alone decides
+	 *
+	 * 2. Otherwise, paths matching regexes in Q.web.indexed.paths:
+	 *      "Q": { "web": { "indexed": { "paths": {
+	 *        "#^/img/#": true,
+	 *        "#^/downloads/#": true
+	 *      }}}}
+	 *    The first matching pattern decides. Default: /img/.
 	 *
 	 * For actual access control, use X-Accel-Redirect.
 	 *
@@ -2847,6 +2862,31 @@ WORKER;
 	 */
 	static function isIndexed($urlPath)
 	{
+		// An .htaccess in the directory (or above it) wins, the way the
+		// nearer directive does under Apache: "Options +Indexes" turns
+		// listings on for that subtree, "-Indexes" off again. Nothing in
+		// the chain says anything -> fall through to the config.
+		//
+		// Q.web.indexed.allowOverride decides how far that goes, since a
+		// writable document root otherwise means anyone who can drop a
+		// file in it can expose a directory:
+		//
+		//   true        .htaccess may enable and disable (default)
+		//   "restrict"  .htaccess may only disable; +Indexes is ignored
+		//   false       .htaccess is ignored here entirely
+		$allow = Q_Config::get('Q', 'web', 'indexed', 'allowOverride', true);
+		if ($allow !== false
+		and class_exists('Q_WebServer_Compat', false)
+		and method_exists('Q_WebServer_Compat', 'htaccessIndexes')) {
+			$fromHtaccess = Q_WebServer_Compat::htaccessIndexes(
+				$urlPath, self::$rootDir
+			);
+			// A deny is honoured under "restrict" too: tightening is always
+			// allowed, only granting is what the setting holds back.
+			if ($fromHtaccess === false) return false;
+			if ($fromHtaccess === true and $allow !== 'restrict') return true;
+		}
+
 		static $patterns = null;
 		if ($patterns === null) {
 			$patterns = Q_Config::get('Q', 'web', 'indexed', 'paths', array(
@@ -3977,6 +4017,24 @@ HTML;
 	}
 
 	// ── Response helpers ─────────────────────────────────
+
+	/**
+	 * Make phpinfo() output presentable.
+	 *
+	 * The CLI-family SAPIs, phpmicro among them, make phpinfo() emit plain
+	 * text rather than the HTML page mod_php produces, and no ini setting
+	 * changes that. Q_WebServer_PhpInfo parses the text back into tables;
+	 * output that is already markup comes back untouched.
+	 *
+	 * @method phpinfoHtml
+	 * @static
+	 * @param {string} $out Raw phpinfo() output
+	 * @return {string}
+	 */
+	static function phpinfoHtml($out)
+	{
+		return Q_WebServer_PhpInfo::render($out);
+	}
 
 	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array())
 	{
