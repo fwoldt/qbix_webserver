@@ -1502,7 +1502,9 @@ class Q_WebServer_Compat
 			);
 		}
 		return $cache[$htaccessPath]['rules'];
+	}
 
+	/**
 	 * The replacement to write for a function name, fully qualified.
 	 *
 	 * The table holds plain names like Q_WebServer_Compat::_header. Written
