@@ -228,6 +228,7 @@ class Q_WebServer_Pool
 			// them to. That does mean such a class keeps whatever it
 			// accumulates, the same as it would under any persistent worker.
 			if (class_exists('Q_WebServer_Snapshot', false)) {
+				Q_WebServer_Snapshot::updateNewClasses();
 				Q_WebServer_Snapshot::restoreStatics();
 			}
 
