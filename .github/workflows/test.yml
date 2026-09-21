@@ -67,6 +67,9 @@ jobs:
       - name: Lazily initialised statics
         run: bash tests/lazy-statics.sh
 
+      - name: What a 500 tells you
+        run: bash tests/error-diagnostics.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
