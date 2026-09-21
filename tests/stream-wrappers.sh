@@ -3,7 +3,7 @@
 # Regression test: a script cannot unregister the wrappers the server
 # reads itself through.
 #
-# Hardened applications drop the phar wrapper — eZ Publish, Drupal and
+# Hardened applications drop the phar wrapper — Exponential, Drupal and
 # others have done it since the 2018 phar deserialisation work:
 #
 #     if (PHP_SAPI !== 'cli' && in_array('phar', stream_get_wrappers())) {

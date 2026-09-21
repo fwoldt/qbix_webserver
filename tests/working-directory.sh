@@ -6,7 +6,7 @@
 # A persistent worker has no reason to change directory, so it kept the one
 # the server was started in. Every relative path in an application then
 # resolved against the server's directory: includes missed, and writes
-# landed in the server's tree. eZ Publish put its template cache there,
+# landed in the server's tree. Exponential put its template cache there,
 # read a half-written file back on the next request and died on a parse
 # error naming a file it had never heard of — three directories away from
 # anything it owned.
