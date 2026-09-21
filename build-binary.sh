@@ -107,7 +107,7 @@ build_with_docker() {
     [ -d "$SCRIPT_DIR/web" ] && cp -r "$SCRIPT_DIR/web" "$TMPDIR/web"
 
     # Keep in sync with .github/workflows/release.yml
-    EXTS="pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session"
+    EXTS="pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd"
 
     cat > "$TMPDIR/Dockerfile" << DOCKERFILE
 FROM php:8.3-cli-alpine AS builder
@@ -125,7 +125,11 @@ WORKDIR /build
 # server's PHP code reuses the cached layer instead of rebuilding PHP.
 RUN spc doctor --auto-fix 2>/dev/null || true
 RUN spc download --with-php=8.3 --for-extensions=$EXTS
-RUN spc build "$EXTS" --build-micro
+# --with-suggested-libs pairs with the download above, which pulls an
+# extension's suggested libraries by default. Without it the sources are
+# fetched and then not linked: gd came out able to read PNG only, and
+# imagejpeg() was an undefined function at runtime.
+RUN spc build "$EXTS" --build-micro --with-suggested-libs
 
 COPY src/ src/
 COPY web/ web/
