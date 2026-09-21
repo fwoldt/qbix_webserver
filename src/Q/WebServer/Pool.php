@@ -205,14 +205,23 @@ class Q_WebServer_Pool
 			}
 
 			// Static properties: the snapshot captures the clean state the parent
-			// had after preloading. restoreStatics() resets all user-defined class
-			// statics via ReflectionProperty::setValue — 0.05ms, vs 8ms for fork.
+			// had after preloading. restoreStatics() resets those statics via
+			// ReflectionProperty::setValue — 0.05ms, vs 8ms for fork.
+			//
+			// Classes that appear later are deliberately left alone. They were
+			// tracked too, using their declaration defaults, which is not a
+			// state they were ever in: Composer's ClassLoader builds its
+			// include helper once, behind a null check, and having it set back
+			// to the declared null made the loader call null on the next
+			// request -- "Value of type null is not callable", raised from
+			// class_exists() in vendor code, with nothing connecting it to a
+			// static being cleared between requests.
+			//
+			// A class declared during a request survives the request; its
+			// statics are part of it and there is no earlier value to return
+			// them to. That does mean such a class keeps whatever it
+			// accumulates, the same as it would under any persistent worker.
 			if (class_exists('Q_WebServer_Snapshot', false)) {
-				// Auto-introspect: scripts may declare new classes (e.g. inline
-				// class definitions). These weren't in the original snapshot
-				// because they didn't exist at preload time. Detect and add them
-				// so their statics get reset on subsequent requests.
-				Q_WebServer_Snapshot::updateNewClasses();
 				Q_WebServer_Snapshot::restoreStatics();
 			}
 
