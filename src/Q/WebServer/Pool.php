@@ -190,6 +190,26 @@ class Q_WebServer_Pool
 			if (self::$answered or !is_resource(self::$childSocket)) return;
 			self::$answered = true;
 			$r = self::collectResponse();
+
+			// The octane loop runs the compat teardown after every request,
+			// and exit() skips straight past it. Session data written just
+			// before an exit was never flushed to disk -- which is every
+			// login there is: set the session, redirect, exit. The user came
+			// back with a session id and nothing in it.
+			//
+			// This runs after collectResponse() because shutdown() clears
+			// the response state it reads, and before the write so the
+			// session is on disk before the client can send the next
+			// request against it.
+			if (class_exists('Q_WebServer_Compat', false)
+				and Q_WebServer_Compat::isEnabled()) {
+				try {
+					Q_WebServer_Compat::shutdown();
+				} catch (\Throwable $e) {
+					// A failed teardown must not cost the response
+				}
+			}
+
 			// _exiting tells the parent this worker is on its way out, so it
 			// recycles instead of handing the next request to a dead process.
 			self::writeMsg(self::$childSocket, $r['status'], $r['body'],
