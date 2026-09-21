@@ -38,6 +38,7 @@ class Q_WebServer_Compat
 		'headers_list'         => 'Q_WebServer_Compat::_headers_list',
 		'header_remove'        => 'Q_WebServer_Compat::_header_remove',
 		'session_start'        => 'Q_WebServer_Compat::_session_start',
+		'session_id'           => 'Q_WebServer_Compat::_session_id',
 		'session_write_close'  => 'Q_WebServer_Compat::_session_write_close',
 		'session_regenerate_id'=> 'Q_WebServer_Compat::_session_regenerate_id',
 		'session_destroy'      => 'Q_WebServer_Compat::_session_destroy',
@@ -48,6 +49,7 @@ class Q_WebServer_Compat
 		'ini_set'              => 'Q_WebServer_Compat::_ini_set',
 		'set_time_limit'       => 'Q_WebServer_Compat::_set_time_limit',
 		'getallheaders'        => 'Q_WebServer_Compat::_getallheaders',
+		'phpinfo'              => 'Q_WebServer_Compat::_phpinfo',
 		'apache_request_headers' => 'Q_WebServer_Compat::_getallheaders',
 		// Octane safety — lifecycle functions that leak state in persistent workers
 		'register_shutdown_function' => 'Q_WebServer_Compat::_register_shutdown_function',
@@ -58,6 +60,7 @@ class Q_WebServer_Compat
 		'spl_autoload_register'=> 'Q_WebServer_Compat::_spl_autoload_register',
 		'spl_autoload_unregister' => 'Q_WebServer_Compat::_spl_autoload_unregister',
 		'putenv'               => 'Q_WebServer_Compat::_putenv',
+		'stream_wrapper_unregister' => 'Q_WebServer_Compat::_stream_wrapper_unregister',
 	);
 
 	/** @var array In-memory transform cache: realpath → ['source' => ..., 'mtime' => ...] */
@@ -74,6 +77,13 @@ class Q_WebServer_Compat
 
 	/** @var bool Whether a session is currently active */
 	private static $sessionActive = false;
+
+	/**
+	 * The session id this layer manages. PHP's own session machinery is
+	 * not used, so its session_id() is not the place to keep it.
+	 * @var string
+	 */
+	private static $sessionId = '';
 
 	/** @var string Current session file path */
 	private static $sessionFile = '';
@@ -199,12 +209,26 @@ class Q_WebServer_Compat
 		}
 		self::$errorHandlerStack = array();
 
-		// ── Restore autoloader stack to boot state ──
-		if (self::$bootAutoloadersCaptured) {
-			foreach (self::$requestAutoloaders as $loader) {
-				spl_autoload_unregister($loader);
-			}
-		}
+		// ── Autoloaders stay registered ──
+		// They used to be unregistered here, to hand the next request the
+		// boot-time stack. But a class declared during a request stays
+		// declared, and an application registers its autoloader behind a
+		// guard on exactly that:
+		//
+		//     if (!class_exists('ezpAutoloader', false)) {
+		//         class ezpAutoloader { ... }
+		//         spl_autoload_register(array('ezpAutoloader', 'autoload'));
+		//     }
+		//
+		// Second request: the class is still there, the block is skipped,
+		// the autoloader is not registered again -- and nothing can be
+		// loaded any more. eZ Publish answered the first request and then
+		// reported "Class eZDB not found" for every one after it.
+		//
+		// Removing half of the pair is what breaks; keeping both matches
+		// what the worker actually is. An autoloader that closes over one
+		// request's state would be a problem, but that is rare, and far
+		// rarer than the guarded registration this used to break.
 		self::$requestAutoloaders = array();
 
 		// ── Restore environment variables ──
@@ -246,6 +270,7 @@ class Q_WebServer_Compat
 		self::$sessionActive = false;
 		self::$sessionFile = '';
 		self::$sessionFp = null;
+		self::$sessionId = '';
 		self::$requestHeaders = array();
 
 		@stream_wrapper_restore('file');
@@ -330,7 +355,7 @@ class Q_WebServer_Compat
 					break;
 				}
 				if ($hasParen) {
-					$out .= self::$replacements[$name];
+					$out .= self::qualified($name);
 					$changed = true;
 					continue;
 				}
@@ -355,11 +380,16 @@ class Q_WebServer_Compat
 				$out = substr($out, 0, -1); // remove the trailing '\'
 			}
 
-			$out .= self::$replacements[$name];
+			$out .= self::qualified($name);
 			$changed = true;
 		}
 
 		$result = $changed ? $out : $source;
+
+		// A worker outlives the request, so a file included twice declares its
+		// functions twice and PHP stops with "Cannot redeclare".
+		$guarded = self::guardDeclarations($result);
+		if ($guarded !== $result) { $result = $guarded; $changed = true; }
 
 		// Save to cache
 		if ($changed && $filePath) {
@@ -558,6 +588,33 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Replacement for phpinfo().
+	 *
+	 * phpinfo() renders an HTML page under mod_php and fpm, but the CLI-family
+	 * SAPIs — phpmicro included — emit plain text instead, and the choice is a
+	 * SAPI flag no ini setting reaches. Q_WebServer_PhpInfo parses that text
+	 * back into the familiar tables.
+	 */
+	static function _phpinfo($flags = INFO_ALL)
+	{
+		ob_start();
+		phpinfo($flags);
+		echo self::phpinfoAsHtml((string) ob_get_clean());
+		return true;
+	}
+
+	/**
+	 * Render phpinfo() output as HTML. Markup is returned unchanged, so this
+	 * is safe to call whatever the SAPI produced.
+	 * @param {string} $out Raw phpinfo() output
+	 * @return {string}
+	 */
+	static function phpinfoAsHtml($out)
+	{
+		return Q_WebServer_PhpInfo::render($out);
+	}
+
+	/**
 	 * Replacement for setcookie().
 	 */
 	static function _setcookie(
@@ -645,6 +702,32 @@ class Q_WebServer_Compat
 	 * Replacement for session_start().
 	 * File-based sessions with proper locking for concurrent requests.
 	 */
+	/**
+	 * Replacement for session_id().
+	 *
+	 * Reports, and before the session starts sets, the id this layer uses.
+	 * The native function is no use here: it refuses to set once output has
+	 * begun, and it would answer for a session that is never started.
+	 *
+	 * @param {string} $id New id, or null to only read
+	 * @return {string|false} The previous id, or false if it could not be set
+	 */
+	static function _session_id($id = null)
+	{
+		$previous = self::$sessionId;
+		if ($id !== null) {
+			if (self::$sessionActive) {
+				trigger_error(
+					'session_id(): Session ID cannot be changed when a session is active',
+					E_USER_WARNING
+				);
+				return false;
+			}
+			self::$sessionId = (string) $id;
+		}
+		return $previous;
+	}
+
 	static function _session_start($options = array())
 	{
 		if (self::$sessionActive) return true;
@@ -658,14 +741,21 @@ class Q_WebServer_Compat
 		$maxLifetime = (int) ($options['gc_maxlifetime']
 			?? self::_ini_get('session.gc_maxlifetime')
 			?: 1440);
-		$id = $_COOKIE[$name] ?? '';
+		// An id set by session_id() before the session starts wins over
+		// the cookie, which is what PHP does.
+		$id = self::$sessionId ?: ($_COOKIE[$name] ?? '');
 
 		if (!$id || !preg_match('/^[a-zA-Z0-9,-]{22,256}$/', $id)) {
 			$id = bin2hex(random_bytes(16));
 			self::_setcookie($name, $id, 0, '/');
 		}
 
-		session_id($id);
+		// Deliberately not session_id($id): this layer runs the session
+		// itself, PHP's own is never started, and the native setter refuses
+		// once output has begun -- which under a persistent worker it has,
+		// so every session_start() printed "Session ID cannot be changed
+		// after headers have already been sent" into the response body.
+		self::$sessionId = $id;
 		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $id;
 
 		// Read with exclusive lock (held until write_close)
@@ -720,7 +810,7 @@ class Q_WebServer_Compat
 		if (!self::$sessionActive) return false;
 
 		$oldFile = self::$sessionFile;
-		$oldId = session_id();
+		$oldId = self::$sessionId;
 		$newId = bin2hex(random_bytes(16));
 
 		// Write current data and release lock on old file
@@ -739,8 +829,8 @@ class Q_WebServer_Compat
 			@unlink($oldFile);
 		}
 
-		// Set new ID
-		session_id($newId);
+		// Set new ID — ours, for the same reason as in _session_start()
+		self::$sessionId = $newId;
 		$savePath = dirname(self::$sessionFile);
 		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $newId;
 
@@ -1010,6 +1100,47 @@ class Q_WebServer_Compat
 			}
 		}
 		return $result;
+	}
+
+	/**
+	 * Replacement for stream_wrapper_unregister().
+	 *
+	 * Hardened applications drop the phar wrapper -- eZ Publish, Drupal and
+	 * others have done it since the 2018 phar deserialisation work:
+	 *
+	 *     if (PHP_SAPI !== 'cli' && in_array('phar', stream_get_wrappers())) {
+	 *         stream_wrapper_unregister('phar');
+	 *     }
+	 *
+	 * Under a single-file build the server itself lives in that phar and
+	 * autoloads its own classes from phar:// paths, so the call takes the
+	 * server down with it. Not visibly: the classes already preloaded keep
+	 * working and only a request that needs a new one fails, with whatever
+	 * that request happened to be looking for -- "Class eZDB not found" for
+	 * a missing autoloader, nothing pointing at the wrapper. And a worker
+	 * outlives the request, so one page view degrades every later request
+	 * that worker handles, for every site it serves.
+	 *
+	 * So phar and file are kept. The call reports success, because an
+	 * application that hardens itself has no way to carry on if it fails and
+	 * nothing useful to do about a refusal.
+	 *
+	 * The application's intent is not served by this, and cannot be while
+	 * the server runs from a phar: the wrapper it wants gone is the one the
+	 * runtime is read through. What that hardening protects against --
+	 * deserialisation via an attacker-supplied phar:// path -- remains worth
+	 * handling where such paths are accepted.
+	 *
+	 * @param {string} $protocol
+	 * @return {boolean}
+	 */
+	static function _stream_wrapper_unregister($protocol)
+	{
+		$p = strtolower((string) $protocol);
+		if ($p === 'phar' or $p === 'file') {
+			return true;
+		}
+		return stream_wrapper_unregister($protocol);
 	}
 
 	/**
@@ -1338,17 +1469,8 @@ class Q_WebServer_Compat
 	{
 		if (!is_file($htaccessPath)) return null;
 
-		static $cache = array();
-		$cacheKey = $htaccessPath;
-		if (!isset($cache[$cacheKey]) || filemtime($htaccessPath) > ($cache[$cacheKey]['mtime'] ?? 0)) {
-			$cache[$cacheKey] = array(
-				'mtime' => filemtime($htaccessPath),
-				'rules' => self::parseHtaccess(file_get_contents($htaccessPath)),
-			);
-		}
-
-		$parsed = $cache[$cacheKey]['rules'];
-		if (!$parsed['engine']) return null;
+		$parsed = self::htaccessRules($htaccessPath);
+		if (!$parsed or !$parsed['engine']) return null;
 
 		$base = $parsed['base'] ?: '/';
 		$env = array();
@@ -1377,17 +1499,313 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Parsed rules for one .htaccess, cached until the file changes.
+	 * Shared by the rewrite chain and the Options lookup so a file is
+	 * read and parsed once per worker rather than once per caller.
+	 *
+	 * @method htaccessRules
+	 * @static
+	 * @param {string} $htaccessPath
+	 * @return {array|null} null when the file is gone
+	 */
+	static function htaccessRules($htaccessPath)
+	{
+		static $cache = array();
+		if (!is_file($htaccessPath)) return null;
+		$mtime = filemtime($htaccessPath);
+		if (!isset($cache[$htaccessPath])
+		or $mtime > $cache[$htaccessPath]['mtime']) {
+			$cache[$htaccessPath] = array(
+				'mtime' => $mtime,
+				'rules' => self::parseHtaccess(file_get_contents($htaccessPath)),
+			);
+		}
+		return $cache[$htaccessPath]['rules'];
+	}
+
+	/**
+	 * The replacement to write for a function name, fully qualified.
+	 *
+	 * The table holds plain names like Q_WebServer_Compat::_header. Written
+	 * as they are, a file that declares a namespace resolves them inside it:
+	 * Composer's autoloader, which is namespaced, asked PHP for
+	 * Composer\Autoload\Q_WebServer_Compat and got a fatal. A leading
+	 * backslash costs nothing in global code and is required in namespaced
+	 * code.
+	 *
+	 * @method qualified
+	 * @static
+	 * @protected
+	 * @param {string} $name Lowercased function name
+	 * @return {string}
+	 */
+	protected static function qualified($name)
+	{
+		$to = self::$replacements[$name];
+		return $to[0] === '\\' ? $to : '\\' . $to;
+	}
+
+	/**
+	 * Wrap top-level function and class declarations in existence checks.
+	 *
+	 * Turns
+	 *
+	 *     function checkNodeAssignments($module) { ... }
+	 *
+	 * into
+	 *
+	 *     if (!function_exists('checkNodeAssignments')) {
+	 *     function checkNodeAssignments($module) { ... }
+	 *     }
+	 *
+	 * so including the file again is harmless. Only declarations at the top
+	 * level are touched: methods live inside a class, which is tracked by
+	 * brace depth, and closures have no name.
+	 *
+	 * The cost is hoisting. An unconditional function is available above its
+	 * own declaration; a conditional one is not. A file that calls its own
+	 * function before defining it will break -- rare in the libraries this
+	 * exists for, and the alternative is a fatal on every second request.
+	 *
+	 * @method guardDeclarations
+	 * @static
+	 * @protected
+	 * @param {string} $source
+	 * @return {string}
+	 */
+	/**
+	 * Does this file only declare things?
+	 *
+	 * True when the top level holds nothing but function, class, interface
+	 * and trait declarations, plus namespace and use statements, comments
+	 * and whitespace. Such a file can be included twice with no effect
+	 * beyond the redeclaration error, which is what makes guarding it safe.
+	 *
+	 * @method isDeclarationsOnly
+	 * @static
+	 * @protected
+	 * @param {array} $tokens
+	 * @return {boolean}
+	 */
+	protected static function isDeclarationsOnly($tokens)
+	{
+		$n = count($tokens);
+		$sawDeclaration = false;
+		$between = array(T_OPEN_TAG, T_CLOSE_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT);
+		if (defined('T_ATTRIBUTE')) $between[] = T_ATTRIBUTE;
+
+		for ($i = 0; $i < $n; $i++) {
+			$t = $tokens[$i];
+
+			if (is_array($t) and in_array($t[0], $between, true)) continue;
+			if (is_array($t) and $t[0] === T_INLINE_HTML) {
+				if (trim($t[1]) !== '') return false;
+				continue;
+			}
+
+			// namespace X; declare(...); use X\Y; — run to the semicolon.
+			if (is_array($t) and in_array($t[0], array(T_NAMESPACE, T_USE, T_DECLARE), true)) {
+				for (; $i < $n; $i++) {
+					if ($tokens[$i] === ';') break;
+					if ($tokens[$i] === '{') return false;   // braced namespace
+				}
+				continue;
+			}
+
+			// A declaration, possibly behind abstract/final/readonly.
+			$j = $i;
+			while ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_ABSTRACT, T_FINAL, T_WHITESPACE
+			), true)) {
+				$j++;
+			}
+			if ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_FUNCTION, T_CLASS, T_INTERFACE, T_TRAIT
+			), true)) {
+				$sawDeclaration = true;
+				// Skip to the end of the body, or to the semicolon of a
+				// signature without one.
+				$d = 0; $opened = false;
+				for ($k = $j; $k < $n; $k++) {
+					$tk = $tokens[$k];
+					if (is_array($tk)) {
+						if ($tk[0] === T_CURLY_OPEN
+						or (defined('T_DOLLAR_OPEN_CURLY_BRACES') and $tk[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+							$d++;
+						}
+						continue;
+					}
+					if ($tk === '{') { $d++; $opened = true; }
+					else if ($tk === '}') { $d--; if ($opened and $d === 0) break; }
+					else if ($tk === ';' and !$opened) break;
+				}
+				$i = $k;
+				continue;
+			}
+
+			return false;   // anything else is a statement
+		}
+		return $sawDeclaration;
+	}
+
+	protected static function guardDeclarations($source)
+	{
+		if (strpos($source, 'function') === false
+		and strpos($source, 'class') === false
+		and strpos($source, 'interface') === false
+		and strpos($source, 'trait') === false) {
+			return $source;
+		}
+
+		$tokens = token_get_all($source);
+		$n = count($tokens);
+		if (!self::isDeclarationsOnly($tokens)) {
+			// Anything that also runs statements is left alone. Guarding a
+			// declaration costs it its hoisting, and a file that does work as
+			// well as declaring is not the shape this exists for -- that is a
+			// library of functions pulled in with require rather than
+			// require_once.
+			return $source;
+		}
+		$out = '';
+		$depth = 0;
+		$changed = false;
+		$skip = array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_ATTRIBUTE);
+
+		for ($i = 0; $i < $n; $i++) {
+			$t = $tokens[$i];
+
+			if (!is_array($t)) {
+				if ($t === '{') $depth++;
+				else if ($t === '}') $depth--;
+				$out .= $t;
+				continue;
+			}
+
+			// "{$x}" and "${x}" inside a string open a brace that closes as a
+			// plain '}'. Not counting them sent the depth negative and put a
+			// guard in the middle of a class body.
+			if ($t[0] === T_CURLY_OPEN
+			or (defined('T_DOLLAR_OPEN_CURLY_BRACES') and $t[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+				$depth++;
+				$out .= $t[1];
+				continue;
+			}
+
+			if ($depth !== 0) { $out .= $t[1]; continue; }
+
+			// abstract/final/readonly belong to the declaration that follows.
+			$first = $i;
+			$j = $i;
+			while ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_ABSTRACT, T_FINAL, T_WHITESPACE
+			), true)) {
+				$j++;
+			}
+			if ($j >= $n or !is_array($tokens[$j]) or !in_array($tokens[$j][0], array(
+				T_FUNCTION, T_CLASS, T_INTERFACE, T_TRAIT
+			), true)) {
+				$out .= $t[1];
+				continue;
+			}
+			$kw = $tokens[$j][0];
+
+			// "use function ..." is an import, not a declaration.
+			$b = $j - 1;
+			while ($b >= 0 and is_array($tokens[$b]) and $tokens[$b][0] === T_WHITESPACE) $b--;
+			if ($b >= 0 and is_array($tokens[$b]) and $tokens[$b][0] === T_USE) {
+				$out .= $t[1];
+				continue;
+			}
+
+			// The name. A closure and an anonymous class have none.
+			$m = $j + 1;
+			while ($m < $n and is_array($tokens[$m]) and in_array($tokens[$m][0], $skip, true)) $m++;
+			if ($m >= $n or !is_array($tokens[$m]) or $tokens[$m][0] !== T_STRING) {
+				$out .= $t[1];
+				continue;
+			}
+			$name = $tokens[$m][1];
+
+			// Take everything from here to the end of the body.
+			$text = '';
+			$d = 0;
+			$opened = false;
+			$k = $first;
+			for (; $k < $n; $k++) {
+				$tk = $tokens[$k];
+				$text .= is_array($tk) ? $tk[1] : $tk;
+				if (is_array($tk)) {
+					// "{$x}" opens a brace that closes as a plain '}'.
+					if ($tk[0] === T_CURLY_OPEN
+					or (defined('T_DOLLAR_OPEN_CURLY_BRACES')
+						and $tk[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+						$d++;
+					}
+					continue;
+				}
+				if ($tk === '{') { $d++; $opened = true; }
+				else if ($tk === '}') {
+					$d--;
+					if ($opened and $d === 0) break;
+				} else if ($tk === ';' and !$opened) {
+					break;   // a signature without a body
+				}
+			}
+			if (!$opened) { $out .= $text; $i = $k; continue; }
+
+			$check = $kw === T_FUNCTION
+				? "\\function_exists('" . $name . "')"
+				: "\\class_exists('" . $name . "', false)";
+			$out .= "if (!" . $check . ") {\n" . $text . "\n}";
+			$changed = true;
+			$i = $k;
+		}
+
+		if (!$changed) return $source;
+
+		// Rewriting someone else's source is only defensible if a mistake
+		// cannot break their file. TOKEN_PARSE runs the real parser and
+		// throws on anything it cannot read, so a guard that came out wrong
+		// costs the redeclaration protection for that one file and nothing
+		// else.
+		try {
+			token_get_all($out, TOKEN_PARSE);
+		} catch (\Throwable $e) {
+			return $source;
+		}
+		return $out;
+	}
+
+	/**
 	 * Parse .htaccess content into structured rules.
 	 */
 	private static function parseHtaccess($content)
 	{
-		$result = array('engine' => false, 'base' => '', 'blocks' => array());
+		$result = array('engine' => false, 'base' => '', 'blocks' => array(),
+			'indexes' => null);
 		$lines = preg_split('/\r?\n/', $content);
 		$pendingConds = array();
 
 		foreach ($lines as $line) {
 			$line = trim($line);
 			if ($line === '' || $line[0] === '#') continue;
+
+			// Options [+|-]Indexes — the one Options token that means
+			// anything here. Apache reads the whole line, so "Options
+			// -Indexes +FollowSymLinks" is honoured for the part we know
+			// and the rest ignored. Bare "Options Indexes" sets it, and
+			// "Options None" clears it.
+			if (preg_match('/^Options\s+(.+)$/i', $line, $m)) {
+				foreach (preg_split('/\s+/', trim($m[1])) as $opt) {
+					if (strcasecmp($opt, 'None') === 0) {
+						$result['indexes'] = false;
+					} else if (preg_match('/^([+-]?)Indexes$/i', $opt, $o)) {
+						$result['indexes'] = ($o[1] !== '-');
+					}
+				}
+				continue;
+			}
 
 			// RewriteEngine On/Off
 			if (preg_match('/^RewriteEngine\s+(On|Off)/i', $line, $m)) {
@@ -1621,6 +2039,47 @@ class Q_WebServer_Compat
 		return null;
 	}
 
+	/**
+	 * Whether .htaccess turns directory listings on or off for a URL path.
+	 *
+	 * Walks the chain the way Apache does — the document root first, then
+	 * each directory down to the requested one — with the deepest file
+	 * winning, so a subdirectory can switch listings back off.
+	 *
+	 * @method htaccessIndexes
+	 * @static
+	 * @param {string} $urlPath The request path
+	 * @param {string} $rootDir Document root, with a trailing separator
+	 * @return {boolean|null} null when no .htaccess in the chain says
+	 */
+	static function htaccessIndexes($urlPath, $rootDir)
+	{
+		$rootDir = rtrim((string) $rootDir, '/\\') . DIRECTORY_SEPARATOR;
+		$found = null;
+
+		$read = function ($dir) {
+			$file = $dir . '.htaccess';
+			if (!is_file($file)) return null;
+			$rules = self::htaccessRules($file);
+			return isset($rules['indexes']) ? $rules['indexes'] : null;
+		};
+
+		$v = $read($rootDir);
+		if ($v !== null) $found = $v;
+
+		$parts = explode('/', trim((string) $urlPath, '/'));
+		$dir = $rootDir;
+		foreach ($parts as $part) {
+			if ($part === '' or $part === '.' or $part === '..') continue;
+			$dir .= $part . DIRECTORY_SEPARATOR;
+			if (!is_dir($dir)) break;
+			$v = $read($dir);
+			if ($v !== null) $found = $v; // deepest wins
+		}
+
+		return $found;
+	}
+
 	// ── Helpers ─────────────────────────────────────────
 
 	/**
@@ -1649,6 +2108,18 @@ class Q_WebServer_Compat
  */
 class Q_WebServer_CompatFileWrapper
 {
+	/**
+	 * Set by PHP on every wrapper instance that is opened with a stream
+	 * context. Declaring it keeps PHP 8.2+ from reporting the assignment
+	 * as a dynamic property -- a deprecation notice that, with the default
+	 * display_errors, is written into the response body. Text responses
+	 * merely carried a stray paragraph; a generated image came out with
+	 * 1.5KB of notices in front of its PNG signature and would not open.
+	 *
+	 * @var resource|null
+	 */
+	public $context;
+
 	/** @var resource The underlying file handle */
 	private $handle;
 	/** @var string Buffered transformed content for reading */
