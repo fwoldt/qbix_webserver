@@ -386,6 +386,11 @@ class Q_WebServer_Compat
 
 		$result = $changed ? $out : $source;
 
+		// A worker outlives the request, so a file included twice declares its
+		// functions twice and PHP stops with "Cannot redeclare".
+		$guarded = self::guardDeclarations($result);
+		if ($guarded !== $result) { $result = $guarded; $changed = true; }
+
 		// Save to cache
 		if ($changed && $filePath) {
 			self::saveCache($filePath, $result);
@@ -1538,6 +1543,238 @@ class Q_WebServer_Compat
 	{
 		$to = self::$replacements[$name];
 		return $to[0] === '\\' ? $to : '\\' . $to;
+	}
+
+	/**
+	 * Wrap top-level function and class declarations in existence checks.
+	 *
+	 * Turns
+	 *
+	 *     function checkNodeAssignments($module) { ... }
+	 *
+	 * into
+	 *
+	 *     if (!function_exists('checkNodeAssignments')) {
+	 *     function checkNodeAssignments($module) { ... }
+	 *     }
+	 *
+	 * so including the file again is harmless. Only declarations at the top
+	 * level are touched: methods live inside a class, which is tracked by
+	 * brace depth, and closures have no name.
+	 *
+	 * The cost is hoisting. An unconditional function is available above its
+	 * own declaration; a conditional one is not. A file that calls its own
+	 * function before defining it will break -- rare in the libraries this
+	 * exists for, and the alternative is a fatal on every second request.
+	 *
+	 * @method guardDeclarations
+	 * @static
+	 * @protected
+	 * @param {string} $source
+	 * @return {string}
+	 */
+	/**
+	 * Does this file only declare things?
+	 *
+	 * True when the top level holds nothing but function, class, interface
+	 * and trait declarations, plus namespace and use statements, comments
+	 * and whitespace. Such a file can be included twice with no effect
+	 * beyond the redeclaration error, which is what makes guarding it safe.
+	 *
+	 * @method isDeclarationsOnly
+	 * @static
+	 * @protected
+	 * @param {array} $tokens
+	 * @return {boolean}
+	 */
+	protected static function isDeclarationsOnly($tokens)
+	{
+		$n = count($tokens);
+		$sawDeclaration = false;
+		$between = array(T_OPEN_TAG, T_CLOSE_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT);
+		if (defined('T_ATTRIBUTE')) $between[] = T_ATTRIBUTE;
+
+		for ($i = 0; $i < $n; $i++) {
+			$t = $tokens[$i];
+
+			if (is_array($t) and in_array($t[0], $between, true)) continue;
+			if (is_array($t) and $t[0] === T_INLINE_HTML) {
+				if (trim($t[1]) !== '') return false;
+				continue;
+			}
+
+			// namespace X; declare(...); use X\Y; — run to the semicolon.
+			if (is_array($t) and in_array($t[0], array(T_NAMESPACE, T_USE, T_DECLARE), true)) {
+				for (; $i < $n; $i++) {
+					if ($tokens[$i] === ';') break;
+					if ($tokens[$i] === '{') return false;   // braced namespace
+				}
+				continue;
+			}
+
+			// A declaration, possibly behind abstract/final/readonly.
+			$j = $i;
+			while ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_ABSTRACT, T_FINAL, T_WHITESPACE
+			), true)) {
+				$j++;
+			}
+			if ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_FUNCTION, T_CLASS, T_INTERFACE, T_TRAIT
+			), true)) {
+				$sawDeclaration = true;
+				// Skip to the end of the body, or to the semicolon of a
+				// signature without one.
+				$d = 0; $opened = false;
+				for ($k = $j; $k < $n; $k++) {
+					$tk = $tokens[$k];
+					if (is_array($tk)) {
+						if ($tk[0] === T_CURLY_OPEN
+						or (defined('T_DOLLAR_OPEN_CURLY_BRACES') and $tk[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+							$d++;
+						}
+						continue;
+					}
+					if ($tk === '{') { $d++; $opened = true; }
+					else if ($tk === '}') { $d--; if ($opened and $d === 0) break; }
+					else if ($tk === ';' and !$opened) break;
+				}
+				$i = $k;
+				continue;
+			}
+
+			return false;   // anything else is a statement
+		}
+		return $sawDeclaration;
+	}
+
+	protected static function guardDeclarations($source)
+	{
+		if (strpos($source, 'function') === false
+		and strpos($source, 'class') === false
+		and strpos($source, 'interface') === false
+		and strpos($source, 'trait') === false) {
+			return $source;
+		}
+
+		$tokens = token_get_all($source);
+		$n = count($tokens);
+		if (!self::isDeclarationsOnly($tokens)) {
+			// Anything that also runs statements is left alone. Guarding a
+			// declaration costs it its hoisting, and a file that does work as
+			// well as declaring is not the shape this exists for -- that is a
+			// library of functions pulled in with require rather than
+			// require_once.
+			return $source;
+		}
+		$out = '';
+		$depth = 0;
+		$changed = false;
+		$skip = array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_ATTRIBUTE);
+
+		for ($i = 0; $i < $n; $i++) {
+			$t = $tokens[$i];
+
+			if (!is_array($t)) {
+				if ($t === '{') $depth++;
+				else if ($t === '}') $depth--;
+				$out .= $t;
+				continue;
+			}
+
+			// "{$x}" and "${x}" inside a string open a brace that closes as a
+			// plain '}'. Not counting them sent the depth negative and put a
+			// guard in the middle of a class body.
+			if ($t[0] === T_CURLY_OPEN
+			or (defined('T_DOLLAR_OPEN_CURLY_BRACES') and $t[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+				$depth++;
+				$out .= $t[1];
+				continue;
+			}
+
+			if ($depth !== 0) { $out .= $t[1]; continue; }
+
+			// abstract/final/readonly belong to the declaration that follows.
+			$first = $i;
+			$j = $i;
+			while ($j < $n and is_array($tokens[$j]) and in_array($tokens[$j][0], array(
+				T_ABSTRACT, T_FINAL, T_WHITESPACE
+			), true)) {
+				$j++;
+			}
+			if ($j >= $n or !is_array($tokens[$j]) or !in_array($tokens[$j][0], array(
+				T_FUNCTION, T_CLASS, T_INTERFACE, T_TRAIT
+			), true)) {
+				$out .= $t[1];
+				continue;
+			}
+			$kw = $tokens[$j][0];
+
+			// "use function ..." is an import, not a declaration.
+			$b = $j - 1;
+			while ($b >= 0 and is_array($tokens[$b]) and $tokens[$b][0] === T_WHITESPACE) $b--;
+			if ($b >= 0 and is_array($tokens[$b]) and $tokens[$b][0] === T_USE) {
+				$out .= $t[1];
+				continue;
+			}
+
+			// The name. A closure and an anonymous class have none.
+			$m = $j + 1;
+			while ($m < $n and is_array($tokens[$m]) and in_array($tokens[$m][0], $skip, true)) $m++;
+			if ($m >= $n or !is_array($tokens[$m]) or $tokens[$m][0] !== T_STRING) {
+				$out .= $t[1];
+				continue;
+			}
+			$name = $tokens[$m][1];
+
+			// Take everything from here to the end of the body.
+			$text = '';
+			$d = 0;
+			$opened = false;
+			$k = $first;
+			for (; $k < $n; $k++) {
+				$tk = $tokens[$k];
+				$text .= is_array($tk) ? $tk[1] : $tk;
+				if (is_array($tk)) {
+					// "{$x}" opens a brace that closes as a plain '}'.
+					if ($tk[0] === T_CURLY_OPEN
+					or (defined('T_DOLLAR_OPEN_CURLY_BRACES')
+						and $tk[0] === T_DOLLAR_OPEN_CURLY_BRACES)) {
+						$d++;
+					}
+					continue;
+				}
+				if ($tk === '{') { $d++; $opened = true; }
+				else if ($tk === '}') {
+					$d--;
+					if ($opened and $d === 0) break;
+				} else if ($tk === ';' and !$opened) {
+					break;   // a signature without a body
+				}
+			}
+			if (!$opened) { $out .= $text; $i = $k; continue; }
+
+			$check = $kw === T_FUNCTION
+				? "\\function_exists('" . $name . "')"
+				: "\\class_exists('" . $name . "', false)";
+			$out .= "if (!" . $check . ") {\n" . $text . "\n}";
+			$changed = true;
+			$i = $k;
+		}
+
+		if (!$changed) return $source;
+
+		// Rewriting someone else's source is only defensible if a mistake
+		// cannot break their file. TOKEN_PARSE runs the real parser and
+		// throws on anything it cannot read, so a guard that came out wrong
+		// costs the redeclaration protection for that one file and nothing
+		// else.
+		try {
+			token_get_all($out, TOKEN_PARSE);
+		} catch (\Throwable $e) {
+			return $source;
+		}
+		return $out;
 	}
 
 	/**
