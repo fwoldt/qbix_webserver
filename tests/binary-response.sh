@@ -22,7 +22,15 @@ WS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PHP="${PHP:-php}"
 PASS=0; FAIL=0
 TMP="$(mktemp -d)"
-PORT=$(( 9800 + RANDOM % 150 ))
+# Pick a port nothing else holds. Fixed ranges collide with whatever the
+# machine happens to run -- a container on the same number makes every
+# assertion here fail with an empty reply and no hint why.
+PORT=0
+for _ in $(seq 1 60); do
+    _p=$(( 19000 + RANDOM % 900 ))
+    ss -ltn 2>/dev/null | grep -q ":$_p " || { PORT=$_p; break; }
+done
+[ "$PORT" = "0" ] && { echo "  no free port found"; exit 1; }
 trap 'rm -rf "$TMP"; pkill -f "qbixserver.php.*--port=$PORT" 2>/dev/null' EXIT
 
 ok()  { PASS=$((PASS+1)); printf "  ok   %s\n" "$1"; }
