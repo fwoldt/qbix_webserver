@@ -61,6 +61,9 @@ jobs:
       - name: Autoloaders across requests
         run: bash tests/autoloader-persistence.sh
 
+      - name: SCRIPT_NAME below the root
+        run: bash tests/script-name.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
