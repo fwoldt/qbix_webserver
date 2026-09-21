@@ -125,11 +125,17 @@ WORKDIR /build
 # server's PHP code reuses the cached layer instead of rebuilding PHP.
 RUN spc doctor --auto-fix 2>/dev/null || true
 RUN spc download --with-php=8.3 --for-extensions=$EXTS
-# --with-suggested-libs pairs with the download above, which pulls an
-# extension's suggested libraries by default. Without it the sources are
-# fetched and then not linked: gd came out able to read PNG only, and
-# imagejpeg() was an undefined function at runtime.
-RUN spc build "$EXTS" --build-micro --with-suggested-libs
+# gd's libraries have to be named. The download step pulls an extension's
+# suggested sources by default, but the build links none of them unless
+# asked, so gd came out able to read PNG only and imagejpeg() was an
+# undefined function at runtime.
+#
+# Named rather than --with-suggested-libs, which also drags in libaom for
+# AVIF; spc 2.8.5 cannot unpack it -- "Patch file
+# [libaom_posix_implict.patch] failed to apply" -- and the build dies.
+# AVIF output stays unavailable until that is fixed upstream, which
+# Image.php already handles: it guards imageavif and declines.
+RUN spc build "$EXTS" --build-micro --with-libs=libjpeg,libwebp,freetype
 
 COPY src/ src/
 COPY web/ web/

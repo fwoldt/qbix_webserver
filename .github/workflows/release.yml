@@ -190,7 +190,7 @@ jobs:
         env:
           SPC_SKIP_DOCTOR_CHECK_ITEMS: "pkg-config,musl-wrapper"
         run: |
-          ./spc build "${{ matrix.extensions }}" --build-cli --build-micro --with-suggested-libs
+          ./spc build "${{ matrix.extensions }}" --build-cli --build-micro --with-libs=libjpeg,libwebp,freetype
 
       - name: Build static PHP CLI + phpmicro (Windows)
         if: runner.os == 'Windows'
@@ -200,7 +200,7 @@ jobs:
           $exts = Get-Content "win_exts.txt" -ErrorAction SilentlyContinue
           if (-not $exts) { $exts = "${{ matrix.extensions }}" }
           Write-Host "Building with extensions: $exts"
-          php spc-src\bin\spc build "$exts" --build-cli --build-micro --with-suggested-libs
+          php spc-src\bin\spc build "$exts" --build-cli --build-micro --with-libs=libjpeg,libwebp,freetype
 
       - name: Build qbix_fork.dll (Windows)
         if: runner.os == 'Windows'
