@@ -64,6 +64,12 @@ printf '<?php echo "EXACTLY-THIS";\n'                       > "$ROOT/plain.php"
 printf '<?php session_start(); echo "SESSION-OK";\n'        > "$ROOT/sess.php"
 printf '<?php header("Content-Type: application/json"); echo json_encode(["a"=>1]);\n' \
                                                             > "$ROOT/json.php"
+# php://input has its own stream wrapper in a pooled worker, and PHP
+# assigns $context on it -- a dynamic property since 8.2.
+cat > "$ROOT/input.php" <<'PHP'
+<?php $raw = file_get_contents('php://input'); echo "RAW:", $raw;
+PHP
+
 cat > "$ROOT/inc.php" <<'PHP'
 <?php
 // Including another file is what opens the wrapper a second time.
@@ -114,6 +120,13 @@ for f in plain.php sess.php json.php inc.php; do
         *) ok "$f carries no diagnostic" ;;
     esac
 done
+
+# Reading php://input is what every JSON and XML endpoint does, and the
+# deprecation notice for its $context landed in front of the response.
+b=$(curl -s --max-time 15 -d 'x=1' "http://127.0.0.1:$PORT/input.php" 2>/dev/null)
+[ "$b" = "RAW:x=1" ] \
+    && ok "php://input: body is exactly its output" \
+    || bad "php://input body was '$(printf '%s' "$b" | head -c 120 | tr '\n' ' ')'"
 
 # session_start() must not trip "headers already sent", which it does once
 # a notice has been printed before it.
