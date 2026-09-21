@@ -1065,6 +1065,16 @@ class Q_WebServer_Pool
  */
 class Q_WebServer_PhpInputStream
 {
+	/**
+	 * PHP assigns the stream context to $context on a wrapper instance. As
+	 * of 8.2 that is a dynamic property, and the deprecation notice for it
+	 * is printed into the response body of any script that reads
+	 * php://input -- which is every JSON or XML endpoint there is.
+	 *
+	 * @var resource|null
+	 */
+	public $context;
+
 	protected $data = '';
 	protected $pos = 0;
 	protected $path = '';
