@@ -26,6 +26,18 @@
  */
 class Q_WebServer_Snapshot
 {
+	/**
+	 * Classes whose statics are server infrastructure, not application
+	 * state. Restoring them between requests would undo the bookkeeping
+	 * the worker loop itself depends on -- the Pool's reply socket, for
+	 * one, which the shutdown handler needs after a script calls exit().
+	 */
+	private static $never = array(
+		'Q_WebServer_Snapshot' => true,
+		'Q_WebServer_Compat' => true,
+		'Q_WebServer_Pool' => true
+	);
+
 	/** @var array class => [property => value] */
 	private static $snapshot = array();
 	/** @var array class => [property => ReflectionProperty] — cached handles */
@@ -99,6 +111,7 @@ class Q_WebServer_Snapshot
 
 		// Restore static properties via cached handles
 		foreach (self::$snapshot as $cls => $props) {
+			if (isset(self::$never[$cls])) continue;
 			foreach ($props as $name => $val) {
 				self::$reflectors[$cls][$name]->setValue(
 					null, is_object($val) ? clone $val : $val
@@ -143,12 +156,7 @@ class Q_WebServer_Snapshot
 	{
 		if (!self::$taken) return;
 		foreach (self::$snapshot as $cls => $props) {
-			// Never restore our own statics — doing so would undo
-			// updateNewClasses() by reverting $snapshot/$reflectors.
-			if ($cls === 'Q_WebServer_Snapshot') continue;
-			// Never restore Compat statics — the compat layer manages its
-			// own state via shutdown()/init().
-			if ($cls === 'Q_WebServer_Compat') continue;
+			if (isset(self::$never[$cls])) continue;
 			foreach ($props as $name => $val) {
 				$prop = self::$reflectors[$cls][$name];
 				// A closure in a static is behaviour installed once, never

@@ -164,8 +164,37 @@ class Q_WebServer_Pool
 	 * @param {boolean}  $octane  Whether to loop (true) or die after one (false)
 	 * @param {integer}  $maxReqs Maximum requests before voluntary exit (0=unlimited)
 	 */
+	/**
+	 * The socket a worker answers on, and whether this request has been
+	 * answered. Both are read from the shutdown handler, which is the only
+	 * thing that still runs after a script calls exit().
+	 */
+	private static $childSocket = null;
+	private static $answered = true;
+
 	protected static function childRun($socket, $octane = false, $maxReqs = 0)
 	{
+		self::$childSocket = $socket;
+
+		// exit() and die() end the process, not just the request. A script
+		// that did its work and called exit -- eZ's cleanExit(), a JSON
+		// endpoint, a redirect -- produced its whole response and then took
+		// the worker down with it, so the parent saw the socket close with
+		// nothing on it and answered 502 "Worker died". The work was done
+		// and the output thrown away.
+		//
+		// A shutdown function still runs at that point, which is enough to
+		// send what the script produced. The worker is lost either way and
+		// the parent forks another.
+		register_shutdown_function(function () {
+			if (self::$answered or !is_resource(self::$childSocket)) return;
+			self::$answered = true;
+			$r = self::collectResponse();
+			// _exiting tells the parent this worker is on its way out, so it
+			// recycles instead of handing the next request to a dead process.
+			self::writeMsg(self::$childSocket, $r['status'], $r['body'],
+				$r['headers'], $r['cookies'], array('_exiting' => true));
+		});
 		stream_set_blocking($socket, true);
 		// An octane worker blocks on readExact() between requests, sometimes
 		// for minutes. Without this, PHP's default_socket_timeout (60s) makes
@@ -190,7 +219,9 @@ class Q_WebServer_Pool
 			}
 
 			// Execute the PHP script
+			self::$answered = false;
 			$resp = self::executeScript($req);
+			self::$answered = true;
 			self::writeMsg($socket, $resp['status'], $resp['body'],
 				$resp['headers'], $resp['cookies'] ?? array());
 			$handled++;
@@ -680,6 +711,15 @@ class Q_WebServer_Pool
 		// In octane mode the worker is still alive — mark it idle so it
 		// can receive the next request. In classic mode, recycle it (the
 		// child exited after one request).
+		if ($this->octane and !empty($response['_exiting'])) {
+			// The worker answered from its shutdown handler after the script
+			// called exit(). The response is out; the process is gone.
+			unset($this->workerClients[$index]);
+			$this->workerBuffers[$index] = '';
+			$this->recycle($index, false);
+			return;
+		}
+
 		if ($this->octane) {
 			$this->workers[$index]['busy'] = false;
 			$this->workerBuffers[$index] = '';
@@ -914,8 +954,57 @@ class Q_WebServer_Pool
 		return $buf;
 	}
 
+	/**
+	 * The response as it stands: status, headers, and whatever the script
+	 * has written so far.
+	 *
+	 * Used when a script ends the process with exit() and the normal return
+	 * from executeScript() never happens. Reads the same places that path
+	 * reads, so the client gets what it would have got.
+	 *
+	 * @method collectResponse
+	 * @static
+	 * @protected
+	 * @return {array} status, body, headers, cookies
+	 */
+	protected static function collectResponse()
+	{
+		$status = 200;
+		$headers = array();
+
+		foreach (headers_list() as $h) {
+			if (strpos($h, ':') !== false) {
+				list($k, $v) = explode(':', $h, 2);
+				$headers[trim($k)] = trim($v);
+			}
+		}
+		if (class_exists('Q_WebServer_State', false)) {
+			foreach (\Q_WebServer_State::getHeaders() as $k => $v) {
+				$headers[$k] = $v;
+			}
+			$code = \Q_WebServer_State::getStatusCode();
+			if ($code) $status = (int) $code;
+		}
+		$code = http_response_code();
+		if ($status === 200 and $code and $code !== 200) $status = (int) $code;
+
+		$body = '';
+		if (ob_get_level()) {
+			$body = (string) ob_get_contents();
+			@ob_clean();
+		}
+		while (@ob_end_clean()) { /* drop removable buffers */ }
+
+		$cookies = array();
+		if (class_exists('Q_WebServer_State', false)) {
+			$cookies = \Q_WebServer_State::cookieHeaders();
+		}
+
+		return compact('status', 'body', 'headers', 'cookies');
+	}
+
 	protected static function writeMsg($sock, $status, $body, $headers,
-		$cookies = array())
+		$cookies = array(), $extra = array())
 	{
 		// json_encode() returns false on bytes that are not valid UTF-8, and
 		// strlen(false) is 0, so a binary body used to go out as a length
@@ -924,11 +1013,11 @@ class Q_WebServer_Pool
 		// script generated that was not text -- an image, a PDF, a zip --
 		// vanished silently. Base64 carries those bytes through, and only
 		// those: text responses keep their exact previous shape and cost.
-		$j = json_encode(compact('status', 'body', 'headers', 'cookies'));
+		$j = json_encode(compact('status', 'body', 'headers', 'cookies') + $extra);
 		if ($j === false) {
 			$b64 = true;
 			$body = base64_encode($body);
-			$j = json_encode(compact('status', 'body', 'headers', 'cookies', 'b64'));
+			$j = json_encode(compact('status', 'body', 'headers', 'cookies', 'b64') + $extra);
 		}
 		if ($j === false) {
 			// Headers themselves are not encodable. Say so rather than
