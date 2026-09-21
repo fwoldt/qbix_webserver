@@ -526,6 +526,8 @@ class Q_WebServer_Pool
 				if ($stateCode && $stateCode !== 200) $status = $stateCode;
 			}
 
+			$status = self::resolveStatus($status);
+
 			// Recover status from the Platform's own error state.
 			// Same fix as dispatchToQ: http_response_code() is a no-op under
 			// CLI SAPI, so the Platform's 412/424 errors arrive as 200.
@@ -975,6 +977,35 @@ class Q_WebServer_Pool
 	}
 
 	/**
+	 * The status a script set, from wherever it survived.
+	 *
+	 * http_response_code() is a no-op under the CLI SAPI, and the compat
+	 * shim records the code in Q_Response, not in Q_WebServer_State. Under
+	 * the static binary that leaves both of the places this used to look
+	 * reading 200 while the script had asked for a 302 -- every redirect
+	 * went out as 200 with a Location header, which a browser ignores.
+	 * Running from source it happened to work, so no test caught it.
+	 *
+	 * @method resolveStatus
+	 * @static
+	 * @protected
+	 * @param {integer} $status  what has been determined so far
+	 * @return {integer}
+	 */
+	protected static function resolveStatus($status)
+	{
+		if ($status !== 200) return $status;
+		if (class_exists('Q_Response', false)
+		and method_exists('Q_Response', 'code')) {
+			try {
+				$code = \Q_Response::code();
+				if ($code and (int) $code !== 200) return (int) $code;
+			} catch (\Throwable $ignore) {}
+		}
+		return $status;
+	}
+
+	/**
 	 * The response as it stands: status, headers, and whatever the script
 	 * has written so far.
 	 *
@@ -1007,6 +1038,7 @@ class Q_WebServer_Pool
 		}
 		$code = http_response_code();
 		if ($status === 200 and $code and $code !== 200) $status = (int) $code;
+		$status = self::resolveStatus($status);
 
 		$body = '';
 		if (ob_get_level()) {
