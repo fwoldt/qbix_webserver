@@ -13,10 +13,10 @@
 #     }
 #
 # Second request: the class is still there, the block is skipped, the
-# autoloader is never registered again, and nothing can be loaded. eZ
-# Publish served the first request and reported "Class eZDB not found" for
-# every one after — on whichever worker had already seen a request, so the
-# site failed for some visitors and not others.
+# autoloader is never registered again, and nothing can be loaded.
+# Exponential served the first request and reported "Class eZDB not found"
+# for every one after — on whichever worker had already seen a request, so
+# the site failed for some visitors and not others.
 #
 # A distinct class per request matters here: reusing one would be found
 # already loaded from the first request and would pass either way.
