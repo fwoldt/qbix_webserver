@@ -1,5 +1,5 @@
 {
-    "name": "qbix/server",
+    "name": "se7enxweb/qbox-webserver",
     "description": "Pure-PHP Web Server. No NGinX or PHP-FPM needed. Handle 10x more traffic instead!",
     "type": "project",
     "license": "MIT",
