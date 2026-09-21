@@ -297,6 +297,7 @@ class Q_WebServer_Pool
 				&& strncmp($k, 'DOCUMENT_', 9) !== 0
 				&& strncmp($k, 'REMOTE_', 7) !== 0
 				&& strncmp($k, 'QUERY_', 6) !== 0
+				&& strncmp($k, 'PATH_', 5) !== 0
 			) {
 				unset($_SERVER[$k]);
 			}
@@ -306,8 +307,22 @@ class Q_WebServer_Pool
 		$_SERVER['REQUEST_URI'] = $req['uri'];
 		$_SERVER['QUERY_STRING'] = $req['query'] ?? '';
 		$_SERVER['SCRIPT_FILENAME'] = $req['scriptFilename'];
-		$_SERVER['SCRIPT_NAME'] = $req['scriptName'] ?? '/index.php';
-		$_SERVER['PHP_SELF'] = $req['scriptName'] ?? '/index.php';
+		$scriptName = $req['scriptName'] ?? '/index.php';
+		$pathInfo = (string) ($req['pathInfo'] ?? '');
+		$_SERVER['SCRIPT_NAME'] = $scriptName;
+		// PHP_SELF carries the path info, SCRIPT_NAME does not. Frameworks
+		// route off one or the other and legacy code often off PHP_SELF, so
+		// the difference matters. Pooled requests used to leave PATH_INFO
+		// unset entirely -- the server computes it for the CGI and in-process
+		// paths, but never passed it to a worker, which is the default mode.
+		$_SERVER['PHP_SELF'] = $scriptName . $pathInfo;
+		if ($pathInfo !== '') {
+			$_SERVER['PATH_INFO'] = $pathInfo;
+			$_SERVER['PATH_TRANSLATED'] =
+				rtrim((string) ($req['documentRoot'] ?? ''), '/\\') . $pathInfo;
+		} else {
+			unset($_SERVER['PATH_INFO'], $_SERVER['PATH_TRANSLATED']);
+		}
 		$_SERVER['DOCUMENT_ROOT'] = $req['documentRoot'] ?? '';
 		$_SERVER['SERVER_NAME'] = $req['headers']['host'] ?? 'localhost';
 		$_SERVER['SERVER_PORT'] = $req['serverPort'] ?? '8080';
@@ -508,6 +523,7 @@ class Q_WebServer_Pool
 			'body'           => $parsed['body'],
 			'scriptFilename' => $scriptPath,
 			'scriptName'     => '/' . basename($scriptPath),
+			'pathInfo'       => $parsed['_pathInfo'] ?? '',
 			'documentRoot'   => Q_WebServer::$rootDir ?? '',
 			'serverPort'     => (string)($_SERVER['SERVER_PORT'] ?? '8080'),
 			'remoteAddr'     => '127.0.0.1'
