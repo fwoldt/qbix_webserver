@@ -192,7 +192,11 @@ class Q_WebServer_Headers
 			502=>'Bad Gateway', 503=>'Service Unavailable',
 		);
 
-		$reason = $reasons[$status] ?? 'OK';
+		// Calling an unknown status "OK" is worse than saying nothing: a
+		// 418 or a 422 went out as "HTTP/1.1 418 OK". The reason phrase
+		// carries no meaning for a client, so an unknown one is left empty
+		// rather than stated wrongly.
+		$reason = $reasons[$status] ?? '';
 		$out = "HTTP/1.1 $status $reason\r\n";
 		foreach ($headers as $k => $v) {
 			$out .= "$k: $v\r\n";
