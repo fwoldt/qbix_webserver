@@ -259,7 +259,7 @@ class Q_WebServer_Headers
 			$headers['Content-Type'] = Q_WebServer::mimeType($ext);
 		}
 		if (!self::hasHeader($headers, 'Cache-Control')) {
-			$headers['Cache-Control'] = 'public, max-age=0, must-revalidate';
+			$headers['Cache-Control'] = Q_WebServer::staticCacheControl();
 		}
 
 		// ETag / Last-Modified

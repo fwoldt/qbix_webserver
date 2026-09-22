@@ -1460,6 +1460,42 @@ class Q_WebServer
 	}
 
 	/**
+	 * Cache-Control for a static file.
+	 *
+	 * The server answered every static file with
+	 * "public, max-age=0, must-revalidate", which permits caching and then
+	 * requires the client to ask about it anyway. For a page carrying dozens of
+	 * stylesheets, scripts and images that is dozens of conditional requests on
+	 * every view, each a round trip, each answered 304. A browser ends up
+	 * asking whether anything changed more often than it asks for the page.
+	 *
+	 * The default is unchanged, so an installation that configures nothing
+	 * behaves exactly as before. Set Q.web.static.maxAge to the number of
+	 * seconds a client may keep a file without asking again.
+	 *
+	 * Staleness is the trade, and it is real: a file replaced in place is not
+	 * noticed until the lifetime expires. It costs nothing for assets whose URL
+	 * changes when their contents do, and it is why this is opt-in rather than
+	 * a new default.
+	 *
+	 * @method staticCacheControl
+	 * @static
+	 * @return {string}
+	 */
+	static function staticCacheControl()
+	{
+		static $value = null;
+		if ($value !== null) return $value;
+
+		$maxAge = (int) Q_Config::get('Q', 'web', 'static', 'maxAge', 0);
+		$value = $maxAge > 0
+			? 'public, max-age=' . $maxAge
+			: 'public, max-age=0, must-revalidate';
+
+		return $value;
+	}
+
+	/**
 	 * Build a static file response with ETag/compression.
 	 * Used by route() for amphp compatibility.
 	 */
@@ -1473,7 +1509,7 @@ class Q_WebServer
 			'Content-Type' => $ct,
 			'ETag' => '"' . dechex($mtime) . '-' . dechex($size) . '"',
 			'Last-Modified' => gmdate('D, d M Y H:i:s', $mtime) . ' GMT',
-			'Cache-Control' => 'public, max-age=0, must-revalidate'
+			'Cache-Control' => self::staticCacheControl()
 		);
 		if ($method === 'HEAD') {
 			$body = '';
@@ -2830,7 +2866,7 @@ WORKER;
 		$baseHeaders = "Content-Type: $contentType\r\n"
 			. "ETag: $etag\r\n"
 			. "Last-Modified: " . gmdate('D, d M Y H:i:s', $mtime) . " GMT\r\n"
-			. "Cache-Control: public, max-age=0, must-revalidate\r\n";
+			. "Cache-Control: " . self::staticCacheControl() . "\r\n";
 
 		// ── Large file fork ──
 		// Files over 1MB are served by a forked child process so the parent's
@@ -4239,7 +4275,7 @@ HTML;
 		$conn = $keepAlive ? 'keep-alive' : 'close';
 		self::writeAll($client, "HTTP/1.1 304 Not Modified\r\nETag: $etag\r\n"
 			. "Last-Modified: " . gmdate('D, d M Y H:i:s', $mtime) . " GMT\r\n"
-			. "Cache-Control: public, max-age=0, must-revalidate\r\nContent-Length: 0\r\nConnection: $conn\r\n\r\n");
+			. "Cache-Control: " . self::staticCacheControl() . "\r\nContent-Length: 0\r\nConnection: $conn\r\n\r\n");
 		self::$lastStatus = 304;
 	}
 
