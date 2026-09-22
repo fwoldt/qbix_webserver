@@ -187,6 +187,7 @@ class Q_WebServer
 		// Initialize dashboard stats (uptime tracking)
 		Q_WebServer_Dashboard::init();
 		Q_WebServer_Log::init();
+		Q_WebServer_Cache::init();
 
 		if ($ext = Q_Config::get('Q', 'webserver', 'extensions', null)) {
 			self::$allowedExtensions = $ext;
