@@ -40,7 +40,7 @@ class Q_WebServer_Pool
 	protected $workerClients = array(); // index => HTTP client socket
 	protected $workerBuffers = array(); // index => partial response data
 	protected $watchers = array();      // index => Q_Evented watcher id
-	protected $pending = array();       // queued [client, parsed, scriptPath]
+	protected $pending = array();       // queued [client, parsed, scriptPath, responder]
 	protected $nextIndex = 0;
 	protected static $inputWrapperRegistered = false;
 
@@ -587,20 +587,26 @@ class Q_WebServer_Pool
 	/**
 	 * Send a request to an idle worker. Queues if all busy.
 	 */
-	function dispatch($client, $parsed, $scriptPath)
+	function dispatch($client, $parsed, $scriptPath, $responder = null)
 	{
 		$idle = $this->findIdle();
 		if ($idle === null) {
-			$this->pending[] = array($client, $parsed, $scriptPath);
+			$this->pending[] = array($client, $parsed, $scriptPath, $responder);
 			return;
 		}
-		$this->sendTo($idle, $client, $parsed, $scriptPath);
+		$this->sendTo($idle, $client, $parsed, $scriptPath, $responder);
 	}
 
-	protected function sendTo($index, $client, $parsed, $scriptPath)
+	protected function sendTo($index, $client, $parsed, $scriptPath, $responder = null)
 	{
 		$this->workers[$index]['busy'] = true;
 		$this->workerClients[$index] = $client;
+		// Where the answer goes. Normally it is written to the client socket
+		// as an HTTP/1.1 response; an HTTP/2 connection multiplexes many
+		// requests over one socket and has to put the answer on the stream it
+		// came from, so it supplies a callback and takes the response array
+		// instead.
+		$this->workerResponders[$index] = $responder;
 		$this->workerBuffers[$index] = '';
 		$this->workerRequestHeaders[$index] = $parsed['headers'];
 		// The reverse proxy cache needs the whole parsed request, not just
@@ -686,8 +692,11 @@ class Q_WebServer_Pool
 
 		$written = @fwrite($this->workers[$index]['socket'], pack('N', strlen($msg)) . $msg);
 		if ($written === false || $written === 0) {
-			// Worker died before receiving the request — recycle and re-queue
-			$this->pending[] = array($client, $parsed, $scriptPath);
+			// Worker died before receiving the request — recycle and re-queue.
+			// The responder goes back on the queue too: without it a request
+			// that arrived over HTTP/2 would be answered as HTTP/1.1, written
+			// straight into an open h2 connection, which corrupts it.
+			$this->pending[] = array($client, $parsed, $scriptPath, $responder);
 			$this->recycle($index, true);
 		}
 	}
@@ -771,7 +780,7 @@ class Q_WebServer_Pool
 			}
 			if (!empty($this->pending)) {
 				$next = array_shift($this->pending);
-				$this->dispatch($next[0], $next[1], $next[2]);
+				$this->dispatch($next[0], $next[1], $next[2], $next[3] ?? null);
 			}
 		} else {
 			$this->recycle($index, false);
@@ -817,7 +826,7 @@ class Q_WebServer_Pool
 		// Drain pending queue
 		if (!empty($this->pending)) {
 			$next = array_shift($this->pending);
-			$this->sendTo($newIdx, $next[0], $next[1], $next[2]);
+			$this->sendTo($newIdx, $next[0], $next[1], $next[2], $next[3] ?? null);
 		}
 	}
 
@@ -827,6 +836,18 @@ class Q_WebServer_Pool
 	 * @property $workerRequestHeaders
 	 */
 	protected $workerRequestHeaders = array();
+
+	/**
+	 * Where each worker's answer should go: a callback that takes the response
+	 * array, or null to write it to the client socket as HTTP/1.1.
+	 *
+	 * One socket carries one HTTP/1.1 request, so writing the response to it
+	 * is unambiguous. An HTTP/2 connection multiplexes many requests over one
+	 * socket, so the answer has to be put on the stream it belongs to, and
+	 * only the connection knows which that is.
+	 * @property $workerResponders
+	 */
+	protected $workerResponders = array();
 
 	/**
 	 * The parsed request each worker is serving, kept so the response can
@@ -844,8 +865,18 @@ class Q_WebServer_Pool
 
 	protected function sendHttp($client, $resp, $index)
 	{
-		$reqHeaders = $this->workerRequestHeaders[$index] ?? array();
-		Q_WebServer_Headers::processResponse($client, $resp, $reqHeaders);
+		$responder = $this->workerResponders[$index] ?? null;
+		if ($responder) {
+			$this->workerResponders[$index] = null;
+			call_user_func($responder, $resp);
+		} else {
+			$reqHeaders = $this->workerRequestHeaders[$index] ?? array();
+			Q_WebServer_Headers::processResponse($client, $resp, $reqHeaders);
+		}
+
+		// Recorded either way. How the response reached the client does not
+		// change what the log and the dashboard should say about it.
+		//
 		// The parent skipped recording this one -- dispatch() marked it as
 		// handed on, because back then neither the status nor the size existed.
 		if (isset($this->workerRequests[$index])) {

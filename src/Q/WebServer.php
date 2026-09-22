@@ -447,6 +447,14 @@ class Q_WebServer
 		stream_context_set_option($client, 'ssl', 'allow_self_signed', true);
 		stream_context_set_option($client, 'ssl', 'verify_peer', false);
 
+		// Offer HTTP/2 in the handshake. The protocol is chosen by ALPN while
+		// TLS is being established and cannot be negotiated afterwards, so a
+		// server that does not offer it here can never speak it, whatever it
+		// implements above. http/1.1 stays in the list and stays the fallback.
+		if (self::http2Enabled()) {
+			stream_context_set_option($client, 'ssl', 'alpn_protocols', 'h2,http/1.1');
+		}
+
 		$key = (int) $client;
 		self::$clients[$key] = $client;
 		self::$buffers[$key] = '';
@@ -454,6 +462,203 @@ class Q_WebServer
 
 		// Start the handshake — may need multiple attempts
 		self::continueTlsHandshake($key);
+	}
+
+	/** @var array client key => Q_WebServer_Http2_Connection */
+	static $http2 = array();
+
+	/**
+	 * Whether HTTP/2 may be negotiated.
+	 *
+	 * Off unless asked for. A server that offers h2 and then mishandles a
+	 * frame is worse than one that never offered it, because a client commits
+	 * to the protocol during the handshake and will not fall back to HTTP/1.1
+	 * afterwards -- the page simply does not arrive.
+	 *
+	 * @method http2Enabled
+	 * @static
+	 * @return {boolean}
+	 */
+	static function http2Enabled()
+	{
+		static $enabled = null;
+		if ($enabled === null) {
+			$enabled = (bool) Q_Config::get('Q', 'web', 'http2', 'enabled', false);
+		}
+		return $enabled;
+	}
+
+	/**
+	 * Hand a socket that negotiated h2 to an HTTP/2 connection, and read it
+	 * through the event loop like any other client.
+	 *
+	 * @method startHttp2
+	 * @static
+	 * @param {integer} $key
+	 * @param {resource} $client
+	 */
+	static function startHttp2($key, $client)
+	{
+		$conn = new Q_WebServer_Http2_Connection($client, function ($request) use ($key) {
+			return Q_WebServer::http2Request($key, $request);
+		});
+		self::$http2[$key] = $conn;
+		$conn->start();
+
+		self::$clientWatchers[$key] = Q_Evented::onReadable(
+			$client,
+			function ($c) { Q_WebServer::onHttp2Data($c); }
+		);
+	}
+
+	/**
+	 * Readable data on an HTTP/2 connection.
+	 *
+	 * @method onHttp2Data
+	 * @static
+	 * @param {resource} $client
+	 */
+	static function onHttp2Data($client)
+	{
+		$key = (int) $client;
+		if (!isset(self::$http2[$key])) return;
+
+		$data = @fread($client, 65536);
+		if ($data === false or $data === '') {
+			if (feof($client)) self::closeHttp2($key);
+			return;
+		}
+
+		if (!self::$http2[$key]->feed($data)) {
+			self::closeHttp2($key);
+		}
+	}
+
+	/**
+	 * Finish with an HTTP/2 connection.
+	 *
+	 * @method closeHttp2
+	 * @static
+	 * @param {integer} $key
+	 */
+	static function closeHttp2($key)
+	{
+		unset(self::$http2[$key]);
+		self::closeClient($key);
+	}
+
+	/**
+	 * Answer one request that arrived over HTTP/2.
+	 *
+	 * A file is read and returned here and now, which is the case this whole
+	 * exercise is for: a page referencing dozens of stylesheets, scripts and
+	 * images costs one connection instead of waves of six.
+	 *
+	 * A script is handed to the worker pool and answered later, on the stream
+	 * it arrived on -- so null is returned to say "not yet", and the pool is
+	 * given a callback rather than a socket to write to.
+	 *
+	 * @method http2Request
+	 * @static
+	 * @param {integer} $key
+	 * @param {array} $request
+	 * @return {array|null}
+	 */
+	static function http2Request($key, $request)
+	{
+		if (!isset(self::$http2[$key])) return array('status' => 500, 'body' => '');
+		$conn = self::$http2[$key];
+		$stream = $request['stream'];
+
+		$path = $request['path'];
+		$query = '';
+		if (($q = strpos($path, '?')) !== false) {
+			$query = substr($path, $q + 1);
+			$path = substr($path, 0, $q);
+		}
+
+		$root = rtrim(self::$rootDir, '/\\');
+		$decoded = rawurldecode($path);
+
+		// A path that climbs out of the document root is refused before it is
+		// touched, not after realpath() has been asked about it.
+		if (strpos($decoded, "\0") !== false or strpos($decoded, '..') !== false) {
+			return array('status' => 400, 'headers' => array(), 'body' => 'Bad Request');
+		}
+
+		$fsPath = $root . str_replace('/', DIRECTORY_SEPARATOR, $decoded);
+
+		if (is_file($fsPath)) {
+			$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
+			if ($ext !== 'php') {
+				$built = self::buildFileResponse(
+					$fsPath, $ext, $request['method'], $request['headers']
+				);
+				if (is_array($built)) return $built;
+			}
+		}
+
+		// Anything else is the application's. Resolve it the way the HTTP/1.1
+		// path does, then hand it to a worker.
+		$scriptPath = self::resolveScript($decoded, $fsPath);
+		if ($scriptPath === null or !self::$pool) {
+			return array(
+				'status' => 404,
+				'headers' => array('content-type' => 'text/plain'),
+				'body' => "Not Found\n"
+			);
+		}
+
+		$parsed = array(
+			'method' => $request['method'],
+			'uri' => $request['path'],
+			'path' => $path,
+			'query' => $query,
+			'headers' => $request['headers'],
+			'rawHeaders' => array(),
+			'body' => $request['body'],
+			'httpVersion' => '2',
+		);
+
+		self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
+			function ($resp) use ($key, $stream) {
+				if (!isset(Q_WebServer::$http2[$key])) return;
+				Q_WebServer::$http2[$key]->respond($stream, $resp);
+			}
+		);
+
+		return null; // answered later, on this stream
+	}
+
+	/**
+	 * The script that should answer a path, or null.
+	 *
+	 * Kept separate so the HTTP/2 path and the HTTP/1.1 path agree about what
+	 * a URL means rather than each deciding for itself.
+	 *
+	 * @method resolveScript
+	 * @static
+	 * @param {string} $path
+	 * @param {string} $fsPath
+	 * @return {string|null}
+	 */
+	static function resolveScript($path, $fsPath)
+	{
+		if (is_file($fsPath) and strtolower(pathinfo($fsPath, PATHINFO_EXTENSION)) === 'php') {
+			return $fsPath;
+		}
+
+		$root = rtrim(self::$rootDir, '/\\');
+		if (is_dir($fsPath)) {
+			foreach (array('index.php', 'index.html') as $index) {
+				$candidate = rtrim($fsPath, '/\\') . DIRECTORY_SEPARATOR . $index;
+				if (is_file($candidate)) return $candidate;
+			}
+		}
+
+		// The front controller, which is how a framework URL is served.
+		$front = $root . DIRECTORY_SEPARATOR . 'index.php';
+		return is_file($front) ? $front : null;
 	}
 
 	/**
@@ -481,6 +686,19 @@ class Q_WebServer
 		if ($result === true) {
 			// Handshake complete — treat like a normal client
 			unset(self::$tlsPending[$key]);
+
+			// What did the two sides agree to speak? A client that chose h2
+			// will send the HTTP/2 preface and nothing the HTTP/1.1 reader
+			// could make sense of, so it has to be routed now.
+			$meta = @stream_get_meta_data($client);
+			$alpn = isset($meta['crypto']['alpn_protocol'])
+				? $meta['crypto']['alpn_protocol'] : '';
+
+			if ($alpn === 'h2' and self::http2Enabled()) {
+				self::startHttp2($key, $client);
+				return;
+			}
+
 			self::$clientWatchers[$key] = Q_Evented::onReadable(
 				$client,
 				function ($c) { Q_WebServer::onClientData($c); }
