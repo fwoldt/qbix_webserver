@@ -1041,8 +1041,9 @@ class Q_WebServer
 		// The child's exit status is recorded in the SIGCHLD handler
 		if (self::$lastStatus !== -1) {
 			$memUsed = max(0, memory_get_usage() - $memBefore);
+			$bytes = self::$lastBytes; // the reset below precedes the log line
 			Q_WebServer_Dashboard::recordRequest(
-				$parsed['method'], $parsed['uri'], self::$lastStatus, $ms, self::$lastBytes,
+				$parsed['method'], $parsed['uri'], self::$lastStatus, $ms, $bytes,
 				false, '', $memUsed, $parsed['cookies'] ?? array()
 			);
 			// Metrics: buffered logging, clickstream, time-series
@@ -1052,7 +1053,7 @@ class Q_WebServer
 					$parsed['method'], $parsed['uri'],
 					$parsed['clientIp'] ?? ($parsed['_remoteAddr'] ?? ''),
 					$parsed['headers']['user-agent'] ?? '',
-					self::$lastBytes,
+					$bytes,
 					$parsed['cookies'] ?? []
 				);
 			}
@@ -1061,11 +1062,11 @@ class Q_WebServer
 				(self::$onRequest)($parsed['method'], $parsed['uri'], self::$lastStatus, $ms);
 			}
 
-			// Log to file
-			$bodyLen = strlen(self::$lastBody ?? '');
+			// Log to file. $lastBody is only ever assigned by sendResponse(),
+			// so anything else logged the previous response's size.
 			Q_WebServer_Log::access(
 				$parsed['clientIp'], $parsed['method'], $parsed['uri'],
-				self::$lastStatus, $bodyLen,
+				self::$lastStatus, $bytes,
 				$parsed['headers']['referer'] ?? '',
 				$parsed['headers']['user-agent'] ?? '',
 				$ms
@@ -2210,7 +2211,11 @@ class Q_WebServer
 		}
 
 		if (self::$pool) {
-			self::$lastStatus = 200;
+			// -1 = handed on, the parent must not record it now. The pool
+			// answers from its own event and calls recordCompleted() then;
+			// recording here would log dispatch time, status 200 and the
+			// previous response's size for every script.
+			self::$lastStatus = -1;
 			self::$pool->dispatch($client, $parsed, $scriptPath);
 			$key = (int) $client;
 			if (isset(self::$clientWatchers[$key])) {
@@ -4204,6 +4209,54 @@ HTML;
 	static function phpinfoHtml($out)
 	{
 		return Q_WebServer_PhpInfo::render($out);
+	}
+
+	/**
+	 * Record a finished request in the dashboard, the metrics and the access log.
+	 *
+	 * The inline block in the read loop can only do this for responses the
+	 * parent writes itself. A pooled worker answers later, from its own event,
+	 * so the loop ran long before the status and the size were known -- it
+	 * logged the 200 that dispatch() had just assigned and the byte count left
+	 * over from the previous static response, and counted the request as
+	 * static. The pool calls this when the response actually goes out.
+	 *
+	 * @method recordCompleted
+	 * @static
+	 * @param {array} $parsed The request
+	 * @param {integer} $status
+	 * @param {integer} $bytes Body bytes handed to the client
+	 * @param {float} $ms
+	 * @param {boolean} [$isPhp=true]
+	 */
+	static function recordCompleted($parsed, $status, $bytes, $ms, $isPhp = true)
+	{
+		$status = (int) $status;
+		$bytes = (int) $bytes;
+		Q_WebServer_Dashboard::recordRequest(
+			$parsed['method'] ?? 'GET', $parsed['uri'] ?? '/', $status, $ms, $bytes,
+			$isPhp, '', 0, $parsed['cookies'] ?? array()
+		);
+		if (class_exists('Q_WebServer_Metrics', false)) {
+			Q_WebServer_Metrics::recordRequest(
+				$status, $ms,
+				$parsed['method'] ?? 'GET', $parsed['uri'] ?? '/',
+				$parsed['clientIp'] ?? ($parsed['_remoteAddr'] ?? ''),
+				$parsed['headers']['user-agent'] ?? '',
+				$bytes,
+				$parsed['cookies'] ?? array()
+			);
+		}
+		if (self::$onRequest) {
+			(self::$onRequest)($parsed['method'] ?? 'GET', $parsed['uri'] ?? '/', $status, $ms);
+		}
+		Q_WebServer_Log::access(
+			$parsed['clientIp'] ?? '', $parsed['method'] ?? 'GET', $parsed['uri'] ?? '/',
+			$status, $bytes,
+			$parsed['headers']['referer'] ?? '',
+			$parsed['headers']['user-agent'] ?? '',
+			$ms
+		);
 	}
 
 	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array())
