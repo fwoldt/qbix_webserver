@@ -804,13 +804,23 @@ class Q_WebServer
 		// this falls back to waiting for readability, which is correct when
 		// the peer really does owe us bytes.
 		$result = 0;
-		for ($attempt = 0; $attempt < 8; $attempt++) {
+		for ($attempt = 0; $attempt < 4; $attempt++) {
 			$result = @stream_socket_enable_crypto($client, true, $cryptoMethod);
 			if ($result !== 0) break;
-			// Nothing buffered means the next flight has not arrived, so
-			// there is nothing to gain from asking again now.
-			$meta = @stream_get_meta_data($client);
-			if (empty($meta['unread_bytes'])) break;
+
+			// No early break on unread_bytes.
+			//
+			// That was the first attempt at this and it did nothing: for a
+			// socket in the middle of a TLS handshake the bytes live inside
+			// OpenSSL, not in the stream's own buffer, so unread_bytes is 0
+			// even when the next flight has arrived in full. The loop broke
+			// immediately every time and the handshake still waited for a
+			// readability event that had already been and gone.
+			//
+			// Asking again costs a function call. A handshake needs only a
+			// few turns, and when the peer genuinely owes us a flight the
+			// bounded loop below falls through to waiting for readability,
+			// which is correct.
 		}
 
 		if ($result === true) {
