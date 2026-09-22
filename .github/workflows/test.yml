@@ -52,6 +52,9 @@ jobs:
       - name: Working directory per request
         run: bash tests/working-directory.sh
 
+      - name: SCRIPT_NAME below the root
+        run: bash tests/script-name.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
