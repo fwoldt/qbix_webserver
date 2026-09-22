@@ -58,7 +58,29 @@ class Q_WebServer_Headers
 	 */
 	static $compressMinSize = 1024;
 
-	/**
+		/**
+	 * Write every byte of $data to $client, or fail.
+	 *
+	 * Delegates to Q_WebServer::writeAll(), which switches the stream to
+	 * blocking and loops until everything is out. This file was the one that
+	 * never called it: it used bare fwrite() and discarded the count, so the
+	 * tail of a large response was dropped while Content-Length had already
+	 * promised it, and on TLS the half-written record left the framing out of
+	 * step and the client reported SSL_ERROR_BAD_MAC_READ.
+	 *
+	 * @method writeAll
+	 * @static
+	 * @param {resource} $client
+	 * @param {string} $data
+	 * @return {boolean}
+	 */
+	static function writeAll($client, $data)
+	{
+		if (!is_resource($client)) return false;
+		return Q_WebServer::writeAll($client, $data);
+	}
+
+/**
 	 * Process a response from PHP (worker pool or in-process).
 	 * Handles X-Accel-Redirect and compression. Returns the
 	 * final response to send to the client.
@@ -167,7 +189,7 @@ class Q_WebServer_Headers
 				}
 			}
 		}
-		@fwrite($client, $out . "\r\n" . $body);
+		self::writeAll($client, $out . "\r\n" . $body);
 		return true;
 	}
 
@@ -210,12 +232,12 @@ class Q_WebServer_Headers
 
 			$out = "HTTP/1.1 200 OK\r\n";
 			foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
-			fwrite($client, $out . "\r\n");
+			self::writeAll($client, $out . "\r\n");
 
 			$fp = fopen($compressed['path'], 'rb');
 			while (!feof($fp)) {
 				$data = fread($fp, 65536);
-				if ($data === false || @fwrite($client, $data) === false) break;
+				if ($data === false || !self::writeAll($client, $data)) break;
 			}
 			fclose($fp);
 			return;
@@ -236,7 +258,7 @@ class Q_WebServer_Headers
 
 			$out = "HTTP/1.1 200 OK\r\n";
 			foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
-			@fwrite($client, $out . "\r\n" . $body);
+			self::writeAll($client, $out . "\r\n" . $body);
 			return;
 		}
 
@@ -246,12 +268,12 @@ class Q_WebServer_Headers
 
 		$out = "HTTP/1.1 200 OK\r\n";
 		foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
-		fwrite($client, $out . "\r\n");
+		self::writeAll($client, $out . "\r\n");
 
 		$fp = fopen($fsPath, 'rb');
 		while (!feof($fp)) {
 			$data = fread($fp, 65536);
-			if ($data === false || @fwrite($client, $data) === false) break;
+			if ($data === false || !self::writeAll($client, $data)) break;
 		}
 		fclose($fp);
 	}
