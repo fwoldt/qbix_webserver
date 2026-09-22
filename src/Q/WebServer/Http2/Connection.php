@@ -471,10 +471,7 @@ class Q_WebServer_Http2_Connection
 		if (!$alreadyEncoded and $body !== ''
 			and strpos(strtolower($accept), 'gzip') !== false
 			and function_exists('gzencode')
-			and class_exists('Q_WebServer_Headers', false)
-			and Q_WebServer_Headers::shouldCompress(
-				$contentType, strlen($body), array('accept-encoding' => $accept)
-			)
+			and self::compressible($contentType, strlen($body))
 		) {
 			$compressed = @gzencode($body, 6);
 			if ($compressed !== false and strlen($compressed) < strlen($body)) {
@@ -539,6 +536,40 @@ class Q_WebServer_Http2_Connection
 
 		$this->streams[$stream]['pending'] = $body;
 		$this->flush($stream);
+	}
+
+	/**
+	 * Whether a body of this type and size is worth compressing.
+	 *
+	 * Decided here rather than by asking Q_WebServer_Headers, deliberately.
+	 * The first attempt called that class behind class_exists(..., false),
+	 * which does not autoload -- so whether a page was compressed depended on
+	 * whether something else in the process had happened to load that class
+	 * first. It had not, and every response went out uncompressed: 77KB where
+	 * HTTP/1.1 sent 9KB. A transport decision must not rest on load order.
+	 *
+	 * @method compressible
+	 * @static
+	 * @param {string} $contentType
+	 * @param {integer} $size
+	 * @return {boolean}
+	 */
+	static function compressible($contentType, $size)
+	{
+		// Below about a packet there is nothing to win, and gzip has a header.
+		if ($size < 512) return false;
+
+		$base = strtolower(trim(strtok((string) $contentType, ';')));
+		if ($base === '') return false;
+
+		if (strncmp($base, 'text/', 5) === 0) return true;
+
+		return in_array($base, array(
+			'application/json', 'application/javascript', 'application/x-javascript',
+			'application/xml', 'application/xhtml+xml', 'application/rss+xml',
+			'application/atom+xml', 'application/ld+json', 'application/manifest+json',
+			'image/svg+xml', 'application/wasm',
+		), true);
 	}
 
 	/**
