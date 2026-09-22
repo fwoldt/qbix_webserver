@@ -47,6 +47,61 @@ class Q_WebServer_Cache
 	static $misses = 0;
 
 	/**
+	 * How long past its expiry an entry may still be served while one request
+	 * renders a fresh one. 0 keeps the old behaviour exactly.
+	 * @property $staleWhileRevalidate
+	 */
+	static $staleWhileRevalidate = 0;
+
+	/**
+	 * How long a single render may hold the right to refresh a key before
+	 * another request is allowed to take it. Covers a worker that died mid
+	 * render, which would otherwise leave the page stale until it fell out
+	 * of the grace window.
+	 * @property $revalidateLockSeconds
+	 */
+	static $revalidateLockSeconds = 30;
+
+	static $stale = 0;
+
+	/**
+	 * Seconds to remember a 404 or 410. 0 keeps the old behaviour exactly.
+	 *
+	 * A miss costs what a hit saves. Measured on this installation, a 404 is
+	 * 220-340ms of full render, and none of them were ever cached, so a
+	 * crawler walking a list of dead links paid that price on every request
+	 * and so did the server. Nothing bounded it.
+	 *
+	 * Kept short by default where it is enabled at all, because the cost of
+	 * being wrong is a page that exists appearing not to. A minute is long
+	 * enough to blunt a crawl and short enough that publishing something is
+	 * not visibly delayed.
+	 * @property $negativeTtl
+	 */
+	static $negativeTtl = 0;
+
+	/**
+	 * Whether to collapse insignificant whitespace in cached HTML.
+	 * Off unless asked for, like everything else that changes what is sent.
+	 * @property $minifyHtml
+	 */
+	static $minifyHtml = false;
+
+	/**
+	 * Whether stored entries are compressed against a shared dictionary.
+	 *
+	 * Off unless asked for. It changes the on-disk format, and an entry written
+	 * with a dictionary cannot be read without exactly the same one -- which is
+	 * safe, because a mismatch reads as a miss rather than as wrong bytes, but
+	 * it is not something to switch on by accident.
+	 * @property $middleOut
+	 */
+	static $middleOut = false;
+
+	/** @var string|null the loaded dictionary, or '' when there is none */
+	static $dictionary = null;
+
+	/**
 	 * Initialize cache from config.
 	 * @method init
 	 * @static
@@ -70,6 +125,68 @@ class Q_WebServer_Cache
 		self::$apcuMaxSize = (int) Q::ifset($apcu, 'maxSize', 65536);
 		self::$defaultTtl = (int) Q::ifset($config, 'defaultTtl', 0);
 		self::$skipCookies = Q::ifset($config, 'skip', 'cookies', array('Q_sid', 'PHPSESSID'));
+		self::$staleWhileRevalidate = (int) Q::ifset($config, 'staleWhileRevalidate', 0);
+		self::$revalidateLockSeconds = (int) Q::ifset($config, 'revalidateLockSeconds', 30);
+		self::$negativeTtl = (int) Q::ifset($config, 'negativeTtl', 0);
+		self::$minifyHtml = (bool) Q::ifset($config, 'minifyHtml', false);
+		self::$middleOut = (bool) Q::ifset($config, 'middleOut', false);
+		self::$dictionary = null;   // reloaded lazily
+	}
+
+	/**
+	 * Claim the sole right to re-render one key.
+	 *
+	 * An entry expires at a moment, not gradually, so every request in flight
+	 * for that page misses at once and every one of them renders it. On this
+	 * installation a hit costs 0.6 ms and a render costs 1382 ms, so the page
+	 * does not get slightly slower at the expiry -- it stops, for as long as
+	 * the render takes, for everyone who arrives during it, and they all do
+	 * the same work to produce the same bytes.
+	 *
+	 * So exactly one request is let through to render, and the rest are given
+	 * the copy that already exists. The claim is a directory because mkdir is
+	 * atomic and needs no cleanup protocol to be correct: two processes racing
+	 * cannot both succeed.
+	 *
+	 * A render that dies still holding the claim would leave the page stale,
+	 * so a claim older than revalidateLockSeconds may be taken from it. That
+	 * is the one case where two renders can overlap, and duplicated work is a
+	 * far better failure than a page frozen at its last version.
+	 *
+	 * @method claimRevalidation
+	 * @static
+	 * @param {string} $key
+	 * @return {boolean} true if this request should render
+	 */
+	static function claimRevalidation($key)
+	{
+		$path = self::filePath($key);
+		if (!$path) return true; // nowhere to keep a claim; let it render
+		$lock = $path . '.refresh';
+
+		if (@mkdir($lock, 0755, true)) return true;
+
+		// Held. Take it only if whoever holds it has had long enough to be
+		// presumed gone.
+		$since = @filemtime($lock);
+		if ($since !== false
+		and time() - $since > max(1, self::$revalidateLockSeconds)) {
+			@touch($lock);      // re-date it first, so the next caller waits
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Give up the right to re-render a key.
+	 * @method releaseRevalidation
+	 * @static
+	 * @param {string} $key
+	 */
+	static function releaseRevalidation($key)
+	{
+		$path = self::filePath($key);
+		if ($path) @rmdir($path . '.refresh');
 	}
 
 	/**
@@ -110,35 +227,75 @@ class Q_WebServer_Cache
 
 		$key = self::cacheKey($parsed);
 
-		// Try APCu first (faster)
-		if (self::$apcuEnabled) {
-			$entry = apcu_fetch('qcache:' . $key);
-			if ($entry !== false) {
-				if ($entry['expires'] > 0 && $entry['expires'] < time()) {
-					apcu_delete('qcache:' . $key);
-				} else {
-					self::$hits++;
-					$entry['headers']['X-Cache'] = 'HIT';
-					return $entry;
-				}
-			}
+		// Before either store. A client that already holds the page is asking
+		// a question about two strings, and the answer is in the index.
+		$fresh = self::notModifiedFromIndex($parsed, $key);
+		if ($fresh !== null) {
+			self::$hits++;
+			return $fresh;
 		}
 
-		// Try filesystem
+		// One entry, found wherever it lives, and one decision about it. The
+		// two stores used to decide separately, which let a single request
+		// claim the re-render off the APCu copy and then, finding the file
+		// copy also expired, be handed its own claim back as a refusal -- so
+		// the request that was supposed to render was served stale instead,
+		// and nothing ever rendered.
+		$entry = null;
+		$fromApcu = false;
+		if (self::$apcuEnabled) {
+			$found = apcu_fetch('qcache:' . $key);
+			if ($found !== false) { $entry = $found; $fromApcu = true; }
+		}
+
 		$path = self::filePath($key);
-		if ($path && file_exists($path)) {
+		if ($entry === null and $path and file_exists($path)) {
 			$entry = self::decodeEntry(file_get_contents($path));
-			if ($entry && ($entry['expires'] === 0 || $entry['expires'] > time())) {
+		}
+
+		if ($entry === null) {
+			self::$misses++;
+			return null;
+		}
+
+		$expires = isset($entry['expires']) ? $entry['expires'] : 0;
+		if ($expires === 0 or $expires > time()) {
+			self::$hits++;
+			$entry['headers']['X-Cache'] = 'HIT';
+			if (!$fromApcu and self::$apcuEnabled
+			and strlen($entry['body']) <= self::$apcuMaxSize) {
+				apcu_store('qcache:' . $key, $entry, self::ttlRemaining($entry));
+			}
+			return $entry;
+		}
+
+		// Expired. Whether it may still be served, and who renders, is decided
+		// once here.
+		$past = time() - $expires;
+		if (self::$staleWhileRevalidate > 0
+		and $past <= self::$staleWhileRevalidate) {
+			if (!self::claimRevalidation($key)) {
+				// Someone else is rendering. This one gets the old page now.
 				self::$hits++;
-				$entry['headers']['X-Cache'] = 'HIT';
-				// Promote to APCu if small enough
-				if (self::$apcuEnabled && strlen($entry['body']) <= self::$apcuMaxSize) {
-					apcu_store('qcache:' . $key, $entry, self::ttlRemaining($entry));
-				}
+				self::$stale++;
+				$entry['headers']['X-Cache'] = 'STALE';
+				$entry['headers']['Age'] = (string) max(
+					0, time() - (int) (isset($entry['stored']) ? $entry['stored'] : 0)
+				);
 				return $entry;
 			}
-			@unlink($path);
+
+			// This request renders. The old copy stays exactly where it is:
+			// deleting it here is what made the stampede survive the fix --
+			// the renderer removed the very page the others were about to be
+			// served, and all of them rendered after all.
+			self::$misses++;
+			return null;
 		}
+
+		// Past the grace window, so the copy is genuinely worthless.
+		if ($fromApcu) apcu_delete('qcache:' . $key);
+		if ($path) @unlink($path);
 
 		self::$misses++;
 		return null;
@@ -159,8 +316,69 @@ class Q_WebServer_Cache
 	{
 		if (!self::$enabled) return;
 		if ($parsed['method'] !== 'GET') return;
-		if (($response['status'] ?? 200) !== 200) return;
-		if (self::hasSkipCookie($parsed['headers'])) return;
+
+		// A request that claimed the re-render and then produced something
+		// uncacheable -- an error, a redirect, a no-store -- must still give
+		// the claim back. Otherwise the page it was refreshing stays stale
+		// until the claim ages out, and the next render is delayed by exactly
+		// the timeout meant for a crashed worker.
+		$status = $response['status'] ?? 200;
+
+		// 404 and 410 are answers too, and expensive ones: they run the whole
+		// routing and rendering path before concluding there is nothing there.
+		// Only these two, and only when asked for -- a 500 must never be
+		// remembered, because the next request is exactly when it might work.
+		// && not `and`: `and` binds looser than `=`, so with `and` this would
+		// assign only the status test and the ttl check would be a discarded
+		// expression -- negative caching would switch itself on regardless of
+		// configuration.
+		$negative = ($status === 404 || $status === 410)
+			&& self::$negativeTtl > 0;
+
+		if ((!$negative and $status !== 200)
+		or self::hasSkipCookie($parsed['headers'])) {
+			self::releaseRevalidation(self::cacheKey($parsed));
+			return;
+		}
+
+		// Collapse the template engine's indentation, once, here.
+		//
+		// Done at store time rather than per response: the work happens on the
+		// render that fills the cache and every hit afterwards is already
+		// small. Before the validator is taken, so the ETag describes what will
+		// actually be sent, and before compression, so what is compressed is
+		// what is stored.
+		//
+		// gzip already handles repeated whitespace well, so the saving on the
+		// wire is modest. The decompressed document is the point: it is what
+		// the browser parses, what a service worker stores, and what sits in
+		// memory. Measured on the front page here, 94,090 bytes became 68,842.
+		// Loaded explicitly rather than through the autoloader.
+		//
+		// The autoloader here is a composer classmap, generated when the
+		// package was installed. A class file added afterwards is not in it, so
+		// class_exists() answers false for a file sitting right beside this one
+		// -- which is how this arrived configured, deployed, and doing nothing
+		// at all. The require is guarded so a stripped-down install without the
+		// file still runs; it simply does not minify.
+		if (self::$minifyHtml and !class_exists('Q_WebServer_Minify', false)) {
+			$minifier = __DIR__ . DS . 'Minify.php';
+			if (file_exists($minifier)) require_once $minifier;
+		}
+
+		if (self::$minifyHtml
+		and class_exists('Q_WebServer_Minify', false)
+		and Q_WebServer_Minify::applies($response['headers'] ?? array())) {
+			$response['body'] = Q_WebServer_Minify::html($response['body'] ?? '');
+		}
+
+		// The validator is taken from the body as the application produced it,
+		// before any compression, because the application's output is the
+		// thing whose sameness we mean. gzip is not guaranteed to produce
+		// identical bytes for identical input across versions or levels, so
+		// hashing the compressed form could invent a new validator for a page
+		// that had not changed -- the exact failure this is here to prevent.
+		$rawBody = $response['body'] ?? '';
 
 		// Before anything below reads the headers or the body. They must come
 		// from the same value: taking headers first and compressing afterwards
@@ -171,11 +389,20 @@ class Q_WebServer_Cache
 				? $parsed['headers']['accept-encoding'] : ''
 		);
 
+		$response['headers'] = self::withEntityTag(
+			$response['headers'] ?? array(), $rawBody
+		);
+
 		$headers = $response['headers'] ?? array();
 		$cc = self::parseCacheControl($headers);
 
+		$key = self::cacheKey($parsed);
+
 		// Don't cache if explicitly forbidden
-		if (isset($cc['no-store']) || isset($cc['private'])) return;
+		if (isset($cc['no-store']) || isset($cc['private'])) {
+			self::releaseRevalidation($key);
+			return;
+		}
 
 		// Determine TTL
 		$ttl = 0;
@@ -187,9 +414,19 @@ class Q_WebServer_Cache
 			$ttl = self::$defaultTtl;
 		}
 
-		if ($ttl <= 0) return; // nothing to cache
+		if ($negative) {
+			// A not-found carries whatever Cache-Control the application
+			// happened to set, which is usually none and occasionally no-cache
+			// meant for a different purpose. The lifetime of a negative answer
+			// is our decision, not its.
+			$ttl = self::$negativeTtl;
+		}
 
-		$key = self::cacheKey($parsed);
+		if ($ttl <= 0) {
+			self::releaseRevalidation($key);
+			return; // nothing to cache
+		}
+
 		$body = $response['body'] ?? '';
 		$expires = time() + $ttl;
 
@@ -199,12 +436,39 @@ class Q_WebServer_Cache
 			'body'    => $body,
 			'expires' => $expires,
 			'stored'  => time(),
+
+			// What this entry is of, and what it is filed under.
+			//
+			// purge() matches on 'url' and no entry ever carried one, so
+			// `$entry['url'] ?? ''` was always the empty string and nothing
+			// could ever match a pattern: purging by URL has never removed
+			// anything. The key is stored beside it because it cannot be
+			// recovered from the URL -- cacheKey() folds in the host and the
+			// content-coding, so one URL has a `|gzip` entry and a plain one,
+			// and md5($url) is neither of them.
+			'url'     => $parsed['path'] . (($parsed['query'] ?? '') !== ''
+			             ? '?' . $parsed['query'] : ''),
+			'key'     => $key,
 		);
 
 		// Store in APCu if small enough
 		if (self::$apcuEnabled && strlen($body) <= self::$apcuMaxSize) {
 			apcu_store('qcache:' . $key, $entry, $ttl);
 		}
+
+		// The validators, kept apart from the page they describe.
+		//
+		// A returning visitor's request is answered by comparing two short
+		// strings, and nothing else about the entry is needed to do it. Before
+		// this, answering one meant loading the whole entry -- 9KB of gzipped
+		// HTML off disk or out of shared memory -- decoding it, comparing the
+		// ETag, and then discarding every byte of the body unread. That is the
+		// most common request a cached site gets, and it was the most wasteful.
+		//
+		// A few hundred bytes per URL buys the whole thing: 271 entries on this
+		// installation is about 50KB of index against 2.4MB of pages. Memory is
+		// the cheap resource here and a disk read is the expensive one.
+		self::indexValidators($key, $entry);
 
 		// Always store on filesystem (APCu is per-process, lost on restart)
 		$path = self::filePath($key);
@@ -213,6 +477,12 @@ class Q_WebServer_Cache
 			if (!is_dir($dir)) mkdir($dir, 0755, true);
 			file_put_contents($path, self::encodeEntry($entry), LOCK_EX);
 		}
+
+		// The fresh copy is in place, so whoever was being served the old one
+		// can stop. Released after the write, never before: released first,
+		// another request could claim the re-render, find the entry still
+		// expired, and render it a second time.
+		self::releaseRevalidation($key);
 	}
 
 	/**
@@ -243,12 +513,24 @@ class Q_WebServer_Cache
 			if (!$entry) continue;
 
 			$url = $entry['url'] ?? '';
+			if ($url === '') continue;
 			$match = $isRegex ? preg_match($pattern, $url) : ($url === $pattern);
 			if ($match) {
 				@unlink($file->getPathname());
 				if (self::$apcuEnabled) {
-					$key = self::cacheKeyFromUrl($url);
+					// The key as it was filed, not one derived from the URL.
+					// One URL has as many entries as it has content-codings,
+					// and md5($url) names none of them.
+					$key = isset($entry['key'])
+						? $entry['key']
+						: self::cacheKeyFromUrl($url);
 					apcu_delete('qcache:' . $key);
+
+					// The validators go with the page. Left behind, they would
+					// answer 304 to a returning visitor for a page that was
+					// deliberately purged -- and every reload would answer 304
+					// again, so the stale version would never clear itself.
+					apcu_delete('qcache:v:' . $key);
 				}
 			}
 		}
@@ -270,7 +552,15 @@ class Q_WebServer_Cache
 				new RecursiveDirectoryIterator(self::$dir, RecursiveDirectoryIterator::SKIP_DOTS),
 				RecursiveIteratorIterator::CHILD_FIRST
 			);
+			$dictionary = self::dictionaryPath();
 			foreach ($files as $f) {
+				// The dictionary lives here but is not an entry. Clearing the
+				// cache means discarding what was stored, not discarding the
+				// thing that knows how to read it -- deleting it would leave
+				// every subsequent write uncompressed until someone noticed,
+				// which is the kind of silent regression that survives for
+				// months.
+				if ($dictionary !== null and $f->getPathname() === $dictionary) continue;
 				$f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
 			}
 		}
@@ -342,9 +632,228 @@ class Q_WebServer_Cache
 	// ── Internals ────────────────────────────────────────
 
 	/**
-	 * Generate a cache key from a request.
-	 * Includes path + query + Vary headers.
+	 * Give a response a validator derived from what it says.
+	 *
+	 * Without this a cached page carries only Last-Modified, and that is the
+	 * moment the entry was stored rather than the moment the page changed.
+	 * When the entry expires and is built again the timestamp moves even if
+	 * every byte of the HTML is the same, so the next reload revalidates,
+	 * fails, and pulls the whole document down again. A visitor reloading a
+	 * page nobody has edited pays full price once per lifetime, forever.
+	 *
+	 * A hash of the body does not move unless the body does, which is the
+	 * property wanted: an unchanged page answers 304 no matter how often the
+	 * cache behind it is rebuilt.
+	 *
+	 * An application that set its own ETag knows something we do not, so it
+	 * is left alone. The tag is strong -- it is a hash of the exact bytes --
+	 * and is marked with the content-coding, because RFC 9110 scopes a
+	 * validator to the selected representation and the gzip and identity
+	 * forms of a page are two representations.
+	 *
+	 * @method withEntityTag
+	 * @static
+	 * @param {array} $headers
+	 * @param {string} $rawBody the body before any compression
+	 * @return {array} the headers, with an ETag
 	 */
+	static function withEntityTag($headers, $rawBody)
+	{
+		if (!is_array($headers)) return array();
+		foreach ($headers as $name => $value) {
+			if (strcasecmp($name, 'ETag') === 0 and $value !== '') {
+				return $headers;
+			}
+		}
+
+		$tag = substr(sha1($rawBody), 0, 27);
+
+		// Same bytes, different coding, different representation.
+		foreach ($headers as $name => $value) {
+			if (strcasecmp($name, 'Content-Encoding') === 0 and $value !== '') {
+				$tag .= '-' . preg_replace('/[^A-Za-z0-9]+/', '', $value);
+				break;
+			}
+		}
+
+		$headers['ETag'] = '"' . $tag . '"';
+		return $headers;
+	}
+
+	/**
+	 * Remember just enough about an entry to answer a conditional request.
+	 *
+	 * @method indexValidators
+	 * @static
+	 * @param {string} $key
+	 * @param {array} $entry
+	 */
+	private static function indexValidators($key, $entry)
+	{
+		if (!self::$apcuEnabled) return;
+
+		// The validators, and everything a 304 is allowed to carry.
+		//
+		// A 304 is not only an answer, it is an update: RFC 9111 has the client
+		// replace the stored headers with the ones it carries. Sending back
+		// only ETag and Last-Modified left the client's copy with its original
+		// expiry rather than a renewed one, so it revalidated sooner and more
+		// often -- the opposite of the point. Keeping the freshness directives
+		// in the index costs a few dozen bytes per page.
+		$keep = array('etag', 'last-modified', 'cache-control', 'expires', 'vary');
+		$headers = array();
+		foreach ($entry['headers'] as $name => $value) {
+			if (in_array(strtolower($name), $keep, true)) {
+				$headers[$name] = $value;
+			}
+		}
+		if (!isset($headers['ETag']) and !isset($headers['Last-Modified'])) {
+			$has = false;
+			foreach ($headers as $n => $v) {
+				if (strcasecmp($n, 'ETag') === 0 or strcasecmp($n, 'Last-Modified') === 0) {
+					$has = true; break;
+				}
+			}
+			if (!$has) return; // nothing to validate against
+		}
+
+		$ttl = self::ttlRemaining($entry);
+		if ($ttl <= 0) return;
+
+		apcu_store('qcache:v:' . $key, array(
+			'headers' => $headers,
+			'expires' => isset($entry['expires']) ? $entry['expires'] : 0,
+		), $ttl);
+	}
+
+	/**
+	 * Answer a conditional request without loading the page it is about.
+	 *
+	 * Returns a 304 when the client's validators match what we hold, and null
+	 * whenever anything is less than certain -- no index, an expired index, a
+	 * request carrying no validators. Every null simply means the ordinary
+	 * path runs, so being wrong here costs a little work and never a wrong
+	 * answer. Being *right* skips a disk read and a decode on what is, for a
+	 * site people come back to, the most common request there is.
+	 *
+	 * @method notModifiedFromIndex
+	 * @static
+	 * @param {array} $parsed
+	 * @param {string} $key
+	 * @return {array|null}
+	 */
+	private static function notModifiedFromIndex($parsed, $key)
+	{
+		if (!self::$apcuEnabled) return null;
+
+		$headers = $parsed['headers'];
+		if (!isset($headers['if-none-match'])
+		and !isset($headers['if-modified-since'])) return null;
+
+		$index = apcu_fetch('qcache:v:' . $key);
+		if (!is_array($index)) return null;
+
+		// A stale index must not answer. Whether the page may still be served
+		// past its expiry is a decision made in get(), with the entry in hand.
+		if (!empty($index['expires']) and $index['expires'] < time()) return null;
+
+		if (!isset($index['headers']) or !is_array($index['headers'])) return null;
+
+		return self::notModified(array('headers' => $index['headers']), $headers);
+	}
+
+	/**
+	 * Turn a cached hit into a 304 when the client already has it.
+	 *
+	 * A returning visitor sends If-None-Match or If-Modified-Since with what
+	 * they hold. If it matches, the right answer is 304 and no body at all --
+	 * a few hundred bytes instead of the page.
+	 *
+	 * Static files have always done this. Cached pages never did, so a reload
+	 * of a page the browser already had still carried the whole document:
+	 * observed at 9.73 kB transferred against a Last-Modified identical to the
+	 * one just sent. The browser said it had the page, and was sent it anyway.
+	 *
+	 * This is also what makes a reload stay fast rather than merely start fast.
+	 * The body is the part that scales with the page; once it is gone, what is
+	 * left is a round trip and a couple of hundred bytes, whatever the page.
+	 *
+	 * RFC 9110: If-None-Match wins outright where both are present, and a
+	 * validator that does not match means the full response.
+	 *
+	 * @method notModified
+	 * @static
+	 * @param {array} $entry a hit from get()
+	 * @param {array} $requestHeaders
+	 * @return {array|null} the 304 to send, or null to send the entry
+	 */
+	static function notModified($entry, $requestHeaders)
+	{
+		if (!is_array($entry)) return null;
+
+		$headers = isset($entry['headers']) ? $entry['headers'] : array();
+		$etag = null;
+		$lastModified = null;
+		foreach ($headers as $k => $v) {
+			$lk = strtolower($k);
+			if ($lk === 'etag') $etag = trim((string) $v);
+			else if ($lk === 'last-modified') $lastModified = trim((string) $v);
+		}
+
+		$noneMatch = isset($requestHeaders['if-none-match'])
+			? trim((string) $requestHeaders['if-none-match']) : '';
+		$modifiedSince = isset($requestHeaders['if-modified-since'])
+			? trim((string) $requestHeaders['if-modified-since']) : '';
+
+		$fresh = false;
+
+		if ($noneMatch !== '' and $etag !== null and $etag !== '') {
+			// A weak comparison, which is what a cached representation wants:
+			// W/"x" and "x" describe the same bytes for this purpose.
+			$strip = function ($t) {
+				$t = trim($t);
+				if (strncasecmp($t, 'W/', 2) === 0) $t = substr($t, 2);
+				return trim($t, '"');
+			};
+			$want = $strip($etag);
+			foreach (explode(',', $noneMatch) as $candidate) {
+				$candidate = trim($candidate);
+				if ($candidate === '*' or $strip($candidate) === $want) {
+					$fresh = true;
+					break;
+				}
+			}
+			// If-None-Match was present and decided the matter, either way.
+			if (!$fresh) return null;
+		} else if ($modifiedSince !== '' and $lastModified !== null) {
+			$a = strtotime($modifiedSince);
+			$b = strtotime($lastModified);
+			// Not "equal": a client may hold something newer than the entry
+			// after a cache was rebuilt, and it is still current.
+			if ($a !== false and $b !== false and $b <= $a) $fresh = true;
+		}
+
+		if (!$fresh) return null;
+
+		// 304 carries the validators and the caching metadata, and nothing
+		// that describes a body, because there is no body.
+		$out = array();
+		foreach ($headers as $k => $v) {
+			$lk = strtolower($k);
+			if (in_array($lk, array(
+				'etag', 'last-modified', 'cache-control', 'expires', 'vary', 'date'
+			), true)) {
+				$out[$k] = $v;
+			}
+		}
+
+		return array(
+			'status' => 304,
+			'headers' => $out,
+			'body' => '',
+		);
+	}
+
 	/**
 	 * Types worth compressing, and the size below which it is not worth it.
 	 *
@@ -443,12 +952,81 @@ class Q_WebServer_Cache
 	 * @param {array} $entry
 	 * @return {string}
 	 */
+	/**
+	 * Where the shared dictionary lives, beside the entries it describes.
+	 * @method dictionaryPath
+	 * @static
+	 * @return {string|null}
+	 */
+	static function dictionaryPath()
+	{
+		return self::$dir ? (self::$dir . DS . 'middle-out.dict') : null;
+	}
+
+	/**
+	 * The shared dictionary, loaded once per process.
+	 *
+	 * Absent is a perfectly good answer: without one, entries are stored the
+	 * ordinary way and everything still works. That is what makes this safe to
+	 * switch on before a dictionary has ever been built.
+	 *
+	 * @method dictionary
+	 * @static
+	 * @return {string} '' when there is none
+	 */
+	static function dictionary()
+	{
+		if (self::$dictionary !== null) return self::$dictionary;
+
+		self::$dictionary = '';
+		$path = self::dictionaryPath();
+		if ($path and is_file($path)) {
+			$raw = @file_get_contents($path);
+			if (is_string($raw) and $raw !== '') self::$dictionary = $raw;
+		}
+		return self::$dictionary;
+	}
+
+	/**
+	 * Make sure the compressor class is loaded.
+	 *
+	 * Required explicitly rather than autoloaded, for the same reason the
+	 * minifier is: the autoloader is a composer classmap generated at install
+	 * time, and a class added afterwards is not in it.
+	 *
+	 * @method middleOutAvailable
+	 * @static
+	 * @return {boolean}
+	 */
+	static function middleOutAvailable()
+	{
+		if (!self::$middleOut) return false;
+		if (!class_exists('Q_WebServer_MiddleOut', false)) {
+			$file = __DIR__ . DS . 'MiddleOut.php';
+			if (!file_exists($file)) return false;
+			require_once $file;
+		}
+		return Q_WebServer_MiddleOut::available() and self::dictionary() !== '';
+	}
+
 	static function encodeEntry($entry)
 	{
 		$body = isset($entry['body']) ? $entry['body'] : '';
 		$meta = $entry;
 		unset($meta['body']);
 		$meta['v'] = 2;
+
+		// Compressed against the shared dictionary when one is configured and
+		// present. Marked in the metadata rather than sniffed from the body,
+		// so a reader never has to guess what it is holding.
+		if (self::middleOutAvailable() and $body !== '') {
+			$packed = Q_WebServer_MiddleOut::compress($body, self::dictionary());
+			if ($packed !== null and strlen($packed) < strlen($body)) {
+				$body = $packed;
+				$meta['mo'] = 1;
+			}
+		}
+
 		return json_encode($meta) . "\n" . $body;
 	}
 
@@ -473,7 +1051,20 @@ class Q_WebServer_Cache
 		if ($newline !== false) {
 			$meta = json_decode(substr($raw, 0, $newline), true);
 			if (is_array($meta) and isset($meta['v']) and $meta['v'] === 2) {
-				$meta['body'] = substr($raw, $newline + 1);
+				$body = substr($raw, $newline + 1);
+
+				if (!empty($meta['mo'])) {
+					// An entry written against a dictionary this process does
+					// not have is unreadable, and that is the correct outcome:
+					// null here becomes a cache miss, which costs a render. The
+					// alternative -- guessing -- costs a corrupted page.
+					if (!self::middleOutAvailable()) return null;
+					$body = Q_WebServer_MiddleOut::decompress($body, self::dictionary());
+					if ($body === null) return null;
+					unset($meta['mo']);
+				}
+
+				$meta['body'] = $body;
 				return $meta;
 			}
 		}
