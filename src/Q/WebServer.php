@@ -408,9 +408,44 @@ class Q_WebServer
 
 		// Listen on plain tcp:// — TLS handshake happens after accept
 		$errno = $errstr = 0;
+		// One SSL context for the listener, inherited by every connection it
+		// accepts, rather than a fresh one built per socket after accept.
+		//
+		// A context is what holds the session cache and the ticket key, so a
+		// per-connection context means no client can ever resume: every visit,
+		// and every new connection within a visit, pays a full handshake
+		// including the certificate chain. Measured on this server: openssl
+		// -reconnect reported 0 resumed handshakes and no session ticket
+		// offered at all.
+		//
+		// The handshake itself still happens on the accepted socket through
+		// stream_socket_enable_crypto(), which is what keeps accept()
+		// non-blocking; only the configuration moves.
+		//
+		// The cost of this is that a renewed certificate is not picked up by
+		// an already-running listener, where setting it per socket would have
+		// found the new file on the next connection. Certificate renewal
+		// therefore has to restart or re-bind the listener -- which is a
+		// clearer contract than a server whose connections silently disagree
+		// about which certificate they presented.
+		$tlsContext = stream_context_create(array('ssl' => array(
+			'local_cert' => Q_WebServer_Certs::$certPath,
+			'local_pk' => Q_WebServer_Certs::$keyPath,
+			'allow_self_signed' => true,
+			'verify_peer' => false,
+			'verify_peer_name' => false,
+			'honor_cipher_order' => true,
+			'single_ecdh_use' => true,
+			'single_dh_use' => true,
+		) + (self::http2Enabled()
+			? array('alpn_protocols' => 'h2,http/1.1')
+			: array())
+		));
+
 		self::$tlsSocket = stream_socket_server(
 			"tcp://{$host}:{$port}", $errno, $errstr,
-			STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
+			STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+			$tlsContext
 		);
 		if (!self::$tlsSocket) {
 			echo "[HTTPS] Could not bind to {$host}:{$port} — $errstr\n";
@@ -439,21 +474,11 @@ class Q_WebServer
 
 		stream_set_blocking($client, false);
 
-		// Set SSL context options on this specific socket
-		$certPath = Q_WebServer_Certs::$certPath;
-		$keyPath = Q_WebServer_Certs::$keyPath;
-		stream_context_set_option($client, 'ssl', 'local_cert', $certPath);
-		stream_context_set_option($client, 'ssl', 'local_pk', $keyPath);
-		stream_context_set_option($client, 'ssl', 'allow_self_signed', true);
-		stream_context_set_option($client, 'ssl', 'verify_peer', false);
-
-		// Offer HTTP/2 in the handshake. The protocol is chosen by ALPN while
-		// TLS is being established and cannot be negotiated afterwards, so a
-		// server that does not offer it here can never speak it, whatever it
-		// implements above. http/1.1 stays in the list and stays the fallback.
-		if (self::http2Enabled()) {
-			stream_context_set_option($client, 'ssl', 'alpn_protocols', 'h2,http/1.1');
-		}
+		// Nothing is set on this socket. It inherits the listener's context,
+		// which is the point: a shared context is what allows a session to be
+		// resumed, and setting an option here would give this connection one
+		// of its own again. The certificate, the key and the ALPN list are all
+		// configured once, where the listener is created.
 
 		$key = (int) $client;
 		self::$clients[$key] = $client;
