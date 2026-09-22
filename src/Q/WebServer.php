@@ -565,7 +565,34 @@ class Q_WebServer
 	 */
 	static function http2Request($key, $request)
 	{
-		if (!isset(self::$http2[$key])) return array('status' => 500, 'body' => '');
+		try {
+			return self::http2Route($key, $request);
+		} catch (\Throwable $e) {
+			return Q_WebServer_Http2_ErrorPage::response(
+				get_class($e) . ': ' . $e->getMessage(),
+				isset($request['stream']) ? $request['stream'] : 0
+			);
+		}
+	}
+
+	/**
+	 * Where an HTTP/2 request is actually resolved. Separate from
+	 * http2Request() only so that everything it can throw is caught in one
+	 * place rather than at each return.
+	 *
+	 * @method http2Route
+	 * @static
+	 * @param {integer} $key
+	 * @param {array} $request
+	 * @return {array|null}
+	 */
+	static function http2Route($key, $request)
+	{
+		if (!isset(self::$http2[$key])) {
+			return Q_WebServer_Http2_ErrorPage::response(
+				'the connection was closed before the request could be answered', 0
+			);
+		}
 		$conn = self::$http2[$key];
 		$stream = $request['stream'];
 
@@ -622,6 +649,13 @@ class Q_WebServer
 		self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
 			function ($resp) use ($key, $stream) {
 				if (!isset(Q_WebServer::$http2[$key])) return;
+				if (!is_array($resp)
+					or (($resp['status'] ?? 200) >= 500 and ($resp['body'] ?? '') === '')
+				) {
+					$resp = Q_WebServer_Http2_ErrorPage::response(
+						'the worker returned no usable response', $stream
+					);
+				}
 				Q_WebServer::$http2[$key]->respond($stream, $resp);
 			}
 		);

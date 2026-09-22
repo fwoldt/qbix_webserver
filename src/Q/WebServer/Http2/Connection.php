@@ -373,7 +373,19 @@ class Q_WebServer_Http2_Connection
 			$request['headers']['host'] = $request['authority'];
 		}
 
-		$response = call_user_func($this->handler, $request);
+		try {
+			$response = call_user_func($this->handler, $request);
+		} catch (\Throwable $e) {
+			// Never let this become silence. A client that agreed to h2 does
+			// not fall back, so an uncaught throwable here is a blank window
+			// and nothing else -- no status, no log the person looking at it
+			// can reach.
+			$this->respond($stream, Q_WebServer_Http2_ErrorPage::response(
+				get_class($e) . ': ' . $e->getMessage(), $stream
+			));
+			unset($this->streams[$stream]);
+			return true;
+		}
 
 		// null means the handler will answer later -- a script handed to a
 		// worker, whose reply arrives on another event. The stream stays open
@@ -386,7 +398,19 @@ class Q_WebServer_Http2_Connection
 		}
 
 		if (!is_array($response)) {
-			$response = array('status' => 500, 'headers' => array(), 'body' => '');
+			$response = Q_WebServer_Http2_ErrorPage::response(
+				'the handler returned no response', $stream
+			);
+		} elseif (($response['status'] ?? 200) >= 500
+			and ($response['body'] ?? '') === ''
+		) {
+			// A 5xx with nothing in it renders exactly like a failed
+			// connection. Say what it was instead.
+			$response = Q_WebServer_Http2_ErrorPage::response(
+				'the application returned ' . (int) $response['status']
+					. ' with an empty body',
+				$stream, (int) $response['status']
+			);
 		}
 
 		$this->respond($stream, $response);
@@ -476,6 +500,19 @@ class Q_WebServer_Http2_Connection
 	function goaway($error = 0)
 	{
 		if ($this->closed) return;
+
+		// Tell whoever is waiting. GOAWAY is for the other implementation, not
+		// for the person watching an empty window, so any stream still open
+		// gets a page first -- explaining that the connection itself failed,
+		// which is the one thing a browser will never show on its own.
+		if ($error !== 0) {
+			foreach (array_keys($this->streams) as $stream) {
+				$this->respond($stream, Q_WebServer_Http2_ErrorPage::response(
+					'the HTTP/2 connection failed with error code ' . $error, $stream
+				));
+			}
+		}
+
 		$this->closed = true;
 		$F = 'Q_WebServer_Http2_Frame';
 		$this->write($F::build($F::GOAWAY, 0, 0,
