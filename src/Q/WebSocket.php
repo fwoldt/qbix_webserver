@@ -209,7 +209,7 @@ class Q_WebSocket
 			unset(self::$channels[$ch][$sk]);
 			self::notifyRoomLeave($ch, $sk);
 		}
-		@fclose(self::$clients[$sk]['socket']);
+		if (is_resource(self::$clients[$sk]['socket'])) @fclose(self::$clients[$sk]['socket']);
 		unset(self::$clients[$sk]);
 	}
 
@@ -566,7 +566,7 @@ class Q_WebSocket
 		if (!isset(self::$workers[$socketKey])) return;
 		$w = self::$workers[$socketKey];
 		if ($w['watcher']) Q_Evented::cancel($w['watcher']);
-		@fclose($w['pipe']);
+		if (is_resource($w['pipe'])) @fclose($w['pipe']);
 		if ($w['pid'] > 0 && function_exists('posix_kill')) {
 			posix_kill($w['pid'], SIGTERM);
 			pcntl_waitpid($w['pid'], $st, WNOHANG);
@@ -880,7 +880,7 @@ class Q_WebSocket
 		if (!isset(self::$roomWorkers[$roomName])) return;
 		$w = self::$roomWorkers[$roomName];
 		if ($w['watcher']) Q_Evented::cancel($w['watcher']);
-		@fclose($w['pipe']);
+		if (is_resource($w['pipe'])) @fclose($w['pipe']);
 		if ($w['pid'] > 0 && function_exists('posix_kill')) {
 			posix_kill($w['pid'], SIGTERM);
 			pcntl_waitpid($w['pid'], $st, WNOHANG);
