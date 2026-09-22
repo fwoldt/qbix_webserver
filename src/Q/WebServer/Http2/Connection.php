@@ -374,6 +374,17 @@ class Q_WebServer_Http2_Connection
 		}
 
 		$response = call_user_func($this->handler, $request);
+
+		// null means the handler will answer later -- a script handed to a
+		// worker, whose reply arrives on another event. The stream stays open
+		// and whoever holds it calls respond() when the answer exists. Without
+		// this the connection could only ever serve what it could produce
+		// synchronously, which is files and nothing else.
+		if ($response === null) {
+			$this->streams[$stream]['awaiting'] = true;
+			return true;
+		}
+
 		if (!is_array($response)) {
 			$response = array('status' => 500, 'headers' => array(), 'body' => '');
 		}
@@ -432,7 +443,10 @@ class Q_WebServer_Http2_Connection
 			$this->write($F::build($F::CONTINUATION, $flags, $stream, $chunk));
 		}
 
-		if ($body === '') return;
+		if ($body === '') {
+			unset($this->streams[$stream]);
+			return;
+		}
 
 		// DATA is split to the peer's frame size. Flow control is respected
 		// on both windows; when they are exhausted the remainder is dropped
@@ -448,6 +462,8 @@ class Q_WebServer_Http2_Connection
 				$F::DATA, $last ? $F::FLAG_END_STREAM : 0, $stream, $chunk
 			));
 		}
+
+		unset($this->streams[$stream]);
 	}
 
 	/**
