@@ -250,6 +250,69 @@ class Q_WebServer_Cache
 		}
 	}
 
+	/**
+	 * Delete expired entries from the filesystem tier.
+	 *
+	 * get() only unlinks an expired entry when that exact URL is requested
+	 * again, so anything never asked for a second time stays on disk for
+	 * good. APCu expires its own entries and needs nothing here.
+	 *
+	 * Runs in the parent event loop, so it stops after $budget files to
+	 * keep a large directory from stalling request dispatch; the next run
+	 * picks up where this one left off.
+	 *
+	 * Config, under Q.web.cache.sweep:
+	 *   every   seconds between runs (0 turns the sweep off)
+	 *   budget  most files to examine in one pass
+	 *   maxAge  seconds after which an entry goes regardless of its own
+	 *           expiry. An entry lives as long as the response asked for,
+	 *           and a Cache-Control: public, max-age=31536000 keeps one on
+	 *           disk for a year -- fine per URL, unbounded across a site
+	 *           that generates them. 0 respects every expiry as given.
+	 *
+	 * @method sweep
+	 * @static
+	 * @param {integer} [$budget=null] Overrides the configured budget
+	 * @return {array} ['scanned' => int, 'removed' => int, 'done' => bool]
+	 */
+	static function sweep($budget = null)
+	{
+		if ($budget === null) {
+			$budget = (int) Q_Config::get('Q', 'web', 'cache', 'sweep', 'budget', 2000);
+		}
+		$maxAge = (int) Q_Config::get('Q', 'web', 'cache', 'sweep', 'maxAge', 0);
+		$scanned = 0;
+		$removed = 0;
+		$done = true;
+		if (!self::$dir or !is_dir(self::$dir)) {
+			return compact('scanned', 'removed', 'done');
+		}
+		$now = time();
+		$files = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator(self::$dir, RecursiveDirectoryIterator::SKIP_DOTS)
+		);
+		foreach ($files as $f) {
+			if (!$f->isFile()) continue;
+			if ($scanned >= $budget) { $done = false; break; }
+			++$scanned;
+			$path = $f->getPathname();
+			if ($maxAge > 0) {
+				$mtime = @filemtime($path);
+				if ($mtime and $mtime <= $now - $maxAge) {
+					if (@unlink($path)) ++$removed;
+					continue;
+				}
+			}
+			$entry = json_decode(@file_get_contents($path), true);
+			// A file that will not parse can never be served either.
+			if (!is_array($entry)
+			or (isset($entry['expires']) and $entry['expires'] > 0 and $entry['expires'] <= $now)) {
+				if (@unlink($path)) ++$removed;
+			}
+		}
+		return compact('scanned', 'removed', 'done');
+	}
+
 	// ── Internals ────────────────────────────────────────
 
 	/**
