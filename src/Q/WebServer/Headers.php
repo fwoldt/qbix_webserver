@@ -384,6 +384,20 @@ class Q_WebServer_Headers
 	 */
 	static function maybeCompress($body, $contentType, $requestHeaders, &$headers)
 	{
+		// A body that already declares an encoding has been compressed once and
+		// must not be compressed again: the client decodes exactly one layer,
+		// per the single Content-Encoding it was told about, and is left
+		// holding gzip.
+		//
+		// Reachable since the response cache began storing the wire form, so a
+		// hit now arrives already encoded. It was latent before that -- any
+		// handler that set the header itself would have met it.
+		foreach ($headers as $k => $v) {
+			if (strcasecmp($k, 'Content-Encoding') === 0 and $v !== '') {
+				return $body;
+			}
+		}
+
 		if (!self::shouldCompress($contentType, strlen($body), $requestHeaders)) {
 			return $body;
 		}
