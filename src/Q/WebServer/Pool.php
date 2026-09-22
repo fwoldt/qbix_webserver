@@ -510,7 +510,20 @@ class Q_WebServer_Pool
 			'scriptName'     => '/' . basename($scriptPath),
 			'documentRoot'   => Q_WebServer::$rootDir ?? '',
 			'serverPort'     => (string)($_SERVER['SERVER_PORT'] ?? '8080'),
-			'remoteAddr'     => '127.0.0.1'
+			'remoteAddr'     => '127.0.0.1',
+			// Whether this connection is TLS. The worker already looks for
+			// this and reports HTTPS and REQUEST_SCHEME from it, but nothing
+			// ever sent it -- so every request looked like plain HTTP no
+			// matter which listener it arrived on.
+			//
+			// An application building an absolute URL asks exactly those two
+			// variables. Getting them wrong sends a browser that is on
+			// https:// a redirect to http:// on the same port, and that port
+			// speaks TLS, so the browser opens a plain connection into a TLS
+			// listener and the only possible outcome is a reset. It presents
+			// as "Secure Connection Failed" with nothing wrong in any log,
+			// and it breaks every redirect: after a login, after a publish.
+			'https'          => self::isTlsClient($client)
 		));
 		$written = @fwrite($this->workers[$index]['socket'], pack('N', strlen($msg)) . $msg);
 		if ($written === false || $written === 0) {
@@ -645,6 +658,21 @@ class Q_WebServer_Pool
 	{
 		$reqHeaders = $this->workerRequestHeaders[$index] ?? array();
 		Q_WebServer_Headers::processResponse($client, $resp, $reqHeaders);
+	}
+
+	/**
+	 * Whether a client socket is running TLS.
+	 *
+	 * @method isTlsClient
+	 * @static
+	 * @param {resource} $client
+	 * @return {boolean}
+	 */
+	static function isTlsClient($client)
+	{
+		if (!is_resource($client)) return false;
+		$meta = @stream_get_meta_data($client);
+		return !empty($meta['crypto']);
 	}
 
 	protected function findIdle()
