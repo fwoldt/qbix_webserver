@@ -512,8 +512,18 @@ class Q_WebServer_Compat
 
 	/**
 	 * Store transformed source in the in-memory cache.
+	 *
+	 * Public because the stream wrapper is a separate class and is the only
+	 * place that learns, at request time, what a file turned out to need. The
+	 * prewarm walk records that for every file it sees; anything created after
+	 * it -- which is every file the hosted application generates while running
+	 * -- can only be recorded here.
+	 *
+	 * @param string $filePath
+	 * @param string|false $transformed transformed source, or false to record
+	 *                                  that the file needs no transform
 	 */
-	private static function saveCache($filePath, $transformed)
+	static function saveCache($filePath, $transformed)
 	{
 		self::$transformCache[$filePath] = array(
 			'source' => $transformed,
@@ -1934,6 +1944,7 @@ class Q_WebServer_CompatFileWrapper
 			if ($source !== false) {
 				$transformed = Q_WebServer_Compat::transformSource($source, $realPath);
 				if ($transformed !== $source) {
+					Q_WebServer_Compat::saveCache($realPath, $transformed);
 					$this->buffer = $transformed;
 					$this->position = 0;
 					$this->transformed = true;
@@ -1941,7 +1952,24 @@ class Q_WebServer_CompatFileWrapper
 					$opened_path = $realPath;
 					return true;
 				}
-				// No changes — open the original normally
+
+				// No changes -- and that answer was worth keeping.
+				//
+				// The prewarm walk caches a sentinel for every file it finds
+				// that needs no transform, so those cost nothing again. A file
+				// that appears afterwards got no such sentinel: it was read and
+				// tokenized here, found to need nothing, and then forgotten --
+				// so the next request read and tokenized it again, and so did
+				// every request after that, for the life of the worker.
+				//
+				// Every file an application generates at runtime is in that
+				// category. On an unmodified Exponential site, six renders of
+				// one content page performed 1138 transforms over 314 distinct
+				// files, one compiled template 48 times, against 23 cache hits.
+				// Those files are compiled templates and configuration caches:
+				// they never need a transform, and they were the bulk of the
+				// work.
+				Q_WebServer_Compat::saveCache($realPath, false);
 			}
 		}
 
