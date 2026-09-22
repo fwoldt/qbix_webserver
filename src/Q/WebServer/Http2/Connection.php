@@ -174,8 +174,13 @@ class Q_WebServer_Http2_Connection
 			$increment = $F::readUint31($frame['payload']);
 			if ($stream === 0) {
 				$this->sendWindow += $increment;
+				// Room on the connection may unblock any stream.
+				foreach (array_keys($this->streams) as $id) {
+					$this->flush($id);
+				}
 			} elseif (isset($this->streams[$stream])) {
 				$this->streams[$stream]['sendWindow'] += $increment;
+				$this->flush($stream);
 			}
 			return true;
 
@@ -257,6 +262,16 @@ class Q_WebServer_Http2_Connection
 			'sendWindow'  => $this->initialSendWindow,
 			'endStream'   => (bool) ($frame['flags'] & $F::FLAG_END_STREAM),
 			'headers'     => null,
+			// What the client will accept, kept so the response can be
+			// compressed. HTTP/2 compresses headers for you and does nothing
+			// at all about bodies: a response that is 9KB gzipped over
+			// HTTP/1.1 goes out as 77KB here unless this is honoured.
+			'accept'      => '',
+			// Body still to send, and whether the end has been written. A
+			// flow-control window can run out mid-body; what is left waits
+			// here for the WINDOW_UPDATE that makes room.
+			'pending'     => '',
+			'finished'    => false,
 		);
 
 		if ($frame['flags'] & $F::FLAG_END_HEADERS) {
@@ -373,6 +388,10 @@ class Q_WebServer_Http2_Connection
 			$request['headers']['host'] = $request['authority'];
 		}
 
+		if (isset($request['headers']['accept-encoding'])) {
+			$this->streams[$stream]['accept'] = $request['headers']['accept-encoding'];
+		}
+
 		try {
 			$response = call_user_func($this->handler, $request);
 		} catch (\Throwable $e) {
@@ -431,17 +450,56 @@ class Q_WebServer_Http2_Connection
 
 		$status = isset($response['status']) ? (int) $response['status'] : 200;
 		$body = isset($response['body']) ? (string) $response['body'] : '';
+		$headers = (array) (isset($response['headers']) ? $response['headers'] : array());
+
+		// Compress the body if the client said it would take it.
+		//
+		// HTTP/2 compresses headers and does nothing whatever about bodies, so
+		// this is not handled for us. Without it a page that goes out as 9KB
+		// gzipped over HTTP/1.1 leaves as 77KB here -- eight times the bytes,
+		// over a connection whose whole selling point is fewer round trips.
+		$accept = isset($this->streams[$stream]['accept'])
+			? $this->streams[$stream]['accept'] : '';
+		$alreadyEncoded = false;
+		$contentType = '';
+		foreach ($headers as $k => $v) {
+			$lk = strtolower($k);
+			if ($lk === 'content-encoding') $alreadyEncoded = true;
+			if ($lk === 'content-type') $contentType = (string) $v;
+		}
+
+		if (!$alreadyEncoded and $body !== ''
+			and strpos(strtolower($accept), 'gzip') !== false
+			and function_exists('gzencode')
+			and class_exists('Q_WebServer_Headers', false)
+			and Q_WebServer_Headers::shouldCompress(
+				$contentType, strlen($body), array('accept-encoding' => $accept)
+			)
+		) {
+			$compressed = @gzencode($body, 6);
+			if ($compressed !== false and strlen($compressed) < strlen($body)) {
+				$body = $compressed;
+				$headers['content-encoding'] = 'gzip';
+				// Vary matters even here: a cache in front must not serve the
+				// compressed copy to a client that did not ask for it.
+				$headers['vary'] = isset($headers['vary'])
+					? $headers['vary'] . ', Accept-Encoding' : 'Accept-Encoding';
+			}
+		}
 
 		$list = array(array(':status', (string) $status));
-		foreach ((array) (isset($response['headers']) ? $response['headers'] : array()) as $k => $v) {
+		foreach ($headers as $k => $v) {
 			$name = strtolower($k);
-			// Connection-specific fields are forbidden in HTTP/2 and a peer
-			// is entitled to treat one as a protocol error, so they are
-			// dropped here rather than passed on.
+			// Connection-specific fields are forbidden in HTTP/2 and a peer is
+			// entitled to treat one as a protocol error, so they are dropped
+			// rather than passed on.
 			if (in_array($name, array(
 				'connection', 'keep-alive', 'proxy-connection',
 				'transfer-encoding', 'upgrade'
 			), true)) continue;
+
+			// Length is restated below, after compression.
+			if ($name === 'content-length') continue;
 
 			if (is_array($v)) {
 				foreach ($v as $one) $list[] = array($name, (string) $one);
@@ -449,10 +507,12 @@ class Q_WebServer_Http2_Connection
 				$list[] = array($name, (string) $v);
 			}
 		}
+		if ($body !== '') {
+			$list[] = array('content-length', (string) strlen($body));
+		}
 
 		$block = $this->outbound->encode($list);
 
-		// A header block larger than one frame continues in CONTINUATION.
 		$first = substr($block, 0, $this->maxFrameSize);
 		$rest = substr($block, $this->maxFrameSize);
 		$endHeaders = $rest === '' ? $F::FLAG_END_HEADERS : 0;
@@ -472,22 +532,64 @@ class Q_WebServer_Http2_Connection
 			return;
 		}
 
-		// DATA is split to the peer's frame size. Flow control is respected
-		// on both windows; when they are exhausted the remainder is dropped
-		// rather than blocking the event loop, which is a limitation this
-		// wave carries and the next one removes.
-		$offset = 0;
-		$length = strlen($body);
-		while ($offset < $length) {
-			$chunk = substr($body, $offset, $this->maxFrameSize);
-			$offset += strlen($chunk);
-			$last = $offset >= $length;
+		if (!isset($this->streams[$stream])) {
+			// The stream was reset while the answer was being prepared.
+			return;
+		}
+
+		$this->streams[$stream]['pending'] = $body;
+		$this->flush($stream);
+	}
+
+	/**
+	 * Send as much of a stream's pending body as both windows allow.
+	 *
+	 * Flow control is not advisory. A peer advertises how much it is prepared
+	 * to receive, on the stream and on the connection, and sending past either
+	 * is a protocol error it may answer by resetting the stream or the whole
+	 * connection. Writing the whole body regardless happens to work with a
+	 * tolerant client and fails with a strict one, which is the worst kind of
+	 * bug: it works until it does not.
+	 *
+	 * So what does not fit waits here, and the WINDOW_UPDATE that makes room
+	 * calls this again.
+	 *
+	 * @method flush
+	 * @param {integer} $stream
+	 */
+	function flush($stream)
+	{
+		$F = 'Q_WebServer_Http2_Frame';
+		if (!isset($this->streams[$stream])) return;
+		if ($this->streams[$stream]['finished']) return;
+
+		while ($this->streams[$stream]['pending'] !== '') {
+			$allowed = min(
+				$this->sendWindow,
+				$this->streams[$stream]['sendWindow'],
+				$this->maxFrameSize
+			);
+			if ($allowed <= 0) return; // wait for a WINDOW_UPDATE
+
+			$chunk = substr($this->streams[$stream]['pending'], 0, $allowed);
+			$this->streams[$stream]['pending'] =
+				substr($this->streams[$stream]['pending'], strlen($chunk));
+
+			$last = $this->streams[$stream]['pending'] === '';
+
 			$this->write($F::build(
 				$F::DATA, $last ? $F::FLAG_END_STREAM : 0, $stream, $chunk
 			));
-		}
 
-		unset($this->streams[$stream]);
+			$this->sendWindow -= strlen($chunk);
+			$this->streams[$stream]['sendWindow'] -= strlen($chunk);
+
+			if ($last) {
+				$this->streams[$stream]['finished'] = true;
+				unset($this->streams[$stream]);
+				return;
+			}
+		}
 	}
 
 	/**
