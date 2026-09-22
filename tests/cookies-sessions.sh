@@ -49,6 +49,8 @@ printf '<?php setcookie("a","1",0,"/"); setcookie("b","2",0,"/"); header("Conten
     > "$ROOT/two.php"
 printf '<?php header("Set-Cookie: manual=m; Path=/"); header("Content-Type: text/plain"); echo "ok";\n' \
     > "$ROOT/manual.php"
+printf '<?php header("Set-Cookie: manual=m; Path=/"); setcookie("shim","s",0,"/"); header("Content-Type: text/plain"); echo "ok";\n' \
+    > "$ROOT/both.php"
 cat > "$ROOT/count.php" <<'PHP'
 <?php
 session_start();
@@ -92,6 +94,18 @@ n=$(printf '%s' "$h" | grep -ci '^set-cookie:')
                || bad "expected 2 Set-Cookie headers, got $n"
 case "$h" in *"a=1"*) ok "first of the two survives" ;; *) bad "cookie a=1 missing" ;; esac
 case "$h" in *"b=2"*) ok "second of the two survives" ;; *) bad "cookie b=2 missing" ;; esac
+
+# Both routes at once. Each works on its own, which is exactly why this case
+# belongs here: they are merged by different code, and a change to one can
+# drop the other with nothing else looking wrong.
+h=$(heads both.php)
+n=$(printf '%s' "$h" | grep -ci '^set-cookie:')
+[ "$n" = "2" ] && ok "a raw header and setcookie() together give two headers" \
+               || bad "expected 2 Set-Cookie headers from both.php, got $n"
+case "$h" in *"manual=m"*) ok "the raw header survives alongside setcookie()" ;;
+             *) bad "raw Set-Cookie lost when setcookie() is also used" ;; esac
+case "$h" in *"shim=s"*) ok "setcookie() survives alongside a raw header" ;;
+             *) bad "setcookie() lost when a raw header is also used" ;; esac
 
 # The session id has to come back as a cookie, or nothing can persist.
 jar="$TMP/jar"
