@@ -607,6 +607,8 @@ class Q_WebServer_Pool
 		// the headers: it keys on host, path and query, and checks the
 		// method and the bypass cookies.
 		$this->workerRequests[$index] = $parsed;
+		// When the response goes out we need this to report how long it took.
+		$this->workerStarted[$index] = microtime(true);
 		// In octane mode, the watcher was cancelled after the previous
 		// response to prevent stream_select from firing endlessly on the
 		// idle socket. Create a fresh one-shot watcher for this dispatch.
@@ -833,10 +835,29 @@ class Q_WebServer_Pool
 	 */
 	protected $workerRequests = array();
 
+	/**
+	 * When each worker was handed its request, for the response time the
+	 * access log and the dashboard report.
+	 * @property $workerStarted
+	 */
+	protected $workerStarted = array();
+
 	protected function sendHttp($client, $resp, $index)
 	{
 		$reqHeaders = $this->workerRequestHeaders[$index] ?? array();
 		Q_WebServer_Headers::processResponse($client, $resp, $reqHeaders);
+		// The parent skipped recording this one -- dispatch() marked it as
+		// handed on, because back then neither the status nor the size existed.
+		if (isset($this->workerRequests[$index])) {
+			$started = $this->workerStarted[$index] ?? microtime(true);
+			Q_WebServer::recordCompleted(
+				$this->workerRequests[$index],
+				$resp['status'] ?? 200,
+				strlen($resp['body'] ?? ''),
+				(microtime(true) - $started) * 1000,
+				true
+			);
+		}
 		// Offer the response to the cache. Every other dispatch path does
 		// this; the pooled path did not, so Q_WebServer_Cache::get() in
 		// route() could only ever miss -- nothing was ever stored.
