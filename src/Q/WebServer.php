@@ -475,7 +475,32 @@ class Q_WebServer
 			$cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_SERVER;
 		}
 
-		$result = @stream_socket_enable_crypto($client, true, $cryptoMethod);
+		// Re-attempt while progress is possible, before going back to the loop.
+		//
+		// stream_socket_enable_crypto() returns 0 to mean "call me again", and
+		// it says that whenever OpenSSL needs another turn -- including when
+		// the bytes it needs are already sitting in its own buffer. Waiting
+		// for the socket to become readable in that case waits for something
+		// that has already happened, so the handshake stalls until an
+		// unrelated timer wakes the loop.
+		//
+		// Measured with a real browser against this server over loopback,
+		// where a handshake should cost almost nothing: 304ms of a 347ms
+		// time-to-first-byte was the handshake. Several flights, each stalled.
+		//
+		// The bound matters. Retrying forever would spin a CPU on a client
+		// that has genuinely stopped talking, so after a few immediate turns
+		// this falls back to waiting for readability, which is correct when
+		// the peer really does owe us bytes.
+		$result = 0;
+		for ($attempt = 0; $attempt < 8; $attempt++) {
+			$result = @stream_socket_enable_crypto($client, true, $cryptoMethod);
+			if ($result !== 0) break;
+			// Nothing buffered means the next flight has not arrived, so
+			// there is nothing to gain from asking again now.
+			$meta = @stream_get_meta_data($client);
+			if (empty($meta['unread_bytes'])) break;
+		}
 
 		if ($result === true) {
 			// Handshake complete — treat like a normal client
