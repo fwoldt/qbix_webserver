@@ -12,6 +12,17 @@
  */
 class Q_Evented_StreamSelect extends Q_Evented_Driver
 {
+	/**
+	 * The last throwable a reader callback raised. The catch in run()
+	 * assigned to this without it being declared, so PHP turned the very
+	 * exception the catch exists to swallow into a fatal and killed the
+	 * server -- the opposite of what the comment there promises.
+	 * @property $lastError
+	 * @static
+	 * @type {Throwable|null}
+	 */
+	static $lastError = null;
+
 	protected $running = false;
 	protected $nextId = 1;
 	protected $readers = array();     // id => [stream, callback]
