@@ -609,7 +609,7 @@ class Q_WebServer_Pool
 			$c = $this->workerClients[$index];
 			if (is_resource($c)) {
 				Q_WebServer::sendResponse($c, 502, 'Worker died');
-				@fclose($c);
+				if (is_resource($c)) @fclose($c);
 			}
 		} elseif (isset($this->workerClients[$index])) {
 			$c = $this->workerClients[$index];

@@ -399,7 +399,7 @@ class Q_WebServer
 			self::$tlsWatcher = null;
 		}
 		if (self::$tlsSocket) {
-			@fclose(self::$tlsSocket);
+			if (is_resource(self::$tlsSocket)) @fclose(self::$tlsSocket);
 			self::$tlsSocket = null;
 		}
 
@@ -688,7 +688,7 @@ class Q_WebServer
 			$reject = @stream_socket_accept($socket, 0);
 			if ($reject) {
 				@fwrite($reject, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-				@fclose($reject);
+				if (is_resource($reject)) @fclose($reject);
 			}
 			return;
 		}
@@ -731,7 +731,7 @@ class Q_WebServer
 		if (!self::checkRateLimit($ip)) {
 			self::writeAll($client, "HTTP/1.1 429 Too Many Requests\r\n"
 				. "Retry-After: 60\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-			@fclose($client);
+			if (is_resource($client)) @fclose($client);
 			unset(self::$clients[$key], self::$buffers[$key], self::$keepAliveCount[$key],
 				self::$clientInfo[$key]);
 			return;
@@ -1915,10 +1915,10 @@ class Q_WebServer
 				$_method = $parsed['method'] ?? 'GET';
 				$response = compact('status', 'body', 'headers', '_method');
 				Q_WebServer_Headers::processResponse($client, $response, $parsed['headers']);
-				@fclose($client);
+				if (is_resource($client)) @fclose($client);
 				exit($status >= 500 ? 1 : 0);
 			} elseif ($pid > 0) {
-				@fclose($client);
+				if (is_resource($client)) @fclose($client);
 				$key = (int) $client;
 				if (isset(self::$clientWatchers[$key])) {
 					Q_Evented::cancel(self::$clientWatchers[$key]);
@@ -2080,11 +2080,11 @@ class Q_WebServer
 					if (Q_WebServer_State::isStreaming()
 						&& !empty($parsed['_streamingSent'])) {
 						self::writeAll($client, "0\r\n\r\n"); // chunked terminator
-						@fclose($client);
+						if (is_resource($client)) @fclose($client);
 						return;
 					}
 					Q_WebServer_Headers::processResponse($client, $response, $parsed['headers']);
-					@fclose($client);
+					if (is_resource($client)) @fclose($client);
 				};
 				register_shutdown_function(function () use ($emit) {
 					// Reached only when dispatchToQ() did NOT return normally --
@@ -2134,7 +2134,7 @@ class Q_WebServer
 				exit(0);
 			} else {
 				// ── PARENT: close client socket (child owns it now), reap later ──
-				@fclose($client);
+				if (is_resource($client)) @fclose($client);
 				$key = (int) $client;
 				if (isset(self::$clientWatchers[$key])) {
 					Q_Evented::cancel(self::$clientWatchers[$key]);
@@ -2680,12 +2680,12 @@ WORKER;
 						fclose($fp);
 					}
 				}
-				@fclose($client);
+				if (is_resource($client)) @fclose($client);
 				exit(0);
 			}
 			if ($pid > 0) {
 				// Parent: close our copy of the socket, back to event loop
-				@fclose($client);
+				if (is_resource($client)) @fclose($client);
 				self::$lastStatus = 200;
 				self::$lastBytes = $size;
 				return;
@@ -4453,7 +4453,7 @@ init();
 			unset(self::$timeoutWatchers[$key]);
 		}
 		if (isset(self::$clients[$key])) {
-			@fclose(self::$clients[$key]);
+			if (is_resource(self::$clients[$key])) @fclose(self::$clients[$key]);
 			unset(self::$clients[$key]);
 		}
 		unset(self::$buffers[$key], self::$clientInfo[$key],
