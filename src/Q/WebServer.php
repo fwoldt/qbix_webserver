@@ -670,6 +670,21 @@ class Q_WebServer
 			);
 			Q_Config::set('Q', 'scheduler', '_certRenewal', $schedule['_certRenewal']);
 		}
+		// Built-in: sweep expired reverse proxy cache entries.
+		// get() only unlinks an expired entry when that URL is asked for
+		// again, so without this a directory grows for as long as the
+		// server runs. Off unless the cache is on.
+		if (!isset($schedule['_cacheSweep'])
+		and Q_Config::get('Q', 'web', 'cache', 'enabled', false)) {
+			$every = (int) Q_Config::get('Q', 'web', 'cache', 'sweep', 'every', 300);
+			if ($every > 0) {
+				$schedule['_cacheSweep'] = array(
+					'handler' => '_cacheSweep',
+					'every' => $every,
+				);
+				Q_Config::set('Q', 'scheduler', '_cacheSweep', $schedule['_cacheSweep']);
+			}
+		}
 		if (!empty($schedule)) {
 			Q_Scheduler::init($schedule);
 			Q_Evented::repeat(1, function () {

@@ -129,6 +129,19 @@ class Q_Scheduler
 			return;
 		}
 
+		if ($handler === '_cacheSweep') {
+			if (class_exists('Q_WebServer_Cache', false)) {
+				$r = Q_WebServer_Cache::sweep();
+				if (!empty($r['removed'])) {
+					fwrite(STDERR, date('H:i:s') . " cache-sweep: removed "
+						. $r['removed'] . " expired entr"
+						. ($r['removed'] == 1 ? 'y' : 'ies')
+						. ($r['done'] ? '' : ' (budget reached, continuing next run)') . "\n");
+				}
+			}
+			return;
+		}
+
 		if (!function_exists('pcntl_fork')) {
 			// No fork — run in-process (blocks event loop briefly)
 			$result = null;
