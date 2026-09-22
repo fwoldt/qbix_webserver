@@ -678,8 +678,22 @@ class Q_WebServer_Http2_Connection
 		}
 
 		$list = array(array(':status', (string) $status));
+
+		// RFC 9110 requires Date on every response from a server that has a
+		// clock, and RFC 9111 computes a response's age against it. Without
+		// one a cache has no reference point for the absolute Expires we send
+		// beside it, so a client whose clock runs slightly ahead of ours can
+		// read a page that is seconds old as already expired and revalidate
+		// every single navigation. Generated here rather than stored, because
+		// a Date kept in a cache entry would state when the page was rendered
+		// and claim to state when it was sent.
+		$list[] = array('date', gmdate('D, d M Y H:i:s') . ' GMT');
+
 		foreach ($headers as $k => $v) {
 			$name = strtolower($k);
+
+			// Ours is authoritative; a stored one is from a previous response.
+			if ($name === 'date') continue;
 			// Connection-specific fields are forbidden in HTTP/2 and a peer is
 			// entitled to treat one as a protocol error, so they are dropped
 			// rather than passed on.

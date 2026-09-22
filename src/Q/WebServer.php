@@ -219,7 +219,10 @@ class Q_WebServer
 		// TCP listener — always bind unless port is explicitly 0
 		self::$socket = stream_socket_server(
 			"tcp://{$host}:{$port}", $errno, $errstr,
-			STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
+			STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+			stream_context_create(array('socket' => array(
+				'backlog' => self::listenBacklog(),
+			)))
 		);
 		if (!self::$socket) {
 			throw new Exception("Could not bind to {$host}:{$port} — $errstr");
@@ -439,7 +442,8 @@ class Q_WebServer
 			'single_dh_use' => true,
 		) + (self::http2Enabled()
 			? array('alpn_protocols' => 'h2,http/1.1')
-			: array())
+			: array()),
+			'socket' => array('backlog' => self::listenBacklog()),
 		));
 
 		self::$tlsSocket = stream_socket_server(
@@ -780,7 +784,12 @@ class Q_WebServer
 		// request carrying a session cookie bypasses it.
 		$cached = Q_WebServer_Cache::get($parsed);
 		if ($cached !== null) {
-			return $cached;
+			// A returning visitor who already holds this gets told so, rather
+			// than being sent it again. The body is the part that scales with
+			// the page; without it a reload is a round trip and a couple of
+			// hundred bytes, whatever the page weighs.
+			$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
+			return $fresh !== null ? $fresh : $cached;
 		}
 
 		self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
@@ -1584,7 +1593,10 @@ class Q_WebServer
 
 		// Reverse cache check (before any dispatch)
 		$cached = Q_WebServer_Cache::get($parsed);
-		if ($cached) return $cached;
+		if ($cached) {
+			$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
+			return $fresh !== null ? $fresh : $cached;
+		}
 
 		if ($path === '/Q/event' && $method === 'POST') {
 			return self::handleRemoteEvent($parsed);
@@ -1938,8 +1950,30 @@ class Q_WebServer
 	 * @static
 	 * @return {string}
 	 */
-	static function staticCacheControl()
+	static function staticCacheControl($path = null)
 	{
+		// Some files must not be held even when every other static file may be.
+		//
+		// A service worker is the clearest case: the browser installs it and it
+		// then outlives the page that installed it, deciding what every later
+		// navigation is answered with. Served with a year's max-age, a bug in
+		// one cannot be withdrawn -- the fix sits on the server while browsers
+		// keep running the old copy from their own cache. The specification
+		// caps how long a worker script may be trusted for exactly this reason,
+		// and it is not something to leave to the cap.
+		//
+		// The same applies to anything else whose whole job is to say what the
+		// current state of the site is: a version manifest, an app manifest, a
+		// kill switch.
+		if ($path !== null) {
+			foreach (self::revalidateAlways() as $pattern) {
+				if (fnmatch($pattern, $path)
+				or fnmatch($pattern, basename($path))) {
+					return 'no-cache, must-revalidate';
+				}
+			}
+		}
+
 		static $value = null;
 		if ($value !== null) return $value;
 
@@ -1949,6 +1983,36 @@ class Q_WebServer
 			: 'public, max-age=0, must-revalidate';
 
 		return $value;
+	}
+
+	/**
+	 * Paths that must always be revalidated, whatever the static lifetime is.
+	 *
+	 * Defaults cover the files that decide how a client behaves afterwards. An
+	 * installation can add to the list, and setting it to an empty array turns
+	 * the behaviour off entirely.
+	 *
+	 * @method revalidateAlways
+	 * @static
+	 * @return {array} of fnmatch patterns
+	 */
+	static function revalidateAlways()
+	{
+		static $patterns = null;
+		if ($patterns !== null) return $patterns;
+
+		$configured = Q_Config::get('Q', 'web', 'static', 'revalidate', null);
+		if (is_array($configured)) {
+			$patterns = $configured;
+		} else {
+			$patterns = array(
+				'sw.js',                // service worker, by convention
+				'service-worker.js',
+				'*.webmanifest',
+				'manifest.json'
+			);
+		}
+		return $patterns;
 	}
 
 	/**
@@ -1965,7 +2029,7 @@ class Q_WebServer
 			'Content-Type' => $ct,
 			'ETag' => '"' . dechex($mtime) . '-' . dechex($size) . '"',
 			'Last-Modified' => gmdate('D, d M Y H:i:s', $mtime) . ' GMT',
-			'Cache-Control' => self::staticCacheControl()
+			'Cache-Control' => self::staticCacheControl($fsPath)
 		);
 		if ($method === 'HEAD') {
 			$body = '';
@@ -1994,6 +2058,40 @@ class Q_WebServer
 	{
 		$method = $parsed['method'];
 		$path = $parsed['path'];
+
+		// Reverse cache, before anything else this method would do.
+		//
+		// It used to sit 322 lines down, after host-config resolution, a
+		// realpath(), a favicon file_exists(), the bundled-asset checks and
+		// the well-known handlers -- all of which a cache hit then threw away.
+		// Measured on this installation at concurrency 16, per request:
+		//
+		//     static file, 10 KB        0.34 ms of CPU
+		//     cached 404, tiny body     1.30 ms
+		//     cached page, 9.3 KB       3.80 ms
+		//
+		// The 404 carries almost no body and still cost four times a static
+		// file of 10 KB, so most of that was the walk to the cache rather than
+		// the cache itself.
+		//
+		// Safe to hoist because nothing above it decided whether the response
+		// may be served: the cache key already includes the Host, and an entry
+		// only exists because a previous request passed every check below and
+		// produced a cacheable 200. The one thing that must still precede it
+		// is the ACME challenge, which is answered from a store of its own and
+		// must work even when the cache is confused.
+		if ($method === 'GET' or $method === 'HEAD') {
+			$cached = Q_WebServer_Cache::get($parsed);
+			if ($cached) {
+				$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
+				if ($fresh !== null) $cached = $fresh;
+				self::sendResponse($client, $cached['status'],
+					$cached['body'],
+					$cached['headers']['Content-Type'] ?? 'text/html',
+					$cached['headers']);
+				return false;
+			}
+		}
 
 		// ACME HTTP-01 challenge handler (for automatic TLS)
 		if (strpos($path, '/.well-known/acme-challenge/') === 0) {
@@ -2311,14 +2409,9 @@ class Q_WebServer
 			}
 		}
 
-		// 4. Reverse cache check (before forking a worker)
-		$cached = Q_WebServer_Cache::get($parsed);
-		if ($cached) {
-			self::sendResponse($client, $cached['status'],
-				$cached['body'], $cached['headers']['Content-Type'] ?? 'text/html',
-				$cached['headers']);
-			return false;
-		}
+		// Reverse cache: already consulted at the top of this method. What
+		// reaches here has missed, so this is left as the single place the
+		// miss path continues from.
 
 		// 4. Resolve filesystem path
 		$fsPath = self::resolveStatic($path);
@@ -3326,7 +3419,7 @@ WORKER;
 		$baseHeaders = "Content-Type: $contentType\r\n"
 			. "ETag: $etag\r\n"
 			. "Last-Modified: " . gmdate('D, d M Y H:i:s', $mtime) . " GMT\r\n"
-			. "Cache-Control: " . self::staticCacheControl() . "\r\n";
+			. "Cache-Control: " . self::staticCacheControl($fsPath) . "\r\n";
 
 		// ── Large file fork ──
 		// Files over 1MB are served by a forked child process so the parent's
@@ -4750,6 +4843,40 @@ HTML;
 		);
 	}
 
+	/**
+	 * How many established connections may wait to be accepted.
+	 *
+	 * PHP's default is 32, which is not a queue so much as a cliff. A burst
+	 * larger than that does not queue, and does not fail either: the kernel
+	 * drops the SYN and the client retransmits it a second later. Measured
+	 * here on 2026-09-22, serving one cached page:
+	 *
+	 *     concurrency 16    2961 req/s   p99    4.7 ms
+	 *     concurrency 32    2899 req/s   p99   13.5 ms
+	 *     concurrency 64     745 req/s   p99 1067.0 ms
+	 *
+	 * Throughput did not degrade at 64, it collapsed to a quarter, and the p99
+	 * became a round thousand milliseconds -- the retransmit timer, not the
+	 * server, which sat mostly idle while it waited. A server that is fast
+	 * until exactly 32 concurrent connections and then appears to hang is hard
+	 * to diagnose from outside, because nothing in it is slow.
+	 *
+	 * The queue is only a queue: each entry costs a few hundred bytes of kernel
+	 * memory and is served at whatever rate accept() manages. It is bounded by
+	 * net.core.somaxconn, which the kernel silently clamps to, so asking for
+	 * more than the system allows is not an error.
+	 *
+	 * @method listenBacklog
+	 * @static
+	 * @return {integer}
+	 */
+	static function listenBacklog()
+	{
+		$backlog = (int) Q_Config::get('Q', 'webserver', 'backlog', 1024);
+		if ($backlog < 1) $backlog = 1024;
+		return $backlog;
+	}
+
 	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array())
 	{
 		static $reasons = array(
@@ -4765,11 +4892,76 @@ HTML;
 		self::$lastBytes = strlen($body);
 		$conn = $extra['Connection'] ?? 'keep-alive';
 		unset($extra['Connection']);
-		$out = "HTTP/1.1 $status " . ($reasons[$status] ?? 'OK')
-			. "\r\nContent-Type: $type\r\nContent-Length: " . strlen($body)
-			. "\r\nConnection: $conn\r\n";
-		foreach ($extra as $k => $v) $out .= "$k: $v\r\n";
+
+		// Content-Type was written from the argument and the caller's headers
+		// were appended after it, so a caller that had one -- every cached
+		// response does -- produced two. RFC 9110 leaves a recipient free to
+		// pick either, which means two intermediaries can disagree about what
+		// a page is.
+		//
+		// Content-Length is worse: the stored one describes the body as it was
+		// when it was stored, and the body being written here may have been
+		// compressed since. Two different lengths on one message is how a
+		// parser is taught to read the next response out of the middle of this
+		// one. The body in hand is the only length that can be right, so it is
+		// computed here and any supplied one is dropped.
+		$out = self::http1Head(
+			$status, $reasons[$status] ?? 'OK',
+			$type, strlen($body), $conn, $extra
+		);
 		self::writeAll($client, $out . "\r\n" . $body);
+	}
+
+	/**
+	 * Build the status line and headers of an HTTP/1.1 response.
+	 *
+	 * Separate from sendResponse because a socket cannot be asserted on and
+	 * this can. What it decides is worth asserting on: see the note above
+	 * about Content-Type and Content-Length.
+	 *
+	 * @method http1Head
+	 * @static
+	 * @param {integer} $status
+	 * @param {string} $reason
+	 * @param {string} $type fallback Content-Type
+	 * @param {integer} $length the length of the body actually being sent
+	 * @param {string} $conn the Connection value
+	 * @param {array} $extra the caller's headers
+	 * @return {string} ending with a single CRLF, not the blank line
+	 */
+	static function http1Head($status, $reason, $type, $length, $conn, $extra = array())
+	{
+		if (!is_array($extra)) $extra = array();
+
+		foreach ($extra as $k => $v) {
+			if (strcasecmp($k, 'Content-Type') === 0) {
+				if ($v !== '') $type = $v;
+				unset($extra[$k]);
+			} else if (strcasecmp($k, 'Content-Length') === 0) {
+				unset($extra[$k]);
+			} else if (strcasecmp($k, 'Connection') === 0) {
+				unset($extra[$k]);
+			} else if (strcasecmp($k, 'Date') === 0) {
+				// Ours is authoritative; a stored one states when the page was
+				// rendered while claiming to state when it was sent.
+				unset($extra[$k]);
+			}
+		}
+
+		$out = "HTTP/1.1 $status $reason"
+			. "\r\nDate: " . gmdate('D, d M Y H:i:s') . " GMT"
+			. "\r\nContent-Type: $type\r\nContent-Length: " . (int) $length
+			. "\r\nConnection: $conn\r\n";
+
+		// A header value carrying CR or LF lets whoever supplied it write
+		// headers of its own, or a second response entirely. Values reach here
+		// from application output and from stored cache entries, so this is not
+		// a theoretical source.
+		foreach ($extra as $k => $v) {
+			if (preg_match('/[\r\n]/', (string) $k . (string) $v)) continue;
+			$out .= "$k: $v\r\n";
+		}
+		return $out;
 	}
 
 	static function sendRedirect($client, $loc, $permanent = false) {
