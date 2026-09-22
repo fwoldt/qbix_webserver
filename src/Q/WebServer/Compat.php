@@ -554,6 +554,31 @@ class Q_WebServer_Compat
 			return;
 		}
 
+		// header('Location: ...') means a redirect. PHP itself sets 302 for
+		// it unless the script has already chosen a status, and a great deal
+		// of code relies on that rather than saying 302 explicitly. Without
+		// it the response is 200 carrying a Location header and an empty
+		// body, which is not a redirect at all: the browser renders the
+		// nothing it was given. Every redirect in a legacy application --
+		// after a login, after a publish -- lands there.
+		//
+		// Set through responseCode(), which updates the server's own status
+		// as well as the Platform's; writing only one of them leaves the
+		// value the response is built from untouched.
+		if ($response_code === null
+		and preg_match('/^\s*Location\s*:/i', $string)) {
+			$current = class_exists('Q_WebServer_State', false)
+				? Q_WebServer_State::getStatusCode()
+				: Q_Response::code();
+			if (!$current or (int) $current === 200) {
+				if (class_exists('Q_WebServer_State', false)) {
+					Q_WebServer_State::responseCode(302);
+				} else {
+					Q_Response::code(302);
+				}
+			}
+		}
+
 		Q_Response::header($string, $replace);
 	}
 
