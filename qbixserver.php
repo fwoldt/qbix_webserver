@@ -46,6 +46,7 @@ $opts = array(
 	'pack'    => null,  // --pack=DIR : bundle app files into binary
 	'output'  => null,  // --output=FILE : output path for --pack
 	'debug'   => false,
+	'keep-globals' => null, // Globals the app keeps between requests
 );
 
 foreach ($argv as $i => $arg) {
@@ -68,6 +69,7 @@ foreach ($argv as $i => $arg) {
 		echo "  --pid=PATH       PID file path\n";
 		echo "  --hotreload      Watch files, auto-restart on changes\n";
 		echo "  --debug          Verbose logging\n";
+		echo "  --keep-globals=A,B  Globals the app keeps between requests\n";
 		echo "  -t               Test config and exit\n";
 		echo "  --stop           Graceful shutdown (via PID file)\n";
 		echo "  --reload         Re-exec server (via PID file)\n";
@@ -705,6 +707,9 @@ $opts['https-port'] = $httpsPort;
 
 // Store HTTP port in config too (for anything that reads it)
 Q_Config::set('Q', 'webserver', 'port', $httpPort);
+if ($opts['keep-globals'] !== null) {
+	Q_Config::set('Q', 'webserver', 'keepGlobals', $opts['keep-globals']);
+}
 
 // Unix domain socket: --socket > Q.webserver.socket > null (TCP only)
 $socketPath = $opts['socket'] ?: Q_Config::get('Q', 'webserver', 'socket', null);
