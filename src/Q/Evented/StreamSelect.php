@@ -148,11 +148,25 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 		if (function_exists('pcntl_signal_dispatch')) pcntl_signal_dispatch();
 
 		// 4. Stream select
+		//
+		// A watcher whose stream has since been closed must not be handed to
+		// stream_select(). PHP 8 raises a TypeError for a closed resource,
+		// and a TypeError is an exception, so the "@" further down does not
+		// contain it: the loop throws, run() unwinds, and the whole server
+		// dies -- parent and every worker -- on a completely ordinary event.
+		// A browser opening several connections in parallel for a page's
+		// images and dropping the spares is enough to do it.
+		//
+		// Dead streams are cancelled rather than merely skipped, or every
+		// later tick would walk over them again. Iterating a property array
+		// yields a copy, so cancelling inside the loop is safe.
 		$read = $write = array();
 		foreach ($this->readers as $id => $e) {
+			if (!is_resource($e[0])) { $this->cancel($id); continue; }
 			if (empty($this->disabled[$id])) $read[] = $e[0];
 		}
 		foreach ($this->writers as $id => $e) {
+			if (!is_resource($e[0])) { $this->cancel($id); continue; }
 			if (empty($this->disabled[$id])) $write[] = $e[0];
 		}
 
@@ -171,7 +185,22 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 		$sec = ($wait !== null) ? (int)$wait : null;
 		$usec = ($wait !== null) ? (int)(($wait - (int)$wait) * 1000000) : null;
 		$except = null;
-		$n = @stream_select($read, $write, $except, $sec, $usec);
+		// A stream can still be closed between the check above and this call,
+		// by a callback run earlier in this same tick. The event loop of a
+		// server should not be able to die of that, so the throw is caught,
+		// the dead watchers pruned, and the tick abandoned; the next one runs
+		// with a clean set.
+		try {
+			$n = @stream_select($read, $write, $except, $sec, $usec);
+		} catch (\TypeError $e) {
+			foreach ($this->readers as $id => $r) {
+				if (!is_resource($r[0])) $this->cancel($id);
+			}
+			foreach ($this->writers as $id => $w) {
+				if (!is_resource($w[0])) $this->cancel($id);
+			}
+			return;
+		}
 		if ($n === false) return;
 
 		foreach ($read as $stream) {
@@ -179,7 +208,16 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 			if (!isset($this->streamToReaders[$key])) continue;
 			foreach ($this->streamToReaders[$key] as $id => $_) {
 				if (empty($this->disabled[$id]) && isset($this->readers[$id])) {
-					$this->readers[$id][1]($stream);
+					// One connection must not be able to kill the server.
+					// These callbacks run the whole request path, and any
+					// throw in one of them unwinds out of run(). Drop the
+					// watcher and keep serving everybody else.
+					try {
+						$this->readers[$id][1]($stream);
+					} catch (\Throwable $e) {
+						$this->cancel($id);
+						self::$lastError = $e;
+					}
 				}
 			}
 		}
