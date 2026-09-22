@@ -46,6 +46,9 @@ jobs:
       - name: Cookies and sessions
         run: bash tests/cookies-sessions.sh
 
+      - name: Autoloaders across requests
+        run: bash tests/autoloader-persistence.sh
+
       - name: End-to-end probe (standalone only)
         run: bash tests/run-probe.sh
         continue-on-error: true
