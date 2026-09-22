@@ -2020,6 +2020,16 @@ class Q_WebServer_CompatFileWrapper
 	public function stream_lock($operation)
 	{
 		if ($this->transformed) return true;
+		// PHP calls this entry point with 0 when it releases a lock it took
+		// implicitly -- file_put_contents() with LOCK_EX does exactly that.
+		// flock() raises a ValueError for 0 in PHP 8, and because the error
+		// escapes mid-write the file is left at zero bytes with no sign that
+		// anything went wrong. Anything that is not a real flock operation
+		// is a no-op here.
+		$op = $operation & ~LOCK_NB;
+		if ($op !== LOCK_SH and $op !== LOCK_EX and $op !== LOCK_UN) {
+			return true;
+		}
 		return flock($this->handle, $operation);
 	}
 
@@ -2027,6 +2037,19 @@ class Q_WebServer_CompatFileWrapper
 	{
 		if ($this->transformed) return true;
 		return fflush($this->handle);
+	}
+
+	/**
+	 * Without this, every truncating write through the wrapper -- which is
+	 * what fopen('w') and file_put_contents() do -- emits
+	 * "stream_truncate is not implemented" and falls back on whatever the
+	 * handle already contained. eZ Publish alone produced tens of
+	 * kilobytes of these per hundred requests.
+	 */
+	public function stream_truncate($newSize)
+	{
+		if ($this->transformed) return true;
+		return ftruncate($this->handle, $newSize);
 	}
 
 	// ── Required for file_exists, is_file, stat, etc. ──
