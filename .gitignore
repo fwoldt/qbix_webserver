@@ -4,7 +4,9 @@ local/
 tests/local/
 
 # Build artifacts
-bin/qbixserver.phar
+# bin/qbixserver.phar is NOT here: it is tracked, it is what a Composer install
+# runs, and listing it made local rebuilds look like noise instead of the change
+# they are. tests/phar-is-current.php checks it against its sources.
 qbixserver.phar
 node_modules/
 
