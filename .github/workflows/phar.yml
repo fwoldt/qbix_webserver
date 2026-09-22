@@ -1,0 +1,71 @@
+name: phar
+
+# bin/qbixserver.phar is committed, and it is what a Composer install runs --
+# the package ships it, `composer update` delivers it, and nothing rebuilds it.
+# It is also listed in .gitignore, which does nothing for a file already tracked
+# except keep it out of everyone's attention, so it drifted: v0.0.2.4 shipped a
+# phar without the $context declaration on the stream wrapper (a PHP 8.4 install
+# got ~1700 deprecation notices written into every response body and the page
+# ended in a 500), v0.0.2.6 shipped one without the cache fixes merged for that
+# release, and v0.0.2.7 one without the cache sweep.
+#
+# This rebuilds it whenever the sources it is built from change, so a tag cut
+# from this branch always carries a current phar.
+
+on:
+  push:
+    branches:
+      - maintain
+      - main
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'qbixserver.php'
+      - 'build-phar.php'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    name: rebuild bin/qbixserver.phar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          ini-values: phar.readonly=0
+          coverage: none
+
+      - name: Parse every file that goes in
+        run: |
+          set -e
+          find src qbixserver.php -name '*.php' -print0 \
+            | xargs -0 -n1 php -l > /dev/null
+          echo "all files parse"
+
+      - name: Rebuild if the contents drifted
+        run: |
+          # Bytes are no guide here: two builds of identical sources differ in
+          # the phar's own metadata, so committing on every push would churn
+          # the repository. tests/phar-is-current.php compares what is inside.
+          if php tests/phar-is-current.php; then
+            echo "nothing to do"
+            exit 0
+          fi
+          php -d phar.readonly=0 build-phar.php
+          php tests/phar-is-current.php
+          echo "REBUILT=1" >> "$GITHUB_ENV"
+
+      - name: Commit
+        if: env.REBUILT == '1'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin/qbixserver.phar
+          git commit -m "Rebuild bin/qbixserver.phar from ${GITHUB_SHA::7}"
+          git push
