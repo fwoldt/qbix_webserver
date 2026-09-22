@@ -905,16 +905,45 @@ if (!$opts['workers'] && function_exists('pcntl_fork')) {
 		$totalRAM = (int) trim(shell_exec('sysctl -n hw.memsize 2>/dev/null') ?: '0');
 	}
 
-	$maxByCpu = $nproc * 200;
+	// Size the pool from what a worker actually costs, and cap it.
+	//
+	// The previous numbers -- 200 workers per core, and 200KB of copy-on-write
+	// per worker -- describe a server whose workers do almost nothing. They do
+	// not describe one hosting an application. Measured on a 12 core machine
+	// with 47GB running a legacy CMS: the parent was 70MB after preload and
+	// each idle worker held 8MB of private memory, forty times the assumed
+	// figure and growing once it serves. The formula chose 2400 workers; the
+	// server then spent over a minute forking, climbed past 37GB, and answered
+	// nothing at all in the meantime -- not even its own /Q/health. Nothing
+	// clamped it, because the file descriptor and process limits it checks
+	// were generous and were never the binding constraint.
+	//
+	// So the estimate comes from this process rather than from a constant.
+	// The parent's resident size after preload is what a worker starts from,
+	// and is a conservative stand-in for what one will hold.
+	$perWorker = 8 * 1024 * 1024;
+	$statusFile = @file_get_contents('/proc/self/status');
+	if ($statusFile && preg_match('/VmRSS:\s+(\d+)\s*kB/', $statusFile, $m)) {
+		$perWorker = max($perWorker, ((int) $m[1]) * 1024);
+	} elseif (function_exists('memory_get_usage')) {
+		$perWorker = max($perWorker, memory_get_usage(true));
+	}
+
+	// A worker is busy while it renders, so the useful count is a small
+	// multiple of the cores, not a large one.
+	$maxByCpu = $nproc * 8;
+
+	// An absolute ceiling for the automatic choice. Anything beyond this is a
+	// deliberate decision and should be asked for with --workers.
+	$maxAuto = 64;
 
 	if ($totalRAM > 0) {
 		$reservedRAM = 1024 * 1024 * 1024; // 1GB for OS + PHP base + SQLite
 		$availableRAM = max(0, $totalRAM - $reservedRAM);
-		$perWorker = 200 * 1024; // ~200KB COW per worker (measured)
 		$maxByRam = (int) ($availableRAM / $perWorker);
-		$opts['workers'] = max(4, min($maxByRam, $maxByCpu));
+		$opts['workers'] = max(4, min($maxByRam, $maxByCpu, $maxAuto));
 	} else {
-		$opts['workers'] = $nproc * 50; // fallback
+		$opts['workers'] = max(4, min($nproc * 4, $maxAuto));
 	}
 }
 
