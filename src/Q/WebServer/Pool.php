@@ -603,6 +603,10 @@ class Q_WebServer_Pool
 		$this->workerClients[$index] = $client;
 		$this->workerBuffers[$index] = '';
 		$this->workerRequestHeaders[$index] = $parsed['headers'];
+		// The reverse proxy cache needs the whole parsed request, not just
+		// the headers: it keys on host, path and query, and checks the
+		// method and the bypass cookies.
+		$this->workerRequests[$index] = $parsed;
 		// In octane mode, the watcher was cancelled after the previous
 		// response to prevent stream_select from firing endlessly on the
 		// idle socket. Create a fresh one-shot watcher for this dispatch.
@@ -822,10 +826,23 @@ class Q_WebServer_Pool
 	 */
 	protected $workerRequestHeaders = array();
 
+	/**
+	 * The parsed request each worker is serving, kept so the response can
+	 * be offered to the reverse proxy cache once the worker is done.
+	 * @property $workerRequests
+	 */
+	protected $workerRequests = array();
+
 	protected function sendHttp($client, $resp, $index)
 	{
 		$reqHeaders = $this->workerRequestHeaders[$index] ?? array();
 		Q_WebServer_Headers::processResponse($client, $resp, $reqHeaders);
+		// Offer the response to the cache. Every other dispatch path does
+		// this; the pooled path did not, so Q_WebServer_Cache::get() in
+		// route() could only ever miss -- nothing was ever stored.
+		if (isset($this->workerRequests[$index])) {
+			Q_WebServer_Cache::put($this->workerRequests[$index], $resp);
+		}
 	}
 
 	/**
