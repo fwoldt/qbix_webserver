@@ -19,6 +19,7 @@
  *     "dir":              "logs",
  *     "access":           true,
  *     "error":            true,
+ *     "format":           "qbix",
  *     "bufferSize":       65536,
  *     "flushInterval":    1,
  *     "maxSize":          52428800,
@@ -29,6 +30,25 @@
  *   bufferSize: 0 = unbuffered (flush every line), default 64KB.
  *   flushInterval: seconds between timer flushes, default 1.
  *   Set access/error to false to disable that log entirely.
+ *   format: "qbix" (default), "combined", "common", or a format string.
+ *
+ * Format strings take the Apache tokens that make sense here:
+ *
+ *   %h  client address          %l  identd, always -
+ *   %u  remote user, always -   %t  time, [10/Oct/2000:13:55:36 -0700]
+ *   %r  request line            %m  method
+ *   %U  path without the query  %q  query, with its ? when not empty
+ *   %H  protocol                %s, %>s  status
+ *   %b  size, - when zero       %B  size, 0 when zero
+ *   %D  microseconds            %T  seconds
+ *   %{ms}T  milliseconds        %{Name}i  a request header
+ *   %%  a literal percent
+ *
+ * The named formats:
+ *
+ *   common    %h %l %u %t "%r" %>s %b
+ *   combined  common + "%{Referer}i" "%{User-Agent}i"
+ *   qbix      combined + " %{ms}T" -- what this server has always written
  *
  * @class Q_WebServer_Log
  */
@@ -48,6 +68,7 @@ class Q_WebServer_Log
 	// ── Buffer ──────────────────────────────────────────
 	static $accessBuf = '';
 	static $errorBuf = '';
+	static $format = null;            // resolved format string
 	static $bufferSize = 65536;       // 64KB default
 	static $flushInterval = 1.0;      // seconds
 
@@ -75,6 +96,7 @@ class Q_WebServer_Log
 		self::$maxSize = (int) Q::ifset($config, 'maxSize', 52428800);
 		self::$archiveAfterDays = (int) Q::ifset($config, 'archiveAfterDays', 2);
 		self::$deleteAfterDays = (int) Q::ifset($config, 'deleteAfterDays', 30);
+		self::$format = self::resolveFormat(Q::ifset($config, 'format', 'qbix'));
 		self::$bufferSize = (int) Q::ifset($config, 'bufferSize', 65536);
 		self::$flushInterval = (float) Q::ifset($config, 'flushInterval', 1.0);
 
@@ -125,15 +147,109 @@ class Q_WebServer_Log
 	 * @method access
 	 * @static
 	 */
-	static function access($ip, $method, $uri, $status, $size, $referer, $ua, $ms)
+	/**
+	 * Turn a named format into its string, or pass a custom one through.
+	 * @method resolveFormat
+	 * @static
+	 * @param {string} $name
+	 * @return {string}
+	 */
+	static function resolveFormat($name)
+	{
+		static $named = array(
+			'common'   => '%h %l %u %t "%r" %>s %b',
+			'combined' => '%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i"',
+			// What this server wrote before the format was configurable:
+			// combined, plus the response time. Kept as the default so an
+			// existing log keeps its shape and whatever parses it keeps working.
+			'qbix'     => '%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i" %{ms}T',
+		);
+		if (!is_string($name) or $name === '') return $named['qbix'];
+		return isset($named[$name]) ? $named[$name] : $name;
+	}
+
+	/**
+	 * Build one access line.
+	 *
+	 * @method formatAccess
+	 * @static
+	 * @param {string} $format
+	 * @param {array} $f Fields: ip, method, uri, path, query, protocol,
+	 *   status, size, ms, headers
+	 * @return {string}
+	 */
+	static function formatAccess($format, $f)
+	{
+		$size = (int) ($f['size'] ?? 0);
+		$ms = (float) ($f['ms'] ?? 0);
+		$path = $f['path'] ?? ($f['uri'] ?? '');
+		$query = $f['query'] ?? '';
+		if ($query !== '' and $query[0] !== '?') $query = '?' . $query;
+		$proto = $f['protocol'] ?? 'HTTP/1.1';
+		$request = trim(($f['method'] ?? '') . ' ' . ($f['uri'] ?? '') . ' ' . $proto);
+		$headers = $f['headers'] ?? array();
+
+		return preg_replace_callback(
+			'/%(?:\{([^}]*)\}([ioTt])|>?([a-zA-Z%]))/',
+			function ($m) use ($f, $size, $ms, $path, $query, $proto, $request, $headers) {
+				if ($m[1] !== '' or ($m[2] ?? '') !== '') {
+					$arg = $m[1];
+					switch ($m[2]) {
+						case 'i':
+							$k = strtolower($arg);
+							$v = $headers[$k] ?? '';
+							return $v === '' ? '-' : $v;
+						case 'T':
+							if ($arg === 'ms') return sprintf('%.1fms', $ms);
+							if ($arg === 'us') return (string) (int) ($ms * 1000);
+							return (string) (int) ($ms / 1000);
+						case 't':
+							return date($arg ?: 'd/M/Y:H:i:s O');
+					}
+					return $m[0];
+				}
+				switch ($m[3]) {
+					case 'h': return $f['ip'] ?? '-';
+					case 'l': return '-';
+					case 'u': return '-';
+					case 't': return '[' . date('d/M/Y:H:i:s O') . ']';
+					case 'r': return $request;
+					case 'm': return $f['method'] ?? '-';
+					case 'U': return $path;
+					case 'q': return $query;
+					case 'H': return $proto;
+					case 's': return (string) (int) ($f['status'] ?? 0);
+					case 'b': return $size > 0 ? (string) $size : '-';
+					case 'B': return (string) $size;
+					case 'D': return (string) (int) ($ms * 1000);
+					case 'T': return (string) (int) ($ms / 1000);
+					case '%': return '%';
+				}
+				return $m[0];
+			},
+			$format
+		);
+	}
+
+	static function access($ip, $method, $uri, $status, $size, $referer, $ua, $ms, $extra = array())
 	{
 		if (!self::$accessFp) return;
-		$time = date('d/M/Y:H:i:s O');
-		$line = sprintf(
-			"%s - - [%s] \"%s %s HTTP/1.1\" %d %d \"%s\" \"%s\" %.1fms\n",
-			$ip, $time, $method, $uri, $status, $size,
-			$referer ?: '-', $ua ?: '-', $ms
-		);
+		$headers = $extra['headers'] ?? array();
+		// Referer and user agent are passed separately for callers that have
+		// them but not the header array.
+		if ($referer !== '' and $referer !== null and !isset($headers['referer'])) {
+			$headers['referer'] = $referer;
+		}
+		if ($ua !== '' and $ua !== null and !isset($headers['user-agent'])) {
+			$headers['user-agent'] = $ua;
+		}
+		$line = self::formatAccess(self::$format ?: self::resolveFormat('qbix'), array(
+			'ip' => $ip, 'method' => $method, 'uri' => $uri,
+			'path' => $extra['path'] ?? null, 'query' => $extra['query'] ?? '',
+			'protocol' => $extra['protocol'] ?? 'HTTP/1.1',
+			'status' => $status, 'size' => $size, 'ms' => $ms,
+			'headers' => $headers,
+		)) . "\n";
 
 		if (self::$bufferSize <= 0) {
 			// Unbuffered — write immediately

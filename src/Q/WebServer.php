@@ -1069,7 +1069,14 @@ class Q_WebServer
 				self::$lastStatus, $bytes,
 				$parsed['headers']['referer'] ?? '',
 				$parsed['headers']['user-agent'] ?? '',
-				$ms
+				$ms,
+				array(
+					'path' => $parsed['path'] ?? null,
+					'query' => $parsed['query'] ?? '',
+					// The line used to say HTTP/1.1 whatever the request was.
+					'protocol' => 'HTTP/' . ($parsed['httpVersion'] ?? '1.1'),
+					'headers' => $parsed['headers'] ?? array(),
+				)
 			);
 		}
 		self::$lastStatus = 200; // reset for next request
