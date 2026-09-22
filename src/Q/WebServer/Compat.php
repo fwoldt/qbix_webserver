@@ -327,6 +327,34 @@ class Q_WebServer_Compat
 				continue;
 			}
 
+			// exit and die are language constructs, not functions, so they
+			// never reach the T_STRING branch below and have to be handled
+			// here. "exit;" and "die;" take no parentheses, so the call has
+			// to supply them; "exit(1)" and "die('x')" bring their own.
+			if ($token[0] === T_EXIT) {
+				$p = $i - 1;
+				while ($p >= 0 and is_array($tokens[$p])
+				and $tokens[$p][0] === T_WHITESPACE) $p--;
+				$prev = $p >= 0 ? $tokens[$p] : null;
+				$isMember = is_array($prev)
+					and ($prev[0] === T_OBJECT_OPERATOR or $prev[0] === T_DOUBLE_COLON
+						or $prev[0] === T_FUNCTION or $prev[0] === T_CONST);
+
+				if ($isMember) {
+					$out .= $token[1];
+					continue;
+				}
+
+				$n = $i + 1;
+				while ($n < $count and is_array($tokens[$n])
+				and $tokens[$n][0] === T_WHITESPACE) $n++;
+				$hasArgs = ($n < $count and $tokens[$n] === '(');
+
+				$out .= '\\Q_WebServer_Compat::_exit' . ($hasArgs ? '' : '()');
+				$changed = true;
+				continue;
+			}
+
 			// Only look at T_STRING (function/constant names)
 			// PHP 8+: \header() is T_NAME_FULLY_QUALIFIED, Ns\header() is T_NAME_QUALIFIED
 			if ($token[0] === T_STRING) {
@@ -391,6 +419,35 @@ class Q_WebServer_Compat
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Replacement for exit / die.
+	 *
+	 * exit ends the process. Under one-process-per-request that is the end of
+	 * a request; in a persistent worker it is the end of the worker, and the
+	 * client gets nothing but a 502 while the pool quietly replaces the
+	 * corpse. Legacy PHP is full of it -- one installation tested here has 99
+	 * files calling a helper whose last statement is exit -- so it cannot be
+	 * fixed script by script.
+	 *
+	 * Throwing instead lets the worker unwind to the request boundary, keep
+	 * whatever the script had already produced, and answer.
+	 *
+	 * A string argument is what exit("message") means: print it, then stop.
+	 *
+	 * @method _exit
+	 * @static
+	 * @param {integer|string} $status
+	 * @throws Q_WebServer_ExitSignal
+	 */
+	static function _exit($status = 0)
+	{
+		if (is_string($status)) {
+			echo $status;
+			$status = 0;
+		}
+		throw new Q_WebServer_ExitSignal((int) $status);
 	}
 
 	/**
@@ -2036,4 +2093,28 @@ class Q_WebServer_CompatFileWrapper
 		self::rewrap();
 		return $result;
 	}
+}
+
+/**
+ * Thrown in place of exit / die, so a script can end its request without
+ * ending the worker that is running it.
+ *
+ * Carries the status the script asked to exit with. It is a normal end of
+ * request, not an error, and the pool treats it as one.
+ */
+if (!class_exists('Q_WebServer_ExitSignal', false)) {
+class Q_WebServer_ExitSignal extends \Exception
+{
+	/**
+	 * @property $status
+	 * @type integer
+	 */
+	public $status = 0;
+
+	function __construct($status = 0)
+	{
+		parent::__construct('script called exit', 0);
+		$this->status = (int) $status;
+	}
+}
 }
