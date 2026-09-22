@@ -446,6 +446,27 @@ class Q_WebServer_Pool
 					}
 				} catch (\Throwable $ignore) {}
 			}
+		} catch (\Q_WebServer_ExitSignal $e) {
+			// The script called exit or die. That is an ordinary end of a
+			// request, not a failure: whatever it printed before stopping is
+			// the response, and the headers it set still stand. Only the
+			// process must not actually end, because the process is a worker
+			// that has other requests to serve.
+			foreach (headers_list() as $h) {
+				if (strpos($h, ':') !== false) {
+					list($k, $v) = explode(':', $h, 2);
+					$headers[trim($k)] = trim($v);
+				}
+			}
+			if (class_exists('Q_WebServer_State', false)) {
+				foreach (\Q_WebServer_State::getHeaders() as $k => $v) {
+					$headers[$k] = $v;
+				}
+				$stateCode = \Q_WebServer_State::getStatusCode();
+				if ($stateCode and $stateCode !== 200) $status = $stateCode;
+			}
+			$code = http_response_code();
+			if ($code and $code !== 200 and $status === 200) $status = $code;
 		} catch (\Throwable $e) {
 			$status = 500;
 			if (ob_get_level()) ob_clean();
