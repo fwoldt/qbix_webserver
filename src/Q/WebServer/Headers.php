@@ -173,14 +173,35 @@ class Q_WebServer_Headers
 		// Cookies set by the script. A pooled response carries them, because
 		// they were built in the worker and this process has none of its own;
 		// the in-process paths still read the local state.
+		// Every cookie this response sends, in one list.
+		//
+		// A script may send one with header('Set-Cookie: ...'), or with
+		// setcookie()/setrawcookie(), or with both -- all of that is ordinary
+		// PHP, and the two arrive by different routes. $headers is associative
+		// and cannot hold duplicates, so they are gathered here and written as
+		// their own lines below.
+		//
+		// Assigning the carried cookies over $headers['Set-Cookie'] overwrote a
+		// raw one, and the later pass that stripped every Set-Cookie line out of
+		// the finished block and re-added only the carried list dropped it
+		// again. Each route worked alone, so a script had to use both before
+		// anything looked wrong.
 		$cookieHeaders = array();
-		if (isset($response['cookies']) and is_array($response['cookies'])) {
-			$cookieHeaders = $response['cookies'];
-		} else if (class_exists('Q_Response', false)) {
-			$cookieHeaders = Q_WebServer_State::cookieHeaders();
+		foreach ($headers as $k => $v) {
+			if (strcasecmp($k, 'Set-Cookie') === 0) {
+				$cookieHeaders[] = $v;
+				unset($headers[$k]);
+			}
 		}
-		foreach ($cookieHeaders as $ch) {
-			$headers['Set-Cookie'] = $ch; // one of them; the rest are added below
+
+		// A pooled response carries the script's cookies, because they were
+		// built in the worker and this process has none of its own; the
+		// in-process paths still read the local state.
+		if (isset($response['cookies']) and is_array($response['cookies'])) {
+			$cookieHeaders = array_merge($cookieHeaders, $response['cookies']);
+		} else if (class_exists('Q_Response', false)) {
+			$cookieHeaders = array_merge($cookieHeaders,
+				Q_WebServer_State::cookieHeaders());
 		}
 
 		static $reasons = array(
@@ -201,13 +222,11 @@ class Q_WebServer_Headers
 		foreach ($headers as $k => $v) {
 			$out .= "$k: $v\r\n";
 		}
-		// Multiple Set-Cookie headers (can't use the associative array for dupes)
-		if (count($cookieHeaders) > 1) {
-			// Remove the single Set-Cookie we added above
-			$out = preg_replace("/Set-Cookie:.*\r\n/", "", $out);
-			foreach ($cookieHeaders as $ch) {
-				$out .= "Set-Cookie: $ch\r\n";
-			}
+		// One line per cookie. The header array is associative and cannot
+		// hold duplicates, which is why they are gathered into a list above
+		// rather than merged back into it.
+		foreach ($cookieHeaders as $ch) {
+			$out .= "Set-Cookie: $ch\r\n";
 		}
 		self::writeAll($client, $out . "\r\n" . $body);
 		return true;
