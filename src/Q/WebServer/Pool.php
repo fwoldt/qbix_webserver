@@ -226,6 +226,24 @@ class Q_WebServer_Pool
 			$keepGlobals = array('_GET','_POST','_COOKIE','_SERVER','_REQUEST',
 				'_FILES','_ENV','_SESSION','GLOBALS','argv','argc',
 				'_Q_RAW_INPUT');
+
+			// Applications may keep a global of their own across requests.
+			// A registry populated by an include_once is the case that needs
+			// it: clearing the global leaves the registry empty while
+			// include_once refuses to run the file that would fill it again,
+			// so every later request in that worker sees an empty registry
+			// and no way to refill it. Naming such a global is narrow and
+			// reviewable; keeping globals wholesale is not, because the
+			// request-scoped ones still have to be cleared.
+			$extraGlobals = Q_Config::get('Q', 'webserver', 'keepGlobals', array());
+			if (is_string($extraGlobals)) {
+				$extraGlobals = preg_split('/\s*,\s*/', $extraGlobals, -1, PREG_SPLIT_NO_EMPTY);
+			}
+			if (is_array($extraGlobals) && $extraGlobals) {
+				$keepGlobals = array_values(array_unique(
+					array_merge($keepGlobals, $extraGlobals)
+				));
+			}
 			foreach (array_keys($GLOBALS) as $gk) {
 				if (!in_array($gk, $keepGlobals, true)) {
 					unset($GLOBALS[$gk]);
