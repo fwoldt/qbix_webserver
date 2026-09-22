@@ -2659,7 +2659,22 @@ WORKER;
 		// event loop isn't blocked by the writeAll() loop. The child inherits
 		// the client socket, writes the full response, and exits.
 		// Threshold: 1MB (below this, inline write is faster than fork overhead).
-		if ($size > 1048576 && $method !== 'HEAD' && Q_WebServer_Fork::available()) {
+		// Never over TLS. A forked child gets a copy of the OpenSSL state,
+		// and record sequence numbers are part of that state: once two
+		// processes are emitting records for one connection the numbering no
+		// longer agrees with what the client expects, and the client drops
+		// the connection reporting a MAC failure --
+		//
+		//     SSL_ERROR_BAD_MAC_READ
+		//
+		// -- for the one asset that happened to be over the threshold, while
+		// every smaller asset on the same page loaded normally. Serving it
+		// inline costs the event loop one writeAll(); serving it from a child
+		// costs the whole connection.
+		$meta = is_resource($client) ? @stream_get_meta_data($client) : array();
+		$isTls = !empty($meta['crypto']);
+
+		if (!$isTls && $size > 1048576 && $method !== 'HEAD' && Q_WebServer_Fork::available()) {
 			$connHeader = 'close'; // forked child always closes
 			$out = "HTTP/1.1 200 OK\r\n" . $baseHeaders
 				. "Content-Length: $size\r\n"
@@ -2668,14 +2683,14 @@ WORKER;
 			if ($pid === 0) {
 				// Child: write headers + stream file in chunks
 				stream_set_blocking($client, true);
-				$ok = @fwrite($client, $out);
+				$ok = self::writeAll($client, $out);
 				if ($ok !== false) {
 					$fp = fopen($fsPath, 'rb');
 					if ($fp) {
 						while (!feof($fp)) {
 							$chunk = fread($fp, 65536);
 							if ($chunk === false || $chunk === '') break;
-							if (@fwrite($client, $chunk) === false) break;
+							if (!self::writeAll($client, $chunk)) break;
 						}
 						fclose($fp);
 					}
