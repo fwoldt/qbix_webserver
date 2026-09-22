@@ -1822,11 +1822,29 @@ class Q_WebServer_CompatFileWrapper
 	{
 		$realPath = preg_replace('/^file:\/\//', '', $path);
 		self::unwrap();
-		if ($flags & STREAM_URL_STAT_QUIET) {
-			$stat = @stat($realPath);
-		} else {
-			$stat = stat($realPath);
-		}
+		// Never raise for a path that is not there.
+		//
+		// A stream wrapper answers "does this exist" with its return value;
+		// whether a missing path deserves a diagnostic is the calling
+		// function's business, and the built-in handler for plain files works
+		// that way. Raising here puts a warning behind every file_exists()
+		// that comes back false -- and an autoloader probing for a class is
+		// nothing but file_exists() coming back false, repeatedly.
+		//
+		// @stat() is not enough either: the silence operator lowers
+		// error_reporting for the call, but a custom error handler is still
+		// invoked. An application that installs one which throws gets the
+		// exception regardless. eZ Publish installs exactly that around
+		// mysqli_set_charset(), so a probe that missed during the autoload
+		// inside that call was reported as "the charset could not be set",
+		// and the connection silently kept the server default of latin1.
+		// Rows then came back transliterated -- a non-breaking space arrived
+		// as "?" -- XML fields stopped parsing, and pages quietly lost their
+		// text. Nothing was logged by anything.
+		//
+		// So: do not stat a path that does not exist. file_exists() here runs
+		// against the real handler, because unwrap() is already in effect.
+		$stat = file_exists($realPath) ? @stat($realPath) : false;
 		self::rewrap();
 		return $stat ?: false;
 	}
