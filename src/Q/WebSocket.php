@@ -41,7 +41,9 @@ class Q_WebSocket
 			. "Upgrade: websocket\r\nConnection: Upgrade\r\n"
 			. "Sec-WebSocket-Accept: $accept\r\n"
 			. "Server: QbixServer\r\n\r\n";
-		@fwrite($socket, $resp);
+		// A short write here truncates the handshake, and the client then
+		// treats a valid upgrade as a malformed response.
+		self::writeFully($socket, $resp);
 		$sk = (int) $socket;
 		$watcher = Q_Evented::onReadable($socket, function ($sock) use ($sk) {
 			Q_WebSocket::onData($sk, $sock);
@@ -225,6 +227,59 @@ class Q_WebSocket
 		}
 	}
 
+	/**
+	 * Write every byte of $data to a non-blocking socket, or fail.
+	 *
+	 * fwrite() on a non-blocking stream may write fewer bytes than it was
+	 * given. For a length-prefixed protocol that is not partial delivery, it
+	 * is corruption: the peer reads the length we declared, takes that many
+	 * bytes, and lands in the middle of our payload for every frame after it.
+	 * Nothing downstream can resynchronise, so a frame must go out whole.
+	 *
+	 * Q_WebServer::writeAll() solves the same problem by switching the socket
+	 * to blocking, which is right for a request/response worker that owns one
+	 * connection. It is wrong here: broadcast() walks every client in a single
+	 * process, so blocking on one unresponsive peer would hold up everyone
+	 * else's frames. Instead this waits for writability with a bounded
+	 * timeout and gives up rather than stalling the loop.
+	 *
+	 * @method writeFully
+	 * @static
+	 * @param {resource} $socket
+	 * @param {string} $data
+	 * @param {double} [$timeout=2.0] seconds to wait in total for buffer space
+	 * @return {boolean} false if the socket died or stayed full past $timeout
+	 */
+	static function writeFully($socket, $data, $timeout = 2.0)
+	{
+		$length = strlen($data);
+		if ($length === 0) return true;
+		if (!is_resource($socket)) return false;
+
+		$written = 0;
+		$deadline = microtime(true) + $timeout;
+		while ($written < $length) {
+			$n = @fwrite($socket, substr($data, $written));
+			if ($n === false) return false;
+			if ($n === 0) {
+				// Socket buffer is full. Wait for the peer to drain it.
+				$remaining = $deadline - microtime(true);
+				if ($remaining <= 0) return false;
+				$read = null;
+				$except = null;
+				$write = array($socket);
+				$sec = (int) $remaining;
+				$usec = (int) (($remaining - $sec) * 1000000);
+				if (@stream_select($read, $write, $except, $sec, $usec) <= 0) {
+					return false;
+				}
+				continue;
+			}
+			$written += $n;
+		}
+		return true;
+	}
+
 	static function encodeAndSend($socket, $opcode, $payload)
 	{
 		$len = strlen($payload);
@@ -237,7 +292,20 @@ class Q_WebSocket
 			$frame .= chr(127) . pack('J', $len);
 		}
 		$frame .= $payload;
-		@fwrite($socket, $frame);
+
+		if (self::writeFully($socket, $frame)) return true;
+
+		// The frame did not go out whole, so this connection's stream is no
+		// longer parseable by the peer. Closing it is the honest outcome: a
+		// client that sees the socket drop reconnects, while one left holding
+		// a desynchronised stream misreads everything we send afterwards.
+		$sk = (int) $socket;
+		if (isset(self::$clients[$sk])) {
+			self::disconnect($sk);
+		} else if (is_resource($socket)) {
+			@fclose($socket);
+		}
+		return false;
 	}
 
 	// ── Connection worker (process-per-socket) ──────
@@ -283,12 +351,16 @@ class Q_WebSocket
 
 		$json = json_encode($msg, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		$packet = pack('N', strlen($json)) . $json;
-		$written = @fwrite(self::$workers[$socketKey]['pipe'], $packet);
-		if ($written === false || $written === 0) {
+		// The packet is length-prefixed, so a short write desynchronises the
+		// pipe for good: the worker reads our declared length and consumes the
+		// start of whatever we send next. The old check caught a write of zero
+		// but counted a partial one as success, which is the case that
+		// actually corrupts the stream.
+		if (!self::writeFully(self::$workers[$socketKey]['pipe'], $packet)) {
 			self::cleanupWorker($socketKey);
 			self::spawnWorker($socketKey, $path);
 			if (isset(self::$workers[$socketKey])) {
-				@fwrite(self::$workers[$socketKey]['pipe'], $packet);
+				self::writeFully(self::$workers[$socketKey]['pipe'], $packet);
 			}
 		}
 	}
@@ -579,7 +651,7 @@ class Q_WebSocket
 		if (!isset(self::$workers[$socketKey])) return;
 		$json = json_encode(array('event' => '_disconnect', 'data' => array()));
 		$packet = pack('N', strlen($json)) . $json;
-		@fwrite(self::$workers[$socketKey]['pipe'], $packet);
+		self::writeFully(self::$workers[$socketKey]['pipe'], $packet);
 		self::cleanupWorker($socketKey);
 	}
 
@@ -800,7 +872,7 @@ class Q_WebSocket
 		if (!isset(self::$roomWorkers[$roomName])) return;
 		$json = json_encode($msg, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		$packet = pack('N', strlen($json)) . $json;
-		@fwrite(self::$roomWorkers[$roomName]['pipe'], $packet);
+		self::writeFully(self::$roomWorkers[$roomName]['pipe'], $packet);
 	}
 
 	/**
@@ -1006,7 +1078,7 @@ class Q_WebSocket
 			'result' => $result,
 		), JSON_UNESCAPED_SLASHES);
 		$packet = pack('N', strlen($response)) . $response;
-		@fwrite($pending['pipe'], $packet);
+		self::writeFully($pending['pipe'], $packet);
 		return true;
 	}
 }
