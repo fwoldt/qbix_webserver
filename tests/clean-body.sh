@@ -35,10 +35,24 @@ TMP="$(mktemp -d)"
 # Pick a port nothing else holds. Fixed ranges collide with whatever the
 # machine happens to run -- a container on the same number makes every
 # assertion here fail with an empty reply and no hint why.
+# ss is iproute2 and exists only on Linux. On macOS it is simply absent, so
+# the check silently passed for every candidate and the port was never really
+# tested -- which is the same as not checking. Pick whichever listener tool the
+# platform has.
+if command -v ss >/dev/null 2>&1; then
+    _listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
+elif command -v lsof >/dev/null 2>&1; then
+    _listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+elif command -v netstat >/dev/null 2>&1; then
+    _listening() { netstat -an 2>/dev/null | grep -q "[.:]$1 .*LISTEN"; }
+else
+    _listening() { return 1; }
+fi
+
 PORT=0
 for _ in $(seq 1 60); do
     _p=$(( 19000 + RANDOM % 900 ))
-    ss -ltn 2>/dev/null | grep -q ":$_p " || { PORT=$_p; break; }
+    _listening "$_p" || { PORT=$_p; break; }
 done
 [ "$PORT" = "0" ] && { echo "  no free port found"; exit 1; }
 trap 'rm -rf "$TMP"; pkill -f "qbixserver.*--port=$PORT" 2>/dev/null' EXIT
@@ -46,7 +60,23 @@ trap 'rm -rf "$TMP"; pkill -f "qbixserver.*--port=$PORT" 2>/dev/null' EXIT
 ok()  { PASS=$((PASS+1)); printf "  ok   %s\n" "$1"; }
 bad() { FAIL=$((FAIL+1)); printf "  FAIL %s\n" "$1"; }
 
-command -v "$PHP" >/dev/null || { echo "no php"; exit 1; }
+# The macOS and Windows runners carry no system PHP, and the matrix job that
+# runs this test does not install one -- but the build it has just finished
+# produces a static php beside the server binary. Falling back to that keeps
+# the test honest on every platform instead of failing the whole job, and a
+# skipped release is what that failure actually costs.
+if ! command -v "$PHP" >/dev/null 2>&1; then
+    for _candidate in "$WS"/php-* "$WS"/php ./php-* ./php; do
+        [ -x "$_candidate" ] || continue
+        case "$_candidate" in *.sh|*.md|*.txt) continue;; esac
+        PHP="$_candidate"
+        break
+    done
+fi
+command -v "$PHP" >/dev/null 2>&1 || {
+    echo "no php: set PHP=/path/to/php, or build one alongside the server"
+    exit 1
+}
 
 # Prefer the built binary: from source the wrapper is never handed a
 # context and the notice cannot appear.
