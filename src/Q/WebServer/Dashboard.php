@@ -408,6 +408,15 @@ class Q_WebServer_Dashboard
 
 	static function renderHtml($parsed)
 	{
+		// Product name, configurable, default "Qbix Server". The heredoc
+		// below interpolates $brand for the chrome a person sees; $brandJs
+		// is the same value JSON-encoded for the one place the script
+		// rebuilds the subtitle. htmlspecialchars because it is operator
+		// input reaching HTML, trusted or not.
+		$brand = class_exists('Q_WebServer', false)
+			? Q_WebServer::brand() : 'Qbix Server';
+		$brand = htmlspecialchars($brand, ENT_QUOTES, 'UTF-8');
+		$brandJs = json_encode($brand);
 		$stats = json_encode(self::getStats());
 		$recent = json_encode(array_reverse(array_slice(self::$recentRequests, -50)));
 		$host = $parsed['headers']['host'] ?? 'localhost';
@@ -428,13 +437,14 @@ class Q_WebServer_Dashboard
 		}
 
 		$tokenParam = $wsToken ? "?token=$wsToken" : '';
-		$wsUrl = "ws://$host/Q/ws$tokenParam";
+		// Scheme and host are chosen in the browser from location, below --
+		// a hardcoded ws:// is blocked as mixed content on an https page.
 		$baseUrl = "http://$host";
 		return <<<HTML
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>Qbix Server Dashboard</title>
+<title>$brand Dashboard</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f1117;--sfc:#1a1d27;--sfc2:#222533;--bdr:#2a2d3a;--txt:#e1e4ed;--dim:#6b7089;
@@ -489,7 +499,7 @@ transition:background .1s}
 .room .n{font-family:'SF Mono',monospace;color:var(--pur)}
 .log-wrap{max-height:50vh;overflow-y:auto;display:flex;flex-direction:column-reverse}
 </style></head><body>
-<h1><span class="dot"></span>Qbix Server</h1>
+<h1><span class="dot"></span>$brand</h1>
 <div class="sub" id="sub"></div>
 
 <div class="grid">
@@ -716,7 +726,8 @@ U(S);R.forEach(A);
 setInterval(function(){tickUp();tickSpark()},1000);
 tickUp();
 
-var ws;function C(){ws=new WebSocket('$wsUrl');
+var wsUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/Q/ws$tokenParam';
+var ws;function C(){ws=new WebSocket(wsUrl);
 ws.onopen=function(){wsLive=true;tickUp()};
 ws.onmessage=function(e){var m=JSON.parse(e.data);if(m.type==='request'){A(m.entry);U(m.stats)}else if(m.type==='heartbeat'){U(m.stats)}};
 ws.onclose=function(){wsLive=false;tickUp();setTimeout(C,2000)}}

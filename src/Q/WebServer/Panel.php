@@ -2811,11 +2811,11 @@ class Q_WebServer_Panel
 
 	static function panelHtml($host, $wsUrl)
 	{
-		return <<<'HTML'
+		$html = <<<'HTML'
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>Qbix Control Panel</title>
+<title>%%BRAND%% Control Panel</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0a0b14;--sfc:rgba(22,24,40,.7);--sfc-solid:#161828;--bdr:rgba(255,255,255,.06);
@@ -4452,5 +4452,9 @@ async function fwDownload(framework) {
 checkAuthAndInit();
 </script></body></html>
 HTML;
+		$brand = class_exists('Q_WebServer', false)
+			? Q_WebServer::brand() : 'Qbix';
+		return str_replace('%%BRAND%%',
+			htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'), $html);
 	}
 }

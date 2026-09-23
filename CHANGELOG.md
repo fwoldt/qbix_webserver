@@ -62,8 +62,26 @@ edited down to what a reader actually needs.
 
 ## Unreleased
 
+### Added
+
+- The product name shown across the served `/Q/` views is now a parameter,
+  `Q.webserver.brand`, default `Qbix Server`. `Q_WebServer::brand()` is the one
+  accessor; the dashboard heading and title, the docs chrome, the panel title
+  and the manifest's human-readable fields all ask it rather than hardcoding a
+  name. A fork can name itself without editing a dozen views or diverging from
+  upstream at every occurrence. The wire identifiers — the `.well-known/qbix`
+  path, `qbix.json`, the `qbix` framework key, `isQbixApp`, the provider name —
+  are protocol, not brand, and are deliberately left as they are: renaming them
+  would break federation and app detection for a cosmetic gain.
+
 ### Fixed
 
+- **The dashboard's live WebSocket never connected over HTTPS.** It hardcoded
+  `ws://`, and a browser blocks an insecure socket opened from an `https://`
+  page as mixed content — so the status sat on a red "connecting" that never
+  resolved, and the page only updated on reload. The scheme and host are now
+  taken from `location` in the browser, which is authoritative for both, so it
+  is `wss://` on a secure page and the port is always right.
 - The HTTP/2 route did not answer the server's own URLs. `/Q/dashboard`,
   `/Q/health` and `/Q/metrics` were handled on HTTP/1.1 only, so every browser
   — which negotiates HTTP/2 — got the application's 404 from the dashboard

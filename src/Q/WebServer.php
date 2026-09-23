@@ -5436,7 +5436,41 @@ HTML;
 	 * escaped. Truncating keeps an attacker-chosen prefix, and escaping invents
 	 * a value the caller never asked to send; omitting it is the only option
 	 * that states nothing false.
+	 */
+
+	/**
+	 * The product name shown in the served views -- the dashboard heading and
+	 * title, the docs chrome, the boot banner, the manifest.
 	 *
+	 * A parameter with a default, not a literal, so a fork can carry its own
+	 * name without editing a dozen views and without diverging from upstream
+	 * everywhere the string appears. Upstream keeps "Qbix Server"; this branch
+	 * sets Q.webserver.brand to "Exponential Velocity" in its config.
+	 *
+	 * This renames only the *product*. The wire identifiers -- the
+	 * .well-known/qbix path, qbix.json, the "qbix" framework key, isQbixApp --
+	 * are protocol, not brand, and are left exactly as they are: renaming them
+	 * would break federation and app detection for a cosmetic gain, the same
+	 * distinction the rest of this codebase draws between a name and a symbol.
+	 *
+	 * @method brand
+	 * @static
+	 * @return {string}
+	 */
+	static $brand = null;
+	static function brand()
+	{
+		if (self::$brand === null) {
+			$v = class_exists('Q_Config', false)
+				? Q_Config::get('Q', 'webserver', 'brand', 'Qbix Server')
+				: 'Qbix Server';
+			$v = is_string($v) ? trim($v) : '';
+			self::$brand = ($v === '') ? 'Qbix Server' : $v;
+		}
+		return self::$brand;
+	}
+
+	/**
 	 * @method headerLines
 	 * @static
 	 * @param {array} $headers name => value
@@ -5544,7 +5578,7 @@ HTML;
 			. "<div class=\"t\">{$title}</div>"
 			. "<div class=\"m\">{$msg}</div>"
 			. '<div class="b"><a href="/">← Back to home</a></div>'
-			. '<div class="f">Qbix Server</div>'
+			. '<div class="f">' . htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8') . '</div>'
 			. '</div></body></html>';
 	}
 
@@ -5560,7 +5594,7 @@ HTML;
 	private static function renderDocsViewer()
 	{
 		return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Qbix Server — Documentation</title>
+<title>' . htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8') . ' — Documentation</title>
 <script src="/Q/docs/marked.min.js"></script>
 <script>if(typeof marked==="undefined"){marked={parse:function(s){
 s=s.replace(/^### (.+)$/gm,"<h3>$1</h3>").replace(/^## (.+)$/gm,"<h2>$1</h2>").replace(/^# (.+)$/gm,"<h1>$1</h1>");
@@ -5598,7 +5632,7 @@ main hr{border:none;border-top:1px solid #30363d;margin:24px 0}
 @media(max-width:700px){nav{display:none}main{padding:20px 16px}}
 </style></head><body>
 <nav>
-<a class="logo" href="/Q/docs">⚡ Qbix Server</a>
+<a class="logo" href="/Q/docs">⚡ ' . htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8') . '</a>
 <div id="nav-links"></div>
 <div style="margin-top:24px;padding-top:16px;border-top:1px solid #30363d">
 <a href="/Q/dashboard">Dashboard</a>
@@ -6450,7 +6484,7 @@ init();
 		$host = $parsed['headers']['host'] ?? 'localhost';
 		$identity = Q_WebServer_Identity::serverIdentity();
 		$info = array(
-			'server' => 'Qbix Server',
+			'server' => self::brand(),
 			'version' => defined('QBIX_SERVER_VERSION') ? QBIX_SERVER_VERSION : '1.0.0',
 			'fingerprint' => $identity ? $identity['fingerprint'] : null,
 			'endpoints' => array(
@@ -6495,9 +6529,9 @@ init();
 		$spec = array(
 			'openapi' => '3.1.0',
 			'info' => array(
-				'title' => 'Qbix Server API',
+				'title' => self::brand() . ' API',
 				'version' => defined('QBIX_SERVER_VERSION') ? QBIX_SERVER_VERSION : '1.0.0',
-				'description' => 'Auto-generated API spec for this Qbix Server instance.',
+				'description' => 'Auto-generated API spec for this ' . self::brand() . ' instance.',
 				'contact' => array('url' => 'https://github.com/Qbix/Server'),
 			),
 			'servers' => array(
@@ -6704,8 +6738,8 @@ init();
 		$manifest = array(
 			'schema_version' => '2025-01-01',
 			'name' => 'qbix-server',
-			'display_name' => 'Qbix Server on ' . $host,
-			'description' => 'Qbix Server instance — PHP web server with WebSocket, rooms, and federation.',
+			'display_name' => self::brand() . ' on ' . $host,
+			'description' => self::brand() . ' instance — PHP web server with WebSocket, rooms, and federation.',
 			'url' => 'https://' . $host,
 			'provider' => array(
 				'name' => 'Qbix',
