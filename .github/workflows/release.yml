@@ -255,6 +255,46 @@ jobs:
         run: |
           ./spc build "${{ matrix.extensions }}" --build-cli --build-micro --with-libs=libjpeg,libwebp,freetype
 
+      # spc extracts php-src with php-sdk-binary-tools\bin\7za.exe and that
+      # file is not always there. When it is missing the extraction fails with
+      # "The system cannot find the path specified", php_version.h is never
+      # written, and spc dies several steps later inside preg_match() on the
+      # false it got back from reading it -- a stack trace that says nothing
+      # about the archiver. Its own doctor reports "7za.exe not found" much
+      # earlier, in a step allowed to continue on error, so the warning was
+      # there all along and nothing acted on it.
+      #
+      # The runner ships 7-Zip. Putting a copy where spc looks costs nothing
+      # and removes the whole failure mode.
+      - name: Make sure spc has an archiver (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sdkBin = "php-sdk-binary-tools\bin"
+          if (-not (Test-Path $sdkBin)) { New-Item -ItemType Directory -Force -Path $sdkBin | Out-Null }
+          $target = Join-Path $sdkBin "7za.exe"
+          if (Test-Path $target) {
+            Write-Host "7za.exe already present"
+          } else {
+            $candidates = @(
+              "C:\Program Files\7-Zip\7z.exe",
+              "C:\Program Files (x86)\7-Zip\7z.exe",
+              "C:\ProgramData\chocolatey\bin\7z.exe"
+            )
+            $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($found) {
+              Copy-Item $found $target
+              Write-Host "copied $found to $target"
+            } else {
+              choco install 7zip.commandline -y --no-progress 2>&1 | Out-Null
+              $z = Get-Command 7za.exe -ErrorAction SilentlyContinue
+              if (-not $z) { $z = Get-Command 7z.exe -ErrorAction SilentlyContinue }
+              if ($z) { Copy-Item $z.Source $target; Write-Host "installed and copied $($z.Source)" }
+              else { Write-Host "::error::no archiver available for spc"; exit 1 }
+            }
+          }
+          Get-Item $target | Select-Object Name, Length
+
       - name: Build static PHP CLI + phpmicro (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
