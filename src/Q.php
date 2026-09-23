@@ -779,7 +779,7 @@ class Q_Socket
 			'cmd' => 'rpc', 'socketId' => $this->id,
 			'method' => $method, 'data' => $data, 'rpcId' => $rpcId,
 		), JSON_UNESCAPED_SLASHES) . "\n";
-		@fwrite(self::$_pipe, $cmd);
+		self::_writeAll(self::$_pipe, $cmd);
 
 		// Block reading pipe until we get our RPC response (timeout 5s)
 		$deadline = microtime(true) + 5.0;
@@ -826,6 +826,38 @@ class Q_Socket
 	/** @internal */ static $_rpcCounter = 0;
 	/** @internal */ static $_messageQueue = array();
 
+	/**
+	 * Write every byte to the IPC pipe, or report that it could not.
+	 *
+	 * These commands are newline-delimited JSON, so a short write is not a few
+	 * lost bytes: it cuts a line in half, and the reader joins the remainder to
+	 * whatever is written next. flush() made that worse by clearing the buffer
+	 * immediately afterwards, so the part that never went out was discarded
+	 * without a word.
+	 *
+	 * Written out rather than handed to Q_WebServer::writeAll(), which leaves
+	 * the stream non-blocking when it finishes. That is right for the event
+	 * loop it belongs to and wrong for a pipe whose owner may be relying on it
+	 * staying as it was; this leaves the mode exactly as it found it.
+	 *
+	 * @internal
+	 * @param {resource} $pipe
+	 * @param {string} $data
+	 * @return {boolean} false if the pipe died before it was all out
+	 */
+	static function _writeAll($pipe, $data)
+	{
+		if (!is_resource($pipe)) return false;
+		$length = strlen($data);
+		$written = 0;
+		while ($written < $length) {
+			$n = @fwrite($pipe, substr($data, $written));
+			if ($n === false or $n === 0) return false;
+			$written += $n;
+		}
+		return true;
+	}
+
 	/** @internal */
 	static function _cmd($cmd)
 	{
@@ -844,7 +876,11 @@ class Q_Socket
 		foreach (self::$_buffer as $cmd) {
 			$out .= json_encode($cmd, JSON_UNESCAPED_SLASHES) . "\n";
 		}
-		@fwrite(self::$_pipe, $out);
+		// The buffer is cleared either way: a pipe that cannot take these is
+		// gone, and holding them would grow without bound for a peer that is
+		// never coming back. What changes is that a partial write no longer
+		// passes for a whole one.
+		self::_writeAll(self::$_pipe, $out);
 		self::$_buffer = array();
 	}
 }

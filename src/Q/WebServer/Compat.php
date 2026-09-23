@@ -826,6 +826,49 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Write a session's data to its file, completely or not at all silently.
+	 *
+	 * Every caller truncates the file first, so the old contents are already
+	 * gone by the time this runs. A short write therefore does not leave the
+	 * previous session intact -- it leaves a cut-off one, which unserialize
+	 * rejects on the next request, and the visitor is logged out with nothing
+	 * in any log to say why.
+	 *
+	 * fwrite on a regular file usually places everything, which is exactly why
+	 * the count was never read. Usually is not always: a full disk or a quota
+	 * makes this real, and losing a session is the visible consequence.
+	 *
+	 * @method writeSessionData
+	 * @static
+	 * @param {resource} $fp
+	 * @param {string} $data
+	 * @return {boolean}
+	 */
+	static function writeSessionData($fp, $data)
+	{
+		if (!is_resource($fp)) return false;
+		$length = strlen($data);
+		$written = 0;
+		while ($written < $length) {
+			$n = @fwrite($fp, substr($data, $written));
+			if ($n === false or $n === 0) {
+				if (class_exists('Q_WebServer_Log', false)
+					and method_exists('Q_WebServer_Log', 'error')) {
+					Q_WebServer_Log::error(
+						'session write incomplete: ' . $written . ' of ' . $length
+						. ' bytes; the session file is now truncated');
+				} else {
+					error_log('qbix: session write incomplete, ' . $written
+						. ' of ' . $length . ' bytes');
+				}
+				return false;
+			}
+			$written += $n;
+		}
+		return true;
+	}
+
+	/**
 	 * Get cache stats (for dashboard/debugging).
 	 * @return array
 	 */
@@ -1109,7 +1152,7 @@ class Q_WebServer_Compat
 			$data = self::serializeSession($_SESSION);
 			ftruncate(self::$sessionFp, 0);
 			rewind(self::$sessionFp);
-			fwrite(self::$sessionFp, $data);
+			self::writeSessionData(self::$sessionFp, $data);
 			fflush(self::$sessionFp);
 			flock(self::$sessionFp, LOCK_UN);
 			fclose(self::$sessionFp);
@@ -1135,7 +1178,7 @@ class Q_WebServer_Compat
 			$data = self::serializeSession($_SESSION);
 			ftruncate(self::$sessionFp, 0);
 			rewind(self::$sessionFp);
-			fwrite(self::$sessionFp, $data);
+			self::writeSessionData(self::$sessionFp, $data);
 			fflush(self::$sessionFp);
 			flock(self::$sessionFp, LOCK_UN);
 			fclose(self::$sessionFp);
@@ -1156,7 +1199,7 @@ class Q_WebServer_Compat
 		if (self::$sessionFp) {
 			flock(self::$sessionFp, LOCK_EX);
 			$data = self::serializeSession($_SESSION);
-			fwrite(self::$sessionFp, $data);
+			self::writeSessionData(self::$sessionFp, $data);
 			fflush(self::$sessionFp);
 		}
 
