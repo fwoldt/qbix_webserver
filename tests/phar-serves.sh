@@ -22,6 +22,21 @@ PHAR="${1:-bin/qbixserver.phar}"
 PHP="${PHP:-php}"
 PORT="${PORT:-19777}"
 
+# Several systems install a versioned interpreter and no plain "php": OpenBSD
+# gives php-8.3, pkgsrc gives php83. Without this the script reported "no php"
+# on a platform that plainly has one, which reads as the platform being unable
+# to run the server rather than as this script not having looked properly.
+if ! command -v "$PHP" >/dev/null 2>&1; then
+    for _candidate in php8.4 php8.3 php8.2 php8.1 \
+                      php-8.4 php-8.3 php-8.2 php-8.1 \
+                      php84 php83 php82 php81; do
+        if command -v "$_candidate" >/dev/null 2>&1; then
+            PHP="$_candidate"
+            break
+        fi
+    done
+fi
+
 echo "=============================================="
 echo " Exponential Velocity - does the phar serve?"
 echo "=============================================="

@@ -79,7 +79,13 @@ jobs:
             # which is certainly in pkgsrc. That reads like a naming problem
             # and is not one.
             install: |
-              export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/$(uname -r | cut -d_ -f1)/All/"
+              # A quarterly branch rather than the release directory. The
+              # latter keeps moving, so its php83 asked for a libxml2 newer
+              # than anything beside it and pkg_add stopped on a dependency it
+              # could not satisfy. A quarterly set is frozen and therefore
+              # agrees with itself. Move it forward deliberately; the release
+              # directory will not do it for you, it will only break.
+              export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/10.0_2026Q2/All/"
               echo "PKG_PATH=$PKG_PATH"
               sudo -E /usr/sbin/pkg_add php83 curl || true
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
