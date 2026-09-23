@@ -54,6 +54,7 @@ You can also package your entire app — code, assets, SQLite database — into 
 |---|---|---|
 | 🏎️ | [Why Not php-fpm?](docs/why.md) | COW memory model, comparison with Swoole and FrankenPHP |
 | 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Cache-Tree, X-Accel-Redirect, ETag |
+| 🛡️ | [Security](docs/security.md) | What is refused and why: document-root containment, request framing, HTTP/2 frame validation, header injection |
 | 🌐 | [HTTP](docs/http.md) | Fork-per-request mode, request lifecycle |
 | 🔌 | [WebSocket & Rooms](docs/websocket.md) | Process per connection, rooms, Socket.IO, SSE, chat example |
 | 🛤️ | [Routing](docs/routing.md) | Clean URLs, .htaccess, DirectoryIndex |
