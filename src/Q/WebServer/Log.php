@@ -7,7 +7,8 @@
  * Access and error logging with buffered writes, daily rotation,
  * and automatic gzip archiving.
  *
- * Writes access.log (combined format + response time) and error.log.
+ * Writes access.log (combined format + response time) and error.log,
+ * or whatever accessName/errorName call them.
  * Buffered: log lines accumulate in memory and flush on a timer or
  * when the buffer is full — one write() syscall per flush instead of
  * one per request. Daily rotation at midnight. Logs older than
@@ -19,6 +20,8 @@
  *     "dir":              "logs",
  *     "access":           true,
  *     "error":            true,
+ *     "accessName":       "access.log",
+ *     "errorName":        "error.log",
  *     "format":           "qbix",
  *     "bufferSize":       65536,
  *     "flushInterval":    1,
@@ -30,6 +33,13 @@
  *   bufferSize: 0 = unbuffered (flush every line), default 64KB.
  *   flushInterval: seconds between timer flushes, default 1.
  *   Set access/error to false to disable that log entirely.
+ *   accessName/errorName rename the two files -- for one directory
+ *   collecting the logs of several servers, or to match what an
+ *   existing log shipper already watches. A bare filename, no
+ *   directory part: anything else falls back to the default, so a
+ *   name out of config cannot write outside `dir`. Rotation keeps
+ *   the name and inserts the date before the .log, so "site.log"
+ *   rotates to "site.2000-10-10.log".
  *   format: "qbix" (default), "combined", "common", or a format string.
  *
  * Format strings take the Apache tokens that make sense here:
@@ -58,6 +68,8 @@ class Q_WebServer_Log
 	static $errorFp = null;
 	static $accessPath = null;
 	static $errorPath = null;
+	static $accessName = 'access.log';
+	static $errorName = 'error.log';
 	static $dir = null;
 	static $maxSize = 52428800;       // 50MB
 	static $archiveAfterDays = 2;
@@ -105,12 +117,19 @@ class Q_WebServer_Log
 
 		self::$currentDate = date('Y-m-d');
 
+		self::$accessName = self::sanitizeName(
+			Q::ifset($config, 'accessName', null), 'access.log'
+		);
+		self::$errorName = self::sanitizeName(
+			Q::ifset($config, 'errorName', null), 'error.log'
+		);
+
 		if ($accessEnabled) {
-			self::$accessPath = $dir . '/access.log';
+			self::$accessPath = $dir . '/' . self::$accessName;
 			self::$accessFp = fopen(self::$accessPath, 'a');
 		}
 		if ($errorEnabled) {
-			self::$errorPath = $dir . '/error.log';
+			self::$errorPath = $dir . '/' . self::$errorName;
 			self::$errorFp = fopen(self::$errorPath, 'a');
 		}
 
@@ -318,12 +337,12 @@ class Q_WebServer_Log
 			self::$currentDate = $today;
 			if (self::$accessFp) {
 				self::rotateTo(self::$accessPath, self::$accessFp,
-					self::$dir . "/access.$yesterday.log");
+					self::rotatedPath(self::$accessName, $yesterday));
 				self::$accessFp = fopen(self::$accessPath, 'a');
 			}
 			if (self::$errorFp) {
 				self::rotateTo(self::$errorPath, self::$errorFp,
-					self::$dir . "/error.$yesterday.log");
+					self::rotatedPath(self::$errorName, $yesterday));
 				self::$errorFp = fopen(self::$errorPath, 'a');
 			}
 			self::archiveAndPrune();
@@ -334,15 +353,57 @@ class Q_WebServer_Log
 		if (self::$accessPath && self::exceedsMax(self::$accessPath)) {
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$accessPath, self::$accessFp,
-				self::$dir . "/access.$stamp.log");
+				self::rotatedPath(self::$accessName, $stamp));
 			self::$accessFp = fopen(self::$accessPath, 'a');
 		}
 		if (self::$errorPath && self::exceedsMax(self::$errorPath)) {
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$errorPath, self::$errorFp,
-				self::$dir . "/error.$stamp.log");
+				self::rotatedPath(self::$errorName, $stamp));
 			self::$errorFp = fopen(self::$errorPath, 'a');
 		}
+	}
+
+	/**
+	 * Where a log rotates to: the date goes before the .log, so the
+	 * rotated file sorts next to the live one and still ends in .log,
+	 * which is what archiveAndPrune() globs for.
+	 *
+	 * @method rotatedPath
+	 * @static
+	 * @private
+	 * @param {string} $name The live log's filename
+	 * @param {string} $stamp A date, or a date and time for a mid-day rotation
+	 * @return {string}
+	 */
+	private static function rotatedPath($name, $stamp)
+	{
+		$stem = substr($name, -4) === '.log' ? substr($name, 0, -4) : $name;
+		return self::$dir . "/$stem.$stamp.log";
+	}
+
+	/**
+	 * A log filename out of config, or the default when it is not one.
+	 *
+	 * Only a bare filename is accepted -- no directory part, and not
+	 * . or .. -- so a name out of config writes inside `dir` and
+	 * nowhere else.
+	 *
+	 * @method sanitizeName
+	 * @static
+	 * @private
+	 * @param {string} $name The configured name, or null
+	 * @param {string} $default Used when $name is not a bare filename
+	 * @return {string}
+	 */
+	private static function sanitizeName($name, $default)
+	{
+		if (!is_string($name)) return $default;
+		$name = trim($name);
+		if ($name === '' or $name === '.' or $name === '..') return $default;
+		if (strpbrk($name, "/\\") !== false) return $default;
+		if (strpos($name, "\0") !== false) return $default;
+		return $name;
 	}
 
 	private static function rotateTo($currentPath, &$fp, $targetPath)
@@ -375,7 +436,7 @@ class Q_WebServer_Log
 
 		foreach (glob(self::$dir . '/*.log') as $file) {
 			$base = basename($file);
-			if ($base === 'access.log' || $base === 'error.log') continue;
+			if ($base === self::$accessName || $base === self::$errorName) continue;
 			$mtime = filemtime($file);
 			if ($mtime < $deleteCutoff) { @unlink($file); continue; }
 			if ($mtime < $archiveCutoff && function_exists('gzopen')) {

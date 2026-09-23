@@ -2633,8 +2633,19 @@ class Q_WebServer_Panel
 		$lines = max(1, min($lines, 500));
 		$type = $params['type'] ?? 'access'; // access or error
 
-		$logDir = Q_Config::get('Q', 'webserver', 'log', 'dir', 'logs');
-		$file = $logDir . '/' . ($type === 'error' ? 'error.log' : 'access.log');
+		// Ask the log itself where it writes: it resolved `dir` against
+		// APP_DIR at startup and knows the configured filenames, neither
+		// of which can be reconstructed from the config key alone.
+		$file = $type === 'error'
+			? Q_WebServer_Log::$errorPath
+			: Q_WebServer_Log::$accessPath;
+		if (!$file) {
+			$logDir = Q_Config::get('Q', 'webserver', 'log', 'dir', 'logs');
+			$name = $type === 'error'
+				? Q_WebServer_Log::$errorName
+				: Q_WebServer_Log::$accessName;
+			$file = $logDir . '/' . $name;
+		}
 
 		if (!is_file($file)) {
 			return ['lines' => [], 'file' => $file, 'exists' => false];
