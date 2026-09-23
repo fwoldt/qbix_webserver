@@ -838,8 +838,23 @@ class Q_WebServer
 			return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
 		}
 
+		// The same two refusals HTTP/1.1 makes, which this route did not.
+		//
+		// A browser speaks HTTP/2 by default, so this is the ordinary path and
+		// the other one is the exception -- yet /settings/site.ini answered 403
+		// over HTTP/1.1 and 200 with the file over HTTP/2, and so did
+		// /.git/config. Anything the allow-list and the blocked list were
+		// protecting was protected only from clients old enough to ask for it
+		// in the older protocol.
+		if (self::isBlocked($decoded)) {
+			return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
+		}
+
 		if (is_file($fsPath)) {
 			$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
+			if ($ext !== 'php' and !in_array($ext, self::$allowedExtensions)) {
+				return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
+			}
 			if ($ext !== 'php') {
 				$built = self::buildFileResponse(
 					$fsPath, $ext, $request['method'], $request['headers']
@@ -3876,9 +3891,31 @@ WORKER;
 	static function isBlocked($urlPath)
 	{
 		// Core blocked directories (server internals)
-		$blocked = array('/config/', '/classes/', '/handlers/', '/scripts/');
+		//
+		// /settings/ carries an application's configuration, including the
+		// credentials it connects with. Not every layout puts it out of reach:
+		// where the document root is the project root -- which is how an
+		// Exponential installation is served -- it is simply a directory below
+		// the root like any other.
+		//
+		// /var/ is deliberately absent. An eZ installation serves its
+		// stylesheets, scripts and images from var/<site>/cache and
+		// var/<site>/storage, so blocking it would take the site down. Logs
+		// under it are covered instead by 'log' no longer being a served
+		// extension.
+		$blocked = array('/config/', '/classes/', '/handlers/', '/scripts/',
+			'/settings/');
 		foreach ($blocked as $prefix) {
 			if (strpos($urlPath, $prefix) === 0) return true;
+		}
+
+		// Files that describe the installation rather than serve it. json has
+		// to stay a served extension -- manifests and APIs use it -- so these
+		// are named rather than covered by type.
+		$blockedFiles = array('/composer.json', '/composer.lock',
+			'/package-lock.json', '/yarn.lock', '/Dockerfile', '/Makefile');
+		foreach ($blockedFiles as $file) {
+			if (strcasecmp($urlPath, $file) === 0) return true;
 		}
 
 		// Dotfiles/dotdirs (except /.well-known/)
@@ -5980,7 +6017,13 @@ init();
 	static $uploadTempFiles = array();
 
 	static $allowedExtensions = array(
-		'html','htm','txt','md','json','xml','yaml','yml','csv','tsv','log',
+		// 'log' was here. A log file is never something a site means to
+		// serve, and a document root that is also the project root puts
+		// var/log/error.log one request away -- ninety kilobytes of paths,
+		// queries and stack traces. Nothing references a .log, and an
+		// installation that really wants to serve one can add it back through
+		// Q.webserver.extensions.
+		'html','htm','txt','md','json','xml','yaml','yml','csv','tsv',
 		'css','js','mjs','map','wasm',
 		'png','gif','webp','jpg','jpeg','svg','bmp','ico','avif',
 		'woff','woff2','ttf','otf',
