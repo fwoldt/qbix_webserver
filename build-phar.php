@@ -51,6 +51,27 @@ if (is_dir($webDir)) {
 	}
 }
 
+// Stamp the build: the short commit and the date it was built. Inside a phar
+// there is no git to ask at runtime, so it is recorded now, at build time, and
+// bundled. From source the server falls back to asking git directly.
+$sha = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+	. ' rev-parse --short HEAD 2>/dev/null'));
+$dirty = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+	. ' status --porcelain 2>/dev/null'));
+if ($sha === '') $sha = 'unknown';
+if ($dirty !== '') $sha .= '-dirty';
+$buildDate = gmdate('Y-m-d H:i:s') . ' UTC';
+$buildPhp = "<?php\n"
+	. "if (!defined('QBIX_SERVER_BUILD')) define('QBIX_SERVER_BUILD', " . var_export($sha, true) . ");\n"
+	. "if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', " . var_export($buildDate, true) . ");\n";
+$phar->addFromString('qbix-build.php', $buildPhp);
+// Also on disk beside qbixserver.php: the server is often run as a plain
+// file (a Composer vendor copy), not through the phar stub, and then the
+// bundled copy is never reached. Written both places, read whichever
+// applies.
+file_put_contents(__DIR__ . '/qbix-build.php', $buildPhp);
+echo "Stamped build: $sha ($buildDate)\n";
+
 $fileCount = $phar->count();
 
 // Minimal stub
@@ -58,6 +79,7 @@ $stub = <<<'STUB'
 #!/usr/bin/env php
 <?php
 Phar::mapPhar('qbixserver.phar');
+@include 'phar://qbixserver.phar/qbix-build.php';
 require 'phar://qbixserver.phar/qbixserver.php';
 __HALT_COMPILER();
 STUB;

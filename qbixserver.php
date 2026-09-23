@@ -21,6 +21,49 @@
  */
 
 define('QBIX_SERVER_VERSION', '1.5.0');
+
+// A stamp written to disk beside this file by build-phar.php, if present.
+// This is what a vendored copy -- run as a plain file, not the phar --
+// reads. It must come before the git fallback below, because a vendor
+// directory is often itself a checkout sitting on an unrelated commit,
+// and asking git there reports that commit, not the build.
+if (!defined('QBIX_SERVER_BUILD') && is_file(__DIR__ . '/qbix-build.php')) {
+	@include __DIR__ . '/qbix-build.php';
+}
+
+// The build identifier. In a phar the stub already defined these from the
+// stamp written at build time; running from source there is no stamp, so ask
+// git directly, and fall back to 'source' where even that is unavailable.
+if (!defined('QBIX_SERVER_BUILD')) {
+	$__sha = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+		. ' rev-parse --short HEAD 2>/dev/null'));
+	if ($__sha !== '') {
+		$__dirty = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+			. ' status --porcelain 2>/dev/null'));
+		if ($__dirty !== '') $__sha .= '-dirty';
+	}
+	define('QBIX_SERVER_BUILD', $__sha !== '' ? $__sha : 'source');
+	unset($__sha);
+}
+if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', gmdate('Y-m-d H:i:s') . ' UTC');
+
+/**
+ * Version and build as one string, e.g. "1.5.0+4002cee". The build is semver
+ * build metadata after a plus, which every version comparator ignores, so it
+ * is safe to show everywhere without changing how versions order.
+ */
+if (!function_exists('qbix_version_label')) {
+	function qbix_version_label($withDate = false)
+	{
+		$v = QBIX_SERVER_VERSION;
+		$b = defined('QBIX_SERVER_BUILD') ? QBIX_SERVER_BUILD : '';
+		if ($b !== '' && $b !== 'source') $v .= '+' . $b;
+		if ($withDate && defined('QBIX_SERVER_BUILD_DATE') && QBIX_SERVER_BUILD_DATE !== '') {
+			$v .= ' (' . QBIX_SERVER_BUILD_DATE . ')';
+		}
+		return $v;
+	}
+}
 define('QBIX_SERVER_DIR', __DIR__);
 
 // ── Parse CLI args ──────────────────────────────────
@@ -55,7 +98,7 @@ foreach ($argv as $i => $arg) {
 	if ($i === 0) continue;
 	if ($arg === '--help' || $arg === '-h') {
 		$me = basename($argv[0]);
-		echo "Qbix Server v" . QBIX_SERVER_VERSION . "\n\n";
+		echo "Qbix Server v" . qbix_version_label(true) . "\n\n";
 		echo "Usage: $me [options]\n\n";
 		echo "Options:\n";
 		echo "  --root=DIR       Document root (default: ./web)\n";
@@ -93,7 +136,7 @@ foreach ($argv as $i => $arg) {
 		exit(0);
 	}
 	if ($arg === '--version' || $arg === '-v') {
-		echo "Qbix Server v" . QBIX_SERVER_VERSION . "\n";
+		echo "Qbix Server v" . qbix_version_label(true) . "\n";
 		exit(0);
 	}
 	if ($arg === '-t') {
@@ -925,7 +968,7 @@ if (!empty($opts['signal'])) {
 // ── Config test (-t) ────────────────────────────────
 
 if (!empty($opts['test'])) {
-	echo "Qbix Server v" . QBIX_SERVER_VERSION . "\n";
+	echo "Qbix Server v" . qbix_version_label(true) . "\n";
 	echo "Config: OK\n";
 	echo "  Root:       $webDir\n";
 	echo "  Host:       {$opts['host']}\n";
@@ -1300,7 +1343,7 @@ if ($opts['workers'] > 0) {
 }
 
 fwrite(STDERR, "  ┌" . str_repeat('─', $W) . "┐\n");
-fwrite(STDERR, "  │" . str_pad("  Qbix Server v" . QBIX_SERVER_VERSION, $W) . "│\n");
+fwrite(STDERR, "  │" . str_pad("  Qbix Server v" . qbix_version_label(), $W) . "│\n");
 fwrite(STDERR, "  ├" . str_repeat('─', $W) . "┤\n");
 $httpLine = "  http://{$opts['host']}:{$opts['port']}";
 fwrite(STDERR, "  │" . str_pad($httpLine, $W) . "│\n");

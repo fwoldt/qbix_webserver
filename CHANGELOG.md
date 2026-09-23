@@ -64,6 +64,14 @@ edited down to what a reader actually needs.
 
 ### Added
 
+- The served views now carry a footer, and the version display carries the
+  build: the short commit and the datetime the phar was built, e.g.
+  `Exponential Velocity v1.5.0+a34150c (2026-09-23 17:16 UTC)`. `build-phar.php`
+  stamps both into the phar and a file on disk beside `qbixserver.php`, because
+  the server is often run as a plain vendored file rather than through the phar
+  stub — and a vendor directory is frequently its own checkout on an unrelated
+  commit, so asking git at runtime reported the wrong thing. The stamp is
+  semver build metadata after a `+`, which every version comparator ignores.
 - The product name shown across the served `/Q/` views is now a parameter,
   `Q.webserver.brand`, default `Qbix Server`. `Q_WebServer::brand()` is the one
   accessor; the dashboard heading and title, the docs chrome, the panel title

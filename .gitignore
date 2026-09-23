@@ -21,3 +21,4 @@ bin/qbixserver
 qbixserver-linux-*
 qbixserver-macos-*
 qbixserver-windows-*
+qbix-build.php
