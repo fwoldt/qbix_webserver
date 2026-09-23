@@ -1252,7 +1252,20 @@ class Q_WebServer_Cache
 		if (!$cookieHeader || empty(self::$skipCookies)) return false;
 
 		foreach (self::$skipCookies as $name) {
-			if (preg_match('/(?:^|;\s*)' . preg_quote($name, '/') . '=/', $cookieHeader)) {
+			// A configured name matches itself and anything it prefixes, so
+			// that a session cookie whose real name carries a suffix is still
+			// recognised. This is not a nicety: Exponential sets
+			// SessionNamePrefix=eZSESSID with SessionNamePerSiteAccess
+			// enabled, so the cookie is eZSESSID<digest> and never plain
+			// eZSESSID. Matching only the exact name meant the configured skip
+			// never fired, and a signed-in visitor's pages were stored under a
+			// key with no session in it and served to everybody else.
+			//
+			// Over-matching is the safe direction here. A name that catches a
+			// cookie it did not mean to costs cache hits; a name that misses
+			// the session cookie costs one visitor's page to another.
+			if (preg_match('/(?:^|;\s*)' . preg_quote($name, '/') . '[^=;]*=/',
+					$cookieHeader)) {
 				return true;
 			}
 		}
