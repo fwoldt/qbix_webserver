@@ -3043,8 +3043,17 @@ foreach ($req['headers'] ?? [] as $k=>$v) $_SERVER['HTTP_'.strtoupper(str_replac
 if (isset($req['headers']['content-type'])) $_SERVER['CONTENT_TYPE'] = $req['headers']['content-type'];
 if (isset($req['headers']['content-length'])) $_SERVER['CONTENT_LENGTH'] = $req['headers']['content-length'];
 // Populate getallheaders() for PHP scripts
+// This file is written to a temp directory and run from there, so __DIR__ is
+// that temp directory and never the source tree. Paths come from the parent,
+// which knows where it is, and the guards below mean a miss degrades rather
+// than fatals.
+$_srcDir = $req['serverDir'] ?? __DIR__;
+if (!class_exists('Q_WebServer', false)) {
+	$_ws = $_srcDir . '/WebServer.php';
+	if (is_file($_ws)) require_once $_ws;
+}
 if (!class_exists('Q_WebServer_GetAllHeaders', false)) {
-	$_gah = __DIR__ . '/WebServer/GetAllHeaders.php';
+	$_gah = $_srcDir . '/WebServer/GetAllHeaders.php';
 	if (is_file($_gah)) require_once $_gah;
 }
 if (class_exists('Q_WebServer_GetAllHeaders', false)) {
@@ -3064,14 +3073,19 @@ $ct = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
 $raw = $req['body'] ?? '';
 if (strpos($ct,'application/x-www-form-urlencoded') !== false) parse_str($raw, $_POST);
 elseif (strpos($ct,'application/json') !== false) $_POST = json_decode($raw, true) ?: [];
-elseif (strpos($ct,'multipart/form-data') !== false) { $oct=$req['headers']['content-type']??''; Q_WebServer::parseMultipart($oct, $raw, $_POST, $_FILES); }
+elseif (strpos($ct,'multipart/form-data') !== false && class_exists('Q_WebServer', false)) { $oct=$req['headers']['content-type']??''; Q_WebServer::parseMultipart($oct, $raw, $_POST, $_FILES); }
 $_REQUEST = array_merge($_COOKIE, $_GET, $_POST);
 if (class_exists('Q_Request',false)) Q_WebServer_State::setInput($raw);
 ob_start(); $status = 200; $headers = [];
 try {
     if (is_file($req['scriptPath'])) include $req['scriptPath']; else { $status = 404; echo 'Not Found'; }
-			$headers = Q_WebServer::getResponseHeaders();
-    $code = http_response_code(); if (Q_WebServer::responseCode() !== 200) $status = Q_WebServer::responseCode(); if ($code) $status = $code;
+    $headers = class_exists('Q_WebServer', false)
+        ? Q_WebServer::getResponseHeaders() : [];
+    $code = http_response_code();
+    if (class_exists('Q_WebServer', false) && Q_WebServer::responseCode() !== 200) {
+        $status = Q_WebServer::responseCode();
+    }
+    if ($code) $status = $code;
 } catch (Throwable $e) { $status = 500; ob_clean(); echo $e->getMessage(); $headers['Content-Type']='text/plain'; }
 $body = ob_get_clean();
 echo json_encode(compact('status','body','headers'), JSON_UNESCAPED_SLASHES);
@@ -3105,6 +3119,9 @@ WORKER;
 			'https'       => !empty(self::$tlsSocket),
 			'qFile'       => $qFile,
 			'projectRoot' => dirname(rtrim(self::$rootDir, DS)),
+			// Where this class lives, so the worker can load it. Inside a phar
+			// this is a phar:// path, which require_once handles.
+			'serverDir'   => __DIR__,
 		), JSON_UNESCAPED_SLASHES);
 
 		// Launch subprocess
