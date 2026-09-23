@@ -51,30 +51,32 @@ jobs:
         include:
           - os: freebsd
             version: '14.2'
-            # Every extension is its own package here. tokenizer is not
-            # optional: without it the source transform cannot run and the
-            # server dies at startup on token_get_all().
+            # Every extension is its own package here, and three of them are
+            # not optional. Without tokenizer the source transform cannot run
+            # and the server dies on token_get_all(); without sqlite3 it dies
+            # on Class "SQLite3" not found. Each failure arrives at startup,
+            # one at a time, which is why this list grew by bisection.
             #
             # sudo is required: the VM does not run as root. The original form
             # was `sudo X || X`, and it was the sudo branch that worked, not
             # the fallback -- pkg without it reports "Insufficient privileges".
             install: |
               sudo pkg install -y php83 curl
-              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo pkg install -y php83-$e || true
               done
           - os: openbsd
             version: '7.6'
             install: |
               sudo pkg_add -I php curl || true
-              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo pkg_add -I php-$e || true
               done
           - os: netbsd
             version: '10.0'
             install: |
               sudo /usr/sbin/pkg_add php83 curl || true
-              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo /usr/sbin/pkg_add php83-$e || true
               done
 
@@ -197,7 +199,7 @@ jobs:
           usesh: true
           prepare: |
             sudo pkg install -y php83 curl
-            for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+            for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
               sudo pkg install -y php83-$e || true
             done
           run: sh tests/phar-serves.sh bin/qbixserver.phar
