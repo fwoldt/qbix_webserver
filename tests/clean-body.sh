@@ -155,4 +155,33 @@ esac
 
 echo
 echo "  passed: $PASS  failed: $FAIL"
+
+# On failure the server's own output is the only thing that says why. Without
+# it, a body that came back empty is indistinguishable from a body that came
+# back wrong, and the macOS build spent several releases in exactly that state:
+# failing this test with nothing to go on but the byte count.
+if [ "$FAIL" -ne 0 ]; then
+    echo
+    echo "  --- how the server started ---"
+    if [ -s "$TMP/server.log" ]; then
+        sed 's/^/    /' "$TMP/server.log" | head -40
+    else
+        echo "    the server wrote nothing at all"
+    fi
+    echo
+    echo "  --- what it is running on ---"
+    printf '    binary : %s\n' "$QB"
+    printf '    uname  : %s %s\n' "$(uname -s)" "$(uname -m)"
+    if [ -x "$QB" ]; then
+        printf '    version: %s\n' "$("$QB" --version 2>&1 | head -1)"
+    fi
+    echo
+    echo "  --- is anything still listening on $PORT? ---"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$PORT" 2>/dev/null | sed 's/^/    /' | head -5
+    elif command -v ss >/dev/null 2>&1; then
+        ss -ltnp 2>/dev/null | grep ":$PORT " | sed 's/^/    /' | head -5
+    fi
+fi
+
 [ "$FAIL" -eq 0 ] || exit 1

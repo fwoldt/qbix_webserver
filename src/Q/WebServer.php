@@ -3143,8 +3143,11 @@ WORKER;
 			return false;
 		}
 
-		// Send request data to child's stdin
-		fwrite($pipes[0], $payload);
+		// Send request data to child's stdin. The worker reads to EOF and
+		// json_decodes the lot, so a short write does not lose one field -- it
+		// truncates the JSON, the decode fails, and the worker answers "Bad
+		// request" with a 500 to a request that was perfectly good.
+		self::writeAll($pipes[0], $payload);
 		fclose($pipes[0]);
 
 		// Read response from child's stdout
