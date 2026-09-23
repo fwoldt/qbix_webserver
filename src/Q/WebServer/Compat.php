@@ -584,6 +584,146 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * Format version of the persisted pre-warm file.
+	 *
+	 * Bump this whenever transformSource() starts producing different output
+	 * for the same input. A stale entry is not merely unhelpful: it would feed
+	 * the old transform to a worker for a file that has not changed, so the
+	 * cache has to be able to say "I was written by a different transformer"
+	 * and be ignored wholesale.
+	 */
+	const PREWARM_FORMAT = 1;
+
+	/** Resolved path of the persisted pre-warm file, or null. */
+	private static $persistPath = false;
+
+	/** How many entries the last prewarm() took from disk instead of redoing. */
+	private static $prewarmReused = 0;
+
+	/**
+	 * Where the pre-warm result is kept between starts.
+	 *
+	 * The file holds transformed copies of the application's own source, so it
+	 * is private to the user running the server and lives in a directory
+	 * created 0700. The name carries a digest of the document root because one
+	 * machine may serve several roots and their maps must not collide.
+	 *
+	 * @method persistPath
+	 * @static
+	 * @param {string} $root the resolved document root
+	 * @return {string|null} null when persistence is off or unavailable
+	 */
+	static function persistPath($root)
+	{
+		if (self::$persistPath !== false) return self::$persistPath;
+
+		$enabled = true;
+		$dir = null;
+		$mode = null;
+		if (class_exists('Q_Config', false)) {
+			$enabled = (bool) Q_Config::get(
+				'Q', 'webserver', 'compat', 'persistPrewarm', true);
+			$dir = Q_Config::get('Q', 'webserver', 'compat', 'dir', null);
+			$mode = Q_Config::get('Q', 'webserver', 'compat', 'dirMode', null);
+		}
+		if (!$enabled) return self::$persistPath = null;
+
+		if (!$dir) {
+			$dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'qbixserver-compat';
+		}
+		if (class_exists('Q_WebServer_Modes', false)) {
+			Q_WebServer_Modes::dir(
+				$dir, Q_WebServer_Modes::parse($mode, 0700), $mode !== null);
+		} else if (!is_dir($dir)) {
+			@mkdir($dir, 0700, true);
+		}
+		if (!is_dir($dir) || !is_writable($dir)) return self::$persistPath = null;
+
+		return self::$persistPath = $dir . DIRECTORY_SEPARATOR
+			. 'prewarm-' . substr(sha1($root), 0, 16) . '.cache';
+	}
+
+	/**
+	 * Read the previous start's pre-warm result.
+	 *
+	 * Anything that does not match exactly -- format, PHP version, root -- is
+	 * treated as absent rather than repaired. A cache is an optimisation, and
+	 * the cost of ignoring one is a slow start; the cost of trusting a wrong
+	 * one is serving the wrong bytes.
+	 *
+	 * @method loadPersisted
+	 * @static
+	 * @param {string} $root
+	 * @return {array|null}
+	 */
+	static function loadPersisted($root)
+	{
+		$path = self::persistPath($root);
+		if (!$path || !is_file($path)) return null;
+		$raw = @file_get_contents($path);
+		if ($raw === false || $raw === '') return null;
+		$data = @unserialize($raw);
+		if (!is_array($data)) return null;
+		if (($data['v'] ?? 0) !== self::PREWARM_FORMAT) return null;
+		// The transformer's output can depend on the running PHP, so a cache
+		// written by another one says nothing about this one.
+		if (($data['php'] ?? 0) !== PHP_VERSION_ID) return null;
+		if (($data['root'] ?? '') !== $root) return null;
+		if (!isset($data['entries']) || !is_array($data['entries'])) return null;
+		return $data['entries'];
+	}
+
+	/**
+	 * Write the pre-warm result for the next start.
+	 *
+	 * The file is completed under a temporary name and renamed into place, so
+	 * a start that races a write, or a crash in the middle of one, finds
+	 * either the old cache or none -- never half of one.
+	 *
+	 * @method savePersisted
+	 * @static
+	 * @param {string} $root
+	 * @param {array} $entries
+	 * @return {boolean}
+	 */
+	static function savePersisted($root, $entries)
+	{
+		$path = self::persistPath($root);
+		if (!$path) return false;
+
+		$blob = @serialize(array(
+			'v' => self::PREWARM_FORMAT,
+			'php' => PHP_VERSION_ID,
+			'root' => $root,
+			'entries' => $entries,
+		));
+		if ($blob === false || $blob === '') return false;
+
+		$tmp = $path . '.' . getmypid() . '.tmp';
+		$fh = @fopen($tmp, 'wb');
+		if (!$fh) return false;
+		// A plain file writes everything or errors, but the count is still the
+		// only thing that says which happened.
+		$ok = (@fwrite($fh, $blob) === strlen($blob)) && @fflush($fh);
+		@fclose($fh);
+		if (!$ok) { @unlink($tmp); return false; }
+		@chmod($tmp, 0600);
+		if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+		return true;
+	}
+
+	/**
+	 * How many files the last prewarm() reused instead of re-tokenising.
+	 * @method prewarmReused
+	 * @static
+	 * @return {integer}
+	 */
+	static function prewarmReused()
+	{
+		return self::$prewarmReused;
+	}
+
+	/**
 	 * Pre-warm the transform cache by walking a directory.
 	 * Call from the parent process before accepting connections.
 	 * Fork children inherit the cache via COW — zero per-request cost.
@@ -596,6 +736,19 @@ class Q_WebServer_Compat
 	{
 		$count = 0;
 		$dir = rtrim($dir, DIRECTORY_SEPARATOR);
+		$root = realpath($dir) ?: $dir;
+
+		// A previous start already did this work. Nothing about a transform
+		// depends on anything but the file's bytes, so an entry whose size and
+		// mtime still match is reusable exactly as it stands. The walk used to
+		// cost several seconds on every start, and the overwhelming majority
+		// of it was rediscovering that most of the tree needs no transform at
+		// all -- work whose answer had been computed and then thrown away.
+		$previous = self::loadPersisted($root);
+		$reused = 0;
+		$fresh = array();
+		$dirty = false;
+
 		$iterator = new \RecursiveIteratorIterator(
 			new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
 			\RecursiveIteratorIterator::SELF_FIRST
@@ -609,24 +762,46 @@ class Q_WebServer_Compat
 			// Skip vendor test files (large, rarely included)
 			if (strpos($path, DIRECTORY_SEPARATOR . 'tests' . DIRECTORY_SEPARATOR) !== false) continue;
 			if (strpos($path, DIRECTORY_SEPARATOR . 'Tests' . DIRECTORY_SEPARATOR) !== false) continue;
+
+			$mtime = $file->getMTime();
+			$size = $file->getSize();
+
+			// Size as well as mtime, because a modification within the same
+			// second is invisible to mtime alone and an edit that changes the
+			// length is the common case.
+			if ($previous !== null && isset($previous[$path])
+				&& ($previous[$path]['mtime'] ?? -1) === $mtime
+				&& ($previous[$path]['size'] ?? -1) === $size) {
+				$fresh[$path] = $previous[$path];
+				$reused++;
+				$count++;
+				continue;
+			}
+
 			$source = file_get_contents($path);
 			if ($source === false) continue;
 			$transformed = self::transformSource($source, $path);
-			if ($transformed !== $source) {
-				// Transformed — cache the new source
-				self::$transformCache[$path] = array(
-					'source' => $transformed,
-					'mtime' => $file->getMTime(),
-				);
-			} else {
-				// No transforms needed — cache a sentinel so we skip this file
-				// entirely at request time (no tokenization, no disk read)
-				self::$transformCache[$path] = array(
-					'source' => false,  // sentinel: means "pass through unchanged"
-					'mtime' => $file->getMTime(),
-				);
-			}
+			$fresh[$path] = array(
+				// A file that transforms to itself stores a sentinel, so that
+				// at request time it costs neither a disk read nor a
+				// tokenisation.
+				'source' => $transformed !== $source ? $transformed : false,
+				'mtime' => $mtime,
+				'size' => $size,
+			);
+			$dirty = true;
 			$count++;
+		}
+
+		// The walk's result is authoritative for the paths it covered; entries
+		// recorded at request time for files created since are kept.
+		self::$transformCache = $fresh + self::$transformCache;
+		self::$prewarmReused = $reused;
+
+		// A file that disappeared since the last start leaves no trace in the
+		// walk, so a changed entry count is itself a reason to rewrite.
+		if ($dirty || $previous === null || count($previous) !== count($fresh)) {
+			self::savePersisted($root, $fresh);
 		}
 		return $count;
 	}

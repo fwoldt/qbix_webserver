@@ -823,13 +823,23 @@ if (!Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', false)) {
 	$prewarmDir = Q_Config::get('Q', 'compat', 'prewarmDir', null)
 		?: dirname($webDir);  // one level above --root
 	if (!is_dir($prewarmDir)) $prewarmDir = $webDir;
+	$prewarmStarted = microtime(true);
 	$prewarmCount = Q_WebServer_Compat::prewarm($prewarmDir);
+	$prewarmMs = (microtime(true) - $prewarmStarted) * 1000;
 	if ($prewarmCount > 0) {
 		$stats = Q_WebServer_Compat::cacheStats();
+		// The reuse figure is the one worth reading. A start reporting nothing
+		// reused is paying the full tokenisation cost, which means either the
+		// tree really did change or the cache could not be written -- and the
+		// second of those is otherwise silent.
+		$reused = method_exists('Q_WebServer_Compat', 'prewarmReused')
+			? Q_WebServer_Compat::prewarmReused() : 0;
 		fwrite(STDERR, "  Compat: pre-warmed $prewarmCount files ("
 			. $stats['transforms'] . " transformed, "
 			. $stats['passthrough'] . " pass-through, "
-			. round($stats['bytes'] / 1024) . "KB)\n");
+			. round($stats['bytes'] / 1024) . "KB, "
+			. $reused . " reused, "
+			. round($prewarmMs) . "ms)\n");
 	}
 }
 
