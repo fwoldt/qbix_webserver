@@ -44,6 +44,16 @@ edited down to what a reader actually needs.
   The blocked list and the extension allow-list were consulted on one path and
   not the other, so everything they protected was protected only from clients
   old enough to ask in the older protocol.
+- **The dashboard showed `\u00B7` and `\u2014` as text.** Thirteen JavaScript
+  escapes were written directly into the dashboard's HTML, where nothing
+  interprets them — PHP reads only `\u{00B7}`, with braces, and JavaScript
+  never saw these. So the status line read `546 ok \u00B7 28 redir` instead of
+  `546 ok · 28 redir`; the Workers, System RAM and Worker Memory cards showed
+  `\u2014` where a value belongs; and the pause and close buttons were
+  labelled `\u23F8` and `\u2715`. Nothing failed, and nothing could have: the
+  page rendered perfectly, reading wrongly. It was found by somebody looking at
+  it. They are now HTML entities, and the identical escapes inside `<script>`
+  — where they *are* interpreted — were left alone.
 - **The dashboard could not see most of HTTP/2.** A script is handed to the
   worker pool, which records it when it answers, so PHP requests were counted
   on both protocols and the numbers looked right. Everything the HTTP/2 route

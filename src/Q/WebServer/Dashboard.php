@@ -489,14 +489,14 @@ transition:background .1s}
 <div class="card"><div class="l">Total requests</div><div class="v" id="sr">0</div><div class="s" id="srps">0 avg req/s</div></div>
 <div class="card"><div class="l">Current RPS</div><div class="v" id="crps" style="color:var(--cyn)">0</div><div class="s">last 5 sec</div></div>
 <div class="card"><div class="l">Avg response</div><div class="v" id="avg">0<span style="font-size:12px;font-weight:400">ms</span></div><div class="s">slowest: <span id="slow">0ms</span></div></div>
-<div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">\u2014</div><div class="s">peak <span id="smp">\u2014</span></div></div>
-<div class="card"><div class="l">Workers</div><div class="v" id="sw">\u2014</div><div class="s" id="phpn">0 PHP / 0 static</div></div>
-<div class="card"><div class="l">System RAM</div><div class="v" id="sysram">\u2014</div><div class="s" id="sysram-detail">\u2014</div></div>
-<div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">\u2014</div><div class="s" id="cow-detail">\u2014</div></div>
+<div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">&#8212;</div><div class="s">peak <span id="smp">&#8212;</span></div></div>
+<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s" id="phpn">0 PHP / 0 static</div></div>
+<div class="card"><div class="l">System RAM</div><div class="v" id="sysram">&#8212;</div><div class="s" id="sysram-detail">&#8212;</div></div>
+<div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s" id="cow-detail">&#8212;</div></div>
 <div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
-<div class="card"><div class="l">Data out</div><div class="v" id="bout">0</div><div class="s"><span id="conn">0</span> conn \u00B7 <span id="ka">0</span> keep-alive</div></div>
+<div class="card"><div class="l">Data out</div><div class="v" id="bout">0</div><div class="s"><span id="conn">0</span> conn &#183; <span id="ka">0</span> keep-alive</div></div>
 <div class="card"><div class="l">Status codes</div><div class="v" style="font-size:12px;line-height:1.8">
-<span class="s2" id="s2">0</span> ok \u00B7 <span class="s3" id="s3">0</span> redir \u00B7 <span class="s4" id="s4">0</span> 4xx \u00B7 <span class="s5" id="s5">0</span> 5xx</div></div>
+<span class="s2" id="s2">0</span> ok &#183; <span class="s3" id="s3">0</span> redir &#183; <span class="s4" id="s4">0</span> 4xx &#183; <span class="s5" id="s5">0</span> 5xx</div></div>
 </div>
 
 <div class="panel" style="margin-bottom:16px"><div class="ph">Throughput <span style="font-size:11px;color:var(--dim)">last 60s</span></div>
@@ -515,8 +515,8 @@ transition:background .1s}
 <select id="sid-filter" onchange="filterSession()" title="Filter by session" class="ph-sel">
 <option value="">All sessions</option>
 </select>
-<button class="ph-btn" id="btn-pause" onclick="togglePause()" title="Pause/resume">\u23F8</button>
-<button class="ph-btn" onclick="clearLog()" title="Clear log">\u2715</button>
+<button class="ph-btn" id="btn-pause" onclick="togglePause()" title="Pause/resume">&#9208;</button>
+<button class="ph-btn" onclick="clearLog()" title="Clear log">&#10005;</button>
 </div></div>
 <div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
 
