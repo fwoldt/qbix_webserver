@@ -2290,7 +2290,10 @@ class Q_WebServer_Panel
 	{
 		$body = json_decode($parsed['body'] ?? '{}', true);
 		$domain = $body['domain'] ?? '';
-		if (!$domain || !preg_match('/^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$/i', $domain)) {
+		// One validator, shared with the autohost path. The copy that stood
+		// here accepted a label ending in a hyphen, and a name ending in a
+		// newline, and the domain goes on to be written into a config file.
+		if (!$domain || !Q_WebServer_Autohost::validateHostname($domain)) {
 			return ['status' => 400, 'error' => 'Invalid domain name'];
 		}
 		$configPath = self::panelConfigPath();
@@ -2417,7 +2420,9 @@ class Q_WebServer_Panel
 		$hostname = $body['hostname'] ?? '';
 		$ip = $body['ip'] ?? '127.0.0.1';
 
-		if (!$hostname || !preg_match('/^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$/i', $hostname)) {
+		// A hosts entry may legitimately be a bare label, so the dot is not
+		// required here -- everything else about the shape still is.
+		if (!$hostname || !Q_WebServer_Autohost::validateHostname($hostname, false)) {
 			return ['status' => 400, 'error' => 'Invalid hostname'];
 		}
 		if (!filter_var($ip, FILTER_VALIDATE_IP)) {

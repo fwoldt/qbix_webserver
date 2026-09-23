@@ -73,7 +73,7 @@ class Q_WebServer_Autohost
 		if (!self::validateHostname($hostname)) return false;
 
 		// Strip port if present
-		$hostname = strtolower(preg_replace('/:\d+$/', '', $hostname));
+		$hostname = strtolower(preg_replace('/:\d+$/D', '', $hostname));
 
 		// Already provisioning?
 		if (isset(self::$provisioning[$hostname])) {
@@ -141,18 +141,41 @@ class Q_WebServer_Autohost
 
 	/**
 	 * Validate a hostname (RFC 1123).
+	 *
+	 * This is the gate between a stranger's Host header and everything the
+	 * autohost path does with it: a DNS lookup, a provisioning run, a certbot
+	 * invocation naming it, and a line in a log file. A name that gets through
+	 * here is treated as trustworthy from then on, so the check has to be exact
+	 * rather than approximately right.
 	 */
-	static function validateHostname($h)
+	static function validateHostname($h, $requireDot = true)
 	{
-		$h = strtolower(preg_replace('/:\d+$/', '', $h));
+		// PCRE's $ matches before a string's final newline unless the D
+		// modifier says otherwise. Both anchors here meant "end of the name",
+		// so without it "example.com\n" validated: the port-stripping pattern
+		// ignored the newline and the shape check accepted it. The name then
+		// reached a log as two lines, and a command line as an argument nobody
+		// wrote.
+		$h = strtolower(preg_replace('/:\d+$/D', '', (string) $h));
 		if (strlen($h) > 253 || strlen($h) < 1) return false;
-		if (!preg_match('/^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$/', $h)) return false;
-		// No label > 63 chars
+
+		// Must have at least one dot (not a bare hostname). A name being
+		// provisioned for needs one, because a certificate cannot be issued
+		// for a bare label; an entry in a hosts file is a different question,
+		// so callers there pass false rather than keeping a second validator.
+		if ($requireDot && strpos($h, '.') === false) return false;
+
+		// RFC 1123: every label is 1 to 63 characters, begins and ends with an
+		// alphanumeric, and may carry hyphens between them. Testing the whole
+		// name against one pattern only established that the *name* began and
+		// ended alphanumerically, which says nothing about the labels inside
+		// it -- "example-.com" passed, because the name ends in "m".
 		foreach (explode('.', $h) as $label) {
-			if (strlen($label) > 63 || strlen($label) < 1) return false;
+			if (strlen($label) > 63) return false;
+			if (!preg_match('/^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$/D', $label)) {
+				return false;
+			}
 		}
-		// Must have at least one dot (not bare hostname)
-		if (strpos($h, '.') === false) return false;
 		return true;
 	}
 

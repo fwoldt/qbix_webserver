@@ -883,7 +883,11 @@ class Q_WebServer_Compat
 		// the cookie, which is what PHP does.
 		$id = self::$sessionId ?: ($_COOKIE[$name] ?? '');
 
-		if (!$id || !preg_match('/^[a-zA-Z0-9,-]{22,256}$/', $id)) {
+		// The id arrives in a cookie and becomes part of the session filename
+		// below, so the anchor has to mean the end of the string: without the
+		// D modifier a trailing newline came through the check and into the
+		// path.
+		if (!$id || !preg_match('/^[a-zA-Z0-9,-]{22,256}$/D', $id)) {
 			$id = bin2hex(random_bytes(16));
 			self::_setcookie($name, $id, 0, '/');
 		}
