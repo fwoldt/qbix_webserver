@@ -863,6 +863,34 @@ class Q_WebServer
 			}
 		}
 
+		// And only now the server's own routes -- /Q/dashboard, /Q/health,
+		// /Q/metrics and the rest. handleRequest() answers them on HTTP/1.1 and
+		// this route did not answer them at all, so the dashboard returned the
+		// application's 404 to every browser that ever asked for it while
+		// answering 200 to curl --http1.1. A browser negotiates HTTP/2, which
+		// makes that the ordinary case rather than the exception.
+		//
+		// route() returns response arrays, which is this route's contract
+		// exactly; it was written for that and then left unwired. Only the two
+		// prefixes it owns are handed to it, so an ordinary content path never
+		// reaches it.
+		//
+		// The position matters as much as the call. route() can fall through to
+		// resolveStatic(), so it belongs behind every refusal above rather than
+		// in front of them -- ahead of them, a document root that happened to
+		// contain a Q directory would have its files served around the
+		// allow-list and the blocked list.
+		if (strpos($decoded, '/Q/') === 0 or strpos($decoded, '/.well-known/') === 0) {
+			$builtin = self::route(array(
+				'method' => $request['method'],
+				'path' => $decoded,
+				'query' => $query,
+				'headers' => $request['headers'],
+				'body' => $request['body'] ?? '',
+			));
+			if (is_array($builtin)) return $builtin;
+		}
+
 		// Anything else is the application's. Resolve it the way the HTTP/1.1
 		// path does, then hand it to a worker.
 		$scriptPath = self::resolveScript($decoded, $fsPath);
