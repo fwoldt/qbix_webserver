@@ -105,6 +105,19 @@ fclose($b);
 // A child process drains the socket while the parent writes, which is the
 // only way to produce genuine repeated partial writes: the buffer fills, the
 // reader empties it, and writeFully() has to come back for the rest.
+//
+// pcntl is not everywhere -- the official PHP images ship without it, and
+// Windows has none at all -- and this file is run on every platform the phar
+// reaches. Skipping the concurrent half is honest; calling pcntl_fork() where
+// it does not exist is a fatal that reads like a failure of the code under
+// test rather than of the fixture.
+$skipped = 0;
+if (!function_exists('pcntl_fork')) {
+	printf("  skip  the live-reader case needs pcntl, which this PHP lacks\n");
+	$skipped = 3;
+	goto structural;
+}
+
 list($a, $b) = pair();
 list($resA, $resB) = pair();
 
@@ -166,6 +179,8 @@ check('...and it gives up near the timeout, not later', $elapsed < 3.0, true);
 check('...having actually waited rather than returned at once',
 	$elapsed >= 0.3, true);
 
+structural:
+
 // ── The call sites ──────────────────────────────────────────────
 
 // The helper is only worth anything where it is used, and every one of these
@@ -225,5 +240,9 @@ check('the CGI request body is written in full',
 if ($fail) {
 	printf("\n  FAIL - %d of %d case(s)\n", $fail, $pass + $fail);
 	exit(1);
+}
+if ($skipped) {
+	printf("  PASS - %d case(s), %d skipped for want of pcntl\n", $pass, $skipped);
+	exit(0);
 }
 printf("  PASS - %d case(s)\n", $pass);

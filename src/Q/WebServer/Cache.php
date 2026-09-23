@@ -213,6 +213,15 @@ class Q_WebServer_Cache
 
 		// Held. Take it only if whoever holds it has had long enough to be
 		// presumed gone.
+		//
+		// The stat cache has to go first. Every interesting change to this
+		// directory's mtime is made by a *different* process -- the holder
+		// re-dating it, or another worker taking it over -- and nothing those
+		// do invalidates the cache in this one. So a worker that has looked at
+		// this lock before answers from its own memory: it can refuse a claim
+		// that has since been abandoned, or take one that has just been
+		// renewed. Both are wrong, and neither is visible from here.
+		clearstatcache(true, $lock);
 		$since = @filemtime($lock);
 		if ($since !== false
 		and time() - $since > max(1, self::$revalidateLockSeconds)) {
