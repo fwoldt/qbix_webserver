@@ -111,6 +111,17 @@ A host with no `log` key writes to the server's access log, as before, and so do
 "log": { "format": "%h %l %u %t \"%r\" %>s %b %{Host}i" }
 ```
 
+A host can also set `fileMode` and `dirMode`, and inherits the server's when it does not. That is what makes per-host logs useful where each site runs as its own user — the host writing the file is the one that owns it:
+
+```json
+"a.example.com": {
+    "root": "/srv/a",
+    "log": { "dir": "/var/log/a", "fileMode": "0660", "dirMode": "2770" }
+}
+```
+
+See [deploy.md](deploy.md) for what those two do and the order to set them up in.
+
 Each host's files rotate, archive and prune on the same terms as the server's own, and the dashboard's log viewer takes `?host=` to show one of them.
 
 ### Hot reload

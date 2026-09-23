@@ -35,6 +35,16 @@
  *
  * @class Q_WebServer_Cache
  */
+
+// Q_WebServer_Modes decides the permissions the files below are created
+// with. The server's autoloader finds it by name; requiring it here as
+// well is what makes this class usable on its own, which is how the
+// tests drive it.
+if (!class_exists('Q_WebServer_Modes', false)
+and is_file(__DIR__ . '/Modes.php')) {
+	require_once __DIR__ . '/Modes.php';
+}
+
 class Q_WebServer_Cache
 {
 	static $enabled = false;
@@ -102,6 +112,18 @@ class Q_WebServer_Cache
 	static $dictionary = null;
 
 	/**
+	 * Permissions for the entries and the directories holding them,
+	 * parsed once in init(). A cached entry is a response body that was
+	 * served to somebody; null keeps the old behaviour, where it is
+	 * created at 0666 minus the umask and readable by every account on
+	 * the machine.
+	 * @property $fileMode
+	 */
+	static $fileMode = null;
+	static $dirMode = null;
+	static $dirModeExplicit = false;
+
+	/**
 	 * Initialize cache from config.
 	 * @method init
 	 * @static
@@ -112,12 +134,27 @@ class Q_WebServer_Cache
 		self::$enabled = (bool) Q::ifset($config, 'enabled', false);
 		if (!self::$enabled) return;
 
+		self::$fileMode = Q_WebServer_Modes::parse(
+			Q::ifset($config, 'fileMode', null)
+		);
+		self::$dirModeExplicit = Q::ifset($config, 'dirMode', null) !== null;
+		self::$dirMode = Q_WebServer_Modes::parse(
+			Q::ifset($config, 'dirMode', null), 0755
+		);
+
 		self::$dir = Q::ifset($config, 'dir', '');
 		if (!self::$dir && defined('APP_DIR')) {
 			self::$dir = APP_DIR . DS . 'files' . DS . 'cache' . DS . 'reverse';
 		}
-		if (self::$dir && !is_dir(self::$dir)) {
-			mkdir(self::$dir, 0755, true);
+		if (self::$dir) {
+			Q_WebServer_Modes::dir(
+				self::$dir, self::$dirMode, self::$dirModeExplicit
+			);
+			if (self::$dirModeExplicit
+			and !Q_WebServer_Modes::verify(self::$dir, self::$dirMode)) {
+				fwrite(STDERR, "  cache: " . self::$dir . " is not "
+					. decoct(self::$dirMode) . ", chmod did not take\n");
+			}
 		}
 
 		$apcu = Q::ifset($config, 'apcu', array());
@@ -164,7 +201,15 @@ class Q_WebServer_Cache
 		if (!$path) return true; // nowhere to keep a claim; let it render
 		$lock = $path . '.refresh';
 
-		if (@mkdir($lock, 0755, true)) return true;
+		// The mkdir is the claim: its return value is what makes this
+		// atomic, so the mode is set inside the branch that won and
+		// never allowed to stand in for the result.
+		if (@mkdir($lock, self::$dirMode === null ? 0755 : self::$dirMode, true)) {
+			if (self::$dirModeExplicit) {
+				Q_WebServer_Modes::chmod($lock, self::$dirMode);
+			}
+			return true;
+		}
 
 		// Held. Take it only if whoever holds it has had long enough to be
 		// presumed gone.
@@ -474,8 +519,10 @@ class Q_WebServer_Cache
 		$path = self::filePath($key);
 		if ($path) {
 			$dir = dirname($path);
-			if (!is_dir($dir)) mkdir($dir, 0755, true);
-			file_put_contents($path, self::encodeEntry($entry), LOCK_EX);
+			Q_WebServer_Modes::dir($dir, self::$dirMode, self::$dirModeExplicit);
+			Q_WebServer_Modes::put(
+				$path, self::encodeEntry($entry), LOCK_EX, self::$fileMode
+			);
 		}
 
 		// The fresh copy is in place, so whoever was being served the old one
