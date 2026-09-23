@@ -62,8 +62,12 @@ jobs:
             experimental: true
             spc_os: windows
             spc_arch: x64
-            # No pcntl or posix on Windows
-            extensions: "sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
+            # No pcntl or posix on Windows, and no xsl: spc says plainly
+            # "library [libxslt] is in the lib.json list but not supported to
+            # compile" there. Asking for it stopped the build after every
+            # dependency had been fetched and the toolchain configured, which
+            # is why this looked like a compiler problem for so long.
+            extensions: "sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,mysqli,mysqlnd,curl,bcmath,exif"
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -200,6 +204,8 @@ jobs:
           php spc-src\bin\spc doctor --auto-fix 2>&1
 
       # ── Download sources ─────────────────────────────────
+      # One unlucky fetch should not cost a platform. v0.0.4.26 lost its
+      # release to a single failure downloading the musl toolchain.
       - name: Download PHP and extension sources (Unix)
         if: runner.os != 'Windows'
         env:
@@ -390,11 +396,33 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
+      # Every release carried RELEASE_NOTES.md, a file describing v1.5.0. So
+      # each one announced the same changes regardless of what was in it, and
+      # the history read as a list of version numbers attached to somebody
+      # else's release notes. The tag's own annotation is written per release
+      # and says what changed, so that is what the release should show.
+      - name: Take the release notes from the tag
+        run: |
+          git fetch --force --tags --depth=1
+          tag='${{ github.ref_name }}'
+          if [ -n "$(git tag -l --format='%(contents)' "$tag" | tr -d '[:space:]')" ]; then
+            git tag -l --format='%(contents)' "$tag" > tag-notes.md
+          else
+            echo "No annotation on $tag." > tag-notes.md
+            cat RELEASE_NOTES.md >> tag-notes.md
+          fi
+          # The first line is the summary; the rest is the body.
+          head -1 tag-notes.md > tag-title.txt
+          tail -n +2 tag-notes.md > tag-body.md
+          echo "RELEASE_TITLE=$(cat tag-title.txt)" >> "$GITHUB_ENV"
+          echo "--- title ---"; cat tag-title.txt
+          echo "--- body ---";  head -20 tag-body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
-          body_path: RELEASE_NOTES.md
+          name: ${{ env.RELEASE_TITLE }}
+          body_path: tag-body.md
           draft: false
           generate_release_notes: false
           fail_on_unmatched_files: false
