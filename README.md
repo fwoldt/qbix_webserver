@@ -205,10 +205,10 @@ is fixed. macOS users should run the phar, which works.
 is the whole server in one file. It has no architecture and no libc of its own,
 so the only question is whether the platform has a PHP, and a great many do.
 
-The [Platforms workflow](../../actions/workflows/platforms.yml) boots these and
-watches a page come back, so the list below is a record of something observed
-rather than an assumption. Its current state is the authority; a badge cannot
-be out of date the way a hand-written tick can.
+The [Platforms workflow](../../actions/workflows/platforms.yml) boots each of
+these and watches for a page to come back. The badge is the authority for
+whether they currently pass -- it cannot go stale the way a hand-written tick
+in a table can, and a platform listed here is one we test, not one we promise.
 
 [![Platforms](../../actions/workflows/platforms.yml/badge.svg)](../../actions/workflows/platforms.yml)
 

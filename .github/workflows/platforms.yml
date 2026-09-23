@@ -51,13 +51,15 @@ jobs:
         include:
           - os: freebsd
             version: '14.2'
-            install: pkg install -y php83 curl
+            # FreeBSD packages phar apart from php, and without it the phar is
+            # not a broken archive -- it is a file the interpreter cannot open.
+            install: pkg install -y php83 php83-phar curl || pkg install -y php83 curl
           - os: openbsd
             version: '7.6'
-            install: pkg_add -I php curl
+            install: pkg_add -I php php-phar curl || pkg_add -I php curl
           - os: netbsd
             version: '10.0'
-            install: /usr/sbin/pkg_add php83 curl
+            install: /usr/sbin/pkg_add php83 php83-phar curl || /usr/sbin/pkg_add php83 curl
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +75,10 @@ jobs:
             sh tests/phar-serves.sh bin/qbixserver.phar
 
   # ── Linux architectures we ship no binary for ───────────────
+  # The official PHP images carry neither pcntl nor php-cgi, so the server
+  # falls back to a mode it has no binary for and answers 500 to everything.
+  # pcntl is how it is meant to run, and it is bundled with PHP -- it just has
+  # to be built.
   # A 32-bit Raspberry Pi, an IBM Z mainframe and a RISC-V board are all just
   # PHP as far as the phar is concerned. Emulated through qemu, so these are
   # slow, and correctness is the only thing being asked of them.
@@ -104,6 +110,7 @@ jobs:
             php:8.3-cli \
             sh -c 'apt-get update -qq >/dev/null 2>&1; \
                    apt-get install -y -qq curl >/dev/null 2>&1; \
+                   docker-php-ext-install pcntl >/dev/null 2>&1; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
 
   # ── musl, rather than glibc ─────────────────────────────────
@@ -134,6 +141,7 @@ jobs:
             -v "$PWD":/src -w /src \
             php:8.3-cli-alpine \
             sh -c 'apk add --no-cache curl >/dev/null 2>&1; \
+                   docker-php-ext-install pcntl >/dev/null 2>&1; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
 
   # ── The other Unixes ───────────────────────────────────────
