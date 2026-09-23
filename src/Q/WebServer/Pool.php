@@ -1201,15 +1201,26 @@ class Q_WebServer_Pool
 		// Batch RSS lookup by platform
 		$rssMap = self::getProcessRss($pids);
 
+		$pssMap = self::getProcessPss($pids);
+		$totalPss = 0;
 		foreach ($this->workers as $i => $w) {
 			$pid = $w['pid'];
 			$rssKb = $rssMap[$pid] ?? 0;
 			$totalRss += $rssKb;
+			$totalPss += $pssMap[$pid] ?? 0;
 			$stats[] = array(
 				'pid' => $pid,
 				'busy' => $w['busy'],
 				'rssKb' => $rssKb,
 			);
+		}
+		// The real footprint includes the parent, which holds the shared pages
+		// the workers' PSS is a fraction of. Summing PSS across parent and
+		// workers is the actual physical memory the pool occupies.
+		$selfPss = 0;
+		if ($totalPss > 0) {
+			$selfMap = self::getProcessPss(array(getmypid()));
+			$selfPss = $selfMap[getmypid()] ?? 0;
 		}
 		return array(
 			'workers' => $stats,
@@ -1217,12 +1228,41 @@ class Q_WebServer_Pool
 			'target' => $this->targetSize,
 			'idle' => $this->idleCount(),
 			'totalRssKb' => $totalRss,
+			// 0 off Linux; the dashboard then falls back to RSS.
+			'totalPssKb' => $totalPss > 0 ? ($totalPss + $selfPss) : 0,
 		);
 	}
 
 	/**
 	 * Get RSS in KB for a list of PIDs. Cross-platform.
 	 */
+	/**
+	 * Real memory (PSS) in KB for a list of PIDs, Linux only.
+	 *
+	 * RSS counts a shared copy-on-write page in full against every process that
+	 * maps it, so summing worker RSS reports the warmed baseline once per worker
+	 * -- hundreds of workers each showing ~40 MB became ~15 GB, which is the
+	 * opposite of what copy-on-write does. PSS ("proportional set size") divides
+	 * each shared page by the number of processes sharing it, so the sum over
+	 * the parent and its workers is the actual physical memory. That is the
+	 * number the "Worker Memory (COW)" card exists to show.
+	 *
+	 * smaps_rollup is one small read per pid; the caller caches it. Returns an
+	 * empty map off Linux, where the card falls back to RSS.
+	 */
+	static function getProcessPss($pids)
+	{
+		$map = array();
+		if (empty($pids) || PHP_OS_FAMILY !== 'Linux') return $map;
+		foreach ($pids as $pid) {
+			$roll = @file_get_contents("/proc/$pid/smaps_rollup");
+			if ($roll && preg_match('/^Pss:\s+(\d+)/m', $roll, $m)) {
+				$map[$pid] = (int) $m[1]; // already KB
+			}
+		}
+		return $map;
+	}
+
 	static function getProcessRss($pids)
 	{
 		$map = array();

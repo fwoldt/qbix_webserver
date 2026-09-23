@@ -62,6 +62,30 @@ edited down to what a reader actually needs.
 
 ## Unreleased
 
+### Fixed
+
+- **The "Worker Memory (COW)" card reported several times the real memory.** It
+  summed each worker's RSS, and RSS counts a shared copy-on-write page in full
+  against every process mapping it -- so the warmed baseline shared across 380
+  workers showed as ~15 GB, the opposite of what copy-on-write does, and it did
+  not fall when the server restarted because every worker inherits that shared
+  baseline at birth. The card now reports PSS (proportional set size) summed
+  over the parent and workers, which is the actual physical memory: ~2.9 GB
+  where RSS claimed ~15 GB.
+- The live request log printed raw millisecond floats
+  (`502.26688385009766ms`); durations are rounded to one decimal, at the source
+  and in the render.
+- The status-code filter offered only codes seen live after the page loaded;
+  it now lists every code the server has recorded, from the stats it already
+  sends.
+
+### Added
+
+- Column headings on the live request log (Time, Sts, Verb, Path, ms, Mem).
+- The dashboard's own heading links to the dashboard; the footer's product name
+  keeps its link to the repository.
+
+
 ### Added
 
 - The brand and maintainer labels can now carry links. `Q.webserver.brandUrl`

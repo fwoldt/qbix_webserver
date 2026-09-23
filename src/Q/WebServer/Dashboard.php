@@ -98,7 +98,7 @@ class Q_WebServer_Dashboard
 		}
 
 		$entry = array('time' => date('H:i:s'), 'method' => $method,
-			'uri' => $uri, 'status' => $status, 'ms' => $ms, 'kind' => $kind,
+			'uri' => $uri, 'status' => $status, 'ms' => round($ms, 1), 'kind' => $kind,
 			'mem' => $memUsed, 'sid' => $sessionId);
 		self::$recentRequests[] = $entry;
 		if (count(self::$recentRequests) > 200) array_shift(self::$recentRequests);
@@ -428,6 +428,9 @@ class Q_WebServer_Dashboard
 		$maintainer = htmlspecialchars($maintainer, ENT_QUOTES, 'UTF-8');
 		$maintainerUrl = htmlspecialchars($maintainerUrl, ENT_QUOTES, 'UTF-8');
 		// The brand name, linked to the product home when one is configured.
+		// The header brand links to the dashboard itself; the footer links to
+		// the product. Different destinations, same name.
+		$brandHeader = '<a href="/Q/dashboard" style="color:inherit;text-decoration:none">' . $brand . '</a>';
 		$brandName = ($brandUrl !== '')
 			? '<a href="' . $brandUrl . '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">' . $brand . '</a>'
 			: $brand;
@@ -520,9 +523,9 @@ transition:background .1s}
 .wd{width:6px;height:6px;border-radius:50%;background:var(--red)}.wd.on{background:var(--grn)}
 .room{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
 .room .n{font-family:'SF Mono',monospace;color:var(--pur)}
-.log-wrap{max-height:50vh;overflow-y:auto;display:flex;flex-direction:column-reverse}
+.log-wrap{max-height:50vh;overflow-y:auto;display:flex;flex-direction:column-reverse}.le.lh{font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;font-size:10px;border-bottom:1px solid rgba(128,128,128,.22);position:sticky;top:0;background:var(--bg,#111);z-index:1}.le.lh span{color:inherit}
 </style></head><body>
-<h1><span class="dot"></span>$brandName</h1>
+<h1><span class="dot"></span>$brandHeader</h1>
 <div class="sub" id="sub"></div>
 
 <div class="grid">
@@ -558,7 +561,7 @@ transition:background .1s}
 <button class="ph-btn" id="btn-pause" onclick="togglePause()" title="Pause/resume">&#9208;</button>
 <button class="ph-btn" onclick="clearLog()" title="Clear log">&#10005;</button>
 </div></div>
-<div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
+<div class="le lh"><span class="lk"></span><span class="lt">Time</span><span class="ls">Sts</span><span class="lm">Verb</span><span class="lu">Path</span><span class="ld">ms</span><span class="lmem">Mem</span></div><div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
 
 <script>
 var S=$stats,R=$recent,BASE='$baseUrl',
@@ -614,11 +617,15 @@ if(s.systemRam){
 // Worker COW stats
 if(s.workerStats){
   var ws=s.workerStats;
-  var totalKb=ws.totalRssKb;
+  // Real footprint (PSS) when available, not summed RSS: RSS counts each
+  // shared copy-on-write page once per worker, over-reporting the warmed
+  // baseline several-fold.
+  var real=ws.totalPssKb>0;
+  var totalKb=real?ws.totalPssKb:ws.totalRssKb;
   var avgKb=ws.count>0?Math.round(totalKb/ws.count):0;
   var fpmEquiv=ws.count*50;
   el('cow-total',fmtMem(totalKb*1024));
-  el('cow-detail',ws.idle+'/'+ws.count+' idle \u00B7 avg '+fmtMem(avgKb*1024)+'/worker \u00B7 fpm would use ~'+fpmEquiv+'MB');
+  el('cow-detail',ws.idle+'/'+ws.count+' idle \u00B7 '+(real?'real ':'rss ')+fmtMem(avgKb*1024)+'/worker \u00B7 fpm would use ~'+fpmEquiv+'MB');
   var ce=document.getElementById('cow-total');
   if(ce)ce.style.color='var(--grn)';
 }else if(s.forkMode){
@@ -629,6 +636,8 @@ el('s2',s.status2xx);el('s3',s.status3xx);el('s4',s.status4xx);el('s5',s.status5
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
 el('srps',(s.rps)+' avg req/s');
 el('phpn',s.phpRequests+' PHP / '+s.staticRequests+' static');
+// Offer every status code the server has recorded, not just the live ones.
+if(s.statusCodes){for(var _sc in s.statusCodes){if(!knownCodes[_sc]){knownCodes[_sc]=1;addScOption(_sc)}}}
 el('reqc',s.requests.toLocaleString()+' total');
 // Sync uptime from server
 upSec=s.uptimeSec||0;
@@ -688,7 +697,7 @@ var uri=esc(e.uri);
 if(e.method==='GET'){uri='<a href="'+BASE+esc(e.uri)+'" target="_blank">'+uri+'</a>'}
 return '<span class="lk">'+k+'</span><span class="lt">'+e.time+'</span><span class="ls '+c+'">'+e.status+
 '</span><span class="lm">'+e.method+'</span><span class="lu">'+uri+
-'</span><span class="ld">'+e.ms+'ms</span><span class="lmem">'+fmtMem(e.mem)+'</span>';
+'</span><span class="ld">'+(e.ms==null?'':(+e.ms).toFixed(1))+'ms</span><span class="lmem">'+fmtMem(e.mem)+'</span>';
 }
 
 function togglePause(){
