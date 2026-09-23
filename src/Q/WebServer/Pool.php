@@ -1249,9 +1249,26 @@ class Q_WebServer_Pool
 		// arrived, so a short write here desynchronises the parent's reader
 		// instead of losing a few bytes: it takes the length we declared,
 		// finds the next reply beginning inside this one, and every response
-		// after it belongs to the wrong request. The child's end is blocking,
-		// so writeAll is the right one of the two.
-		Q_WebServer::writeAll($sock, pack('N', strlen($j)) . $j);
+		// after it belongs to the wrong request.
+		//
+		// Written out rather than handed to Q_WebServer::writeAll(), which
+		// ends by putting the stream back into non-blocking mode. That is
+		// right for the event loop it was written for and wrong here:
+		// childRun() sets this socket blocking on purpose and then waits on it
+		// for the next request, so a worker that came back non-blocking read
+		// an empty string and exited. The first request of each worker
+		// succeeded and the second did not.
+		//
+		// The socket is already blocking, so a plain loop completes the write
+		// without touching the mode.
+		$packet = pack('N', strlen($j)) . $j;
+		$length = strlen($packet);
+		$written = 0;
+		while ($written < $length) {
+			$n = @fwrite($sock, substr($packet, $written));
+			if ($n === false or $n === 0) break;
+			$written += $n;
+		}
 	}
 }
 
