@@ -6,21 +6,53 @@ itself, where it would be written once and never found again.
 
 ## How this is kept
 
-**A tag is cheap. A release is not.** Tags are made whenever a build is worth
-having; a *published release* is a deliberate batch, and it happens when there
-is enough here to be worth somebody's attention.
+**A tag is permanent, so both the tag and the release are deliberate.**
 
-The release workflow enforces exactly that: **it publishes a release only for a
-tag that has a section in this file.** Tag whatever you like — a tag with no
-section below builds and tests and then stops, leaving no release behind. That
-is the whole mechanism, and it is the reason a version number and its notes can
-no longer drift apart.
+This repository is a Composer package, and Packagist reads every tag. It
+currently knows 43 versions — including `v0.0.4.26`, which has no GitHub
+release at all. Publishing nothing did not make that version number free; it
+made it a version of this package that exists, forever, describing itself with
+whatever the tree held at the time.
 
-So the order of work at release time is:
+A tag therefore cannot be withdrawn, moved or re-cut. Packagist caches the
+version it found on first read, so a "corrected" tag yields two different
+packages wearing one version number, which is worse than the original mistake
+and impossible to diagnose from outside. **The only correct response to a bad
+version is to publish the next one** and say plainly in its notes what was
+wrong with the one before.
 
-1. Move everything under `## Unreleased` into a new `## vX.Y.Z.N` heading.
-2. Write the one-line summary under the heading. It becomes the release title.
-3. Commit, then tag that commit.
+So the rule is not "tag freely, release rarely" — it is *accumulate* freely and
+tag rarely. Work lands on the branch as ordinary commits and collects under
+`## Unreleased`. A tag is made when that accumulation is worth a version
+number.
+
+The workflow adds the second half: **it publishes a release only for a tag that
+has a section in this file.** Writing the section is the act of deciding to
+release, which is why a version and its notes can no longer describe different
+things. A tag without a section still builds and tests — useful for proving a
+commit before it is released — but it is still a permanent Packagist version,
+so it is not free either.
+
+At release time:
+
+1. Check what is already published. Never guess the next number:
+   ```bash
+   git fetch --tags
+   git tag -l 'v*' --sort=version:refname | tail -5   # never plain `tail -1`
+   gh release list --limit 10
+   ```
+   A lexical sort puts `0.0.4.10` *before* `0.0.4.8`, and a tag can exist with
+   no release, so check both lists.
+2. Confirm the tree is clean, the suite passes, and the committed phar matches
+   its sources.
+3. Move everything under `## Unreleased` into a new `## vX.Y.Z.N` heading.
+4. Write the one-line summary on that heading. It becomes the release title.
+5. Commit, then tag that commit.
+
+Only the last position increments: `0.0.4.9` → `0.0.4.10` → `0.0.4.11`, never
+`0.0.5.0`. The last position is an integer and keeps counting; moving anything
+above it is a decision about what the release *means*, not a consequence of
+reaching nine.
 
 Entries use the same four prefixes as commit messages — `Added`, `Fixed`,
 `Updated`, `Removed` — so a section can be assembled from `git log` and then
@@ -201,3 +233,10 @@ and `git log`. Entries before this file existed were not written up.
 builds did not produce a usable artifact, and the gaps are left in place rather
 than backfilled — a version number that never shipped anything is more honest
 as a hole than as a release with nothing behind it.
+
+They are not, however, absent. Packagist read each of those tags and they are
+installable versions of this package; there is simply no release page and no
+binary. If you have pinned one, move to the next version above it. They are
+left alone rather than deleted because withdrawing a published version breaks
+anything that already resolved it, and because re-cutting a tag is the one
+repair that makes things worse.
