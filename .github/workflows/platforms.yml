@@ -67,10 +67,19 @@ jobs:
               done
           - os: openbsd
             version: '7.6'
+            # OpenBSD refuses an ambiguous name outright -- "php" matches
+            # 8.1, 8.2 and 8.3, so pkg_add installed nothing at all and the
+            # failure read as the platform having no PHP. The branch is named
+            # with %, which is how OpenBSD selects among them.
+            #
+            # phar and tokenizer are not separate packages here; asking for
+            # them produces "Can't find php-phar" and nothing else happens,
+            # which is why the loop tolerates a miss.
             install: |
-              sudo pkg_add -I php curl || true
-              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
-                sudo pkg_add -I php-$e || true
+              sudo pkg_add -I curl || true
+              sudo pkg_add -I php%8.3 || sudo pkg_add -I php%8.2 || true
+              for e in pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
+                sudo pkg_add -I php-$e%8.3 || sudo pkg_add -I php-$e%8.2 || true
               done
           - os: netbsd
             version: '10.0'
@@ -87,6 +96,10 @@ jobs:
               # directory will not do it for you, it will only break.
               export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/10.0_2026Q2/All/"
               echo "PKG_PATH=$PKG_PATH"
+              # libxml2 first and by name. php83 asks for a newer one than
+              # pkg_add resolves on its own, and stops on the dependency
+              # rather than fetching it.
+              sudo -E /usr/sbin/pkg_add libxml2 || true
               sudo -E /usr/sbin/pkg_add php83 curl || true
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo -E /usr/sbin/pkg_add php83-$e || true
