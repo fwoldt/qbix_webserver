@@ -184,20 +184,31 @@ toolchain supports; PHP is C with a great many statically linked dependencies
 and does not cross-compile the way a Go program does, so this list is short by
 nature rather than by neglect.
 
-| Platform | Download |
-|---|---|
-| **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) |
-| **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) |
-| **Windows** x64 | [`qbixserver-windows-x64.exe`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-windows-x64.exe) |
-| **Windows** x64, no console | [`qbixserver-windows-x64-gui.exe`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-windows-x64-gui.exe) |
-| **macOS** arm64 | *not published — see below* |
+| Platform | Download | State |
+|---|---|---|
+| **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) | shipped |
+| **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) | shipped |
+| **macOS** arm64 | — | builds, does not work |
+| **Windows** x64 | — | does not build |
 
-**macOS is currently not shipped.** The binary builds, but it answers every PHP
-request with an empty body. That went unnoticed for several releases because
-the test which would have caught it could not run on the macOS runner at all;
-once it could, it failed immediately. Publishing a server that returns nothing
-is worse than publishing no macOS build, so the artifact is withheld until it
-is fixed. macOS users should run the phar, which works.
+Two of the four are not shipped, and it is worth being plain about why rather
+than leaving a download that disappoints.
+
+**macOS** builds a binary that answers every PHP request with an empty body.
+This went unnoticed for several releases because the test that would have
+caught it could not run on the macOS runner at all; the moment it could, it
+failed. Publishing a server that returns nothing is worse than publishing no
+macOS build.
+
+**Windows** does not currently produce a binary. The static PHP build fails
+fetching the `icu` library that `intl` needs, and the packaging step then finds
+no `php.exe` and skips. Both steps were marked to continue on error, so the job
+reported success and shipped only a stray `.dll` -- which is why this went
+unnoticed for as long as it did.
+
+Until both are fixed, **macOS and Windows users should run the phar**, which
+works on all four platforms. It needs a PHP 8.1+ interpreter, which on those
+two is the easier thing to obtain anyway.
 
 ### The phar — anywhere PHP 8.1+ runs
 
@@ -242,7 +253,7 @@ multitasking systems, and even there someone has to produce a current PHP first.
 | **Linux** x86_64, aarch64 | `pcntl_fork` | Yes — 120KB per worker | Persistent or fork-per-request |
 | **macOS** Intel, Apple Silicon | `pcntl_fork` | Yes | Persistent or fork-per-request |
 | **BSD**, **illumos** | `pcntl_fork` | Yes | Persistent or fork-per-request |
-| **Windows** x64 | `php-cgi` subprocess | No | Persistent workers, source-transform shimming |
+| **Windows** x64 (via phar) | `php-cgi` subprocess | No | Persistent workers, source-transform shimming |
 
 On Linux, the BSDs and macOS the server runs COW-forked workers at ~120KB each.
 Windows has no `pcntl`, so it spawns `php-cgi` subprocesses for isolation:
