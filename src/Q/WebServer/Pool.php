@@ -1191,45 +1191,48 @@ class Q_WebServer_Pool
 	 */
 	function getWorkerStats()
 	{
-		$stats = array();
-		$totalRss = 0;
+		$count = count($this->workers);
+
+		// Memory is SAMPLED, never read per worker. This runs every couple of
+		// seconds while a dashboard is open, in the single event-loop process, and
+		// reading /proc for hundreds of workers there stalled the loop long enough
+		// to wedge the whole server -- the front page timed out, not just the
+		// dashboard. Workers are near-identical (same fork, same warmed baseline),
+		// so a bounded sample scaled to the count is the right order of magnitude
+		// at a fixed cost, where the per-worker read was O(workers) and unbounded.
 		$pids = array();
-		foreach ($this->workers as $i => $w) {
-			$pids[] = $w['pid'];
+		foreach ($this->workers as $w) $pids[] = $w['pid'];
+		$sample = $pids;
+		$sampleMax = 24;
+		if (count($sample) > $sampleMax) {
+			shuffle($sample);
+			$sample = array_slice($sample, 0, $sampleMax);
 		}
 
-		// Batch RSS lookup by platform
-		$rssMap = self::getProcessRss($pids);
-
-		$pssMap = self::getProcessPss($pids);
+		$rssMap = self::getProcessRss($sample);
+		$pssMap = self::getProcessPss($sample);
+		$avgRss = $rssMap ? array_sum($rssMap) / count($rssMap) : 0;
+		$avgPss = $pssMap ? array_sum($pssMap) / count($pssMap) : 0;
+		$totalRss = (int) round($avgRss * $count);
 		$totalPss = 0;
-		foreach ($this->workers as $i => $w) {
-			$pid = $w['pid'];
-			$rssKb = $rssMap[$pid] ?? 0;
-			$totalRss += $rssKb;
-			$totalPss += $pssMap[$pid] ?? 0;
-			$stats[] = array(
-				'pid' => $pid,
-				'busy' => $w['busy'],
-				'rssKb' => $rssKb,
-			);
-		}
-		// The real footprint includes the parent, which holds the shared pages
-		// the workers' PSS is a fraction of. Summing PSS across parent and
-		// workers is the actual physical memory the pool occupies.
-		$selfPss = 0;
-		if ($totalPss > 0) {
+		if ($avgPss > 0) {
+			// The parent holds the shared pages the workers' PSS is a fraction of;
+			// read it exactly and add it.
 			$selfMap = self::getProcessPss(array(getmypid()));
-			$selfPss = $selfMap[getmypid()] ?? 0;
+			$totalPss = (int) round($avgPss * $count) + ($selfMap[getmypid()] ?? 0);
 		}
+
 		return array(
-			'workers' => $stats,
-			'count' => count($this->workers),
+			// Per-worker detail is deliberately omitted: the UI does not use it and
+			// a list of hundreds would be built and sent on every tick.
+			'workers' => array(),
+			'count' => $count,
 			'target' => $this->targetSize,
 			'idle' => $this->idleCount(),
+			'sampled' => count($sample) < $count ? count($sample) : 0,
 			'totalRssKb' => $totalRss,
-			// 0 off Linux; the dashboard then falls back to RSS.
-			'totalPssKb' => $totalPss > 0 ? ($totalPss + $selfPss) : 0,
+			// 0 off Linux; the dashboard then falls back to RSS and says so.
+			'totalPssKb' => $totalPss,
 		);
 	}
 

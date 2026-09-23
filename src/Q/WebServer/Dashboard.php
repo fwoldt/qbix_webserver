@@ -300,7 +300,7 @@ class Q_WebServer_Dashboard
 	static function cachedWorkerStats($pool)
 	{
 		$now = time();
-		if (self::$cachedWs && ($now - self::$cachedWsTime) < 3) {
+		if (self::$cachedWs && ($now - self::$cachedWsTime) < 15) {
 			// Update idle count (cheap) even on cache hit
 			self::$cachedWs['idle'] = $pool->idleCount();
 			return self::$cachedWs;
@@ -533,7 +533,7 @@ transition:background .1s}
 <div class="card"><div class="l">Current RPS</div><div class="v" id="crps" style="color:var(--cyn)">0</div><div class="s">last 5 sec</div></div>
 <div class="card"><div class="l">Avg response</div><div class="v" id="avg">0<span style="font-size:12px;font-weight:400">ms</span></div><div class="s">slowest: <span id="slow">0ms</span></div></div>
 <div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">&#8212;</div><div class="s">peak <span id="smp">&#8212;</span></div></div>
-<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s" id="phpn">0 PHP / 0 static</div></div>
+<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s" id="phpn">reqs: 0 PHP &#183; 0 static</div></div>
 <div class="card"><div class="l">System RAM</div><div class="v" id="sysram">&#8212;</div><div class="s" id="sysram-detail">&#8212;</div></div>
 <div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s" id="cow-detail">&#8212;</div></div>
 <div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
@@ -635,7 +635,7 @@ if(s.workerStats){
 el('s2',s.status2xx);el('s3',s.status3xx);el('s4',s.status4xx);el('s5',s.status5xx);
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
 el('srps',(s.rps)+' avg req/s');
-el('phpn',s.phpRequests+' PHP / '+s.staticRequests+' static');
+el('phpn','reqs: '+s.phpRequests+' PHP \u00B7 '+s.staticRequests+' static');
 // Offer every status code the server has recorded, not just the live ones.
 if(s.statusCodes){for(var _sc in s.statusCodes){if(!knownCodes[_sc]){knownCodes[_sc]=1;addScOption(_sc)}}}
 el('reqc',s.requests.toLocaleString()+' total');
