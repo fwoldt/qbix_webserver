@@ -57,6 +57,10 @@ jobs:
             extensions: "pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
           - os: windows-latest
             name: windows-x64
+            # Fails at the moment: the static PHP build cannot fetch icu. It
+            # must not block the platforms that work while that is true, and
+            # with the step-level continue-on-error removed above it would.
+            experimental: true
             spc_os: windows
             spc_arch: x64
             # No pcntl or posix on Windows
@@ -233,7 +237,6 @@ jobs:
 
       - name: Build static PHP CLI + phpmicro (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $exts = Get-Content "win_exts.txt" -ErrorAction SilentlyContinue
@@ -268,7 +271,6 @@ jobs:
 
       - name: Build phar and combine (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           if (-not (Test-Path "spc-src\buildroot\bin\php.exe")) {
@@ -313,7 +315,6 @@ jobs:
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           if (Test-Path "qbixserver-${{ matrix.name }}.exe") {
@@ -330,6 +331,26 @@ jobs:
         run: QB=./qbixserver-${{ matrix.name }} bash tests/clean-body.sh
 
       # ── Upload ───────────────────────────────────────────
+      # The steps above can each be made to fail properly, and still the thing
+      # that matters is whether a binary exists. v0.0.4.23 shipped a lone DLL
+      # because the build quietly produced nothing and every check was about a
+      # step rather than an output. This one is about the output.
+      - name: Check the build actually produced a server
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            want="qbixserver-${{ matrix.name }}.exe"
+          else
+            want="qbixserver-${{ matrix.name }}"
+          fi
+          if [ ! -s "$want" ]; then
+            echo "::error::no server binary at $want - the build produced nothing"
+            echo "what is here:"
+            ls -la | sed 's/^/  /'
+            exit 1
+          fi
+          echo "  $want  $(wc -c < "$want") bytes"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
