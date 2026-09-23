@@ -1358,20 +1358,108 @@ class Q_WebServer
 	 * @param {string} $buf
 	 * @return {boolean}
 	 */
+	/**
+	 * Where a request's headers end, allowing for bare LF line endings.
+	 *
+	 * Only "\r\n\r\n" was recognised. A client sending bare LF -- which some
+	 * do, and every attacker will if it helps -- therefore never completed a
+	 * request at all: the connection sat in the read loop holding a worker slot
+	 * until it timed out. Answering such a request with 400 costs nothing;
+	 * never answering it is a way to tie the server up with one short write.
+	 *
+	 * @method headerEnd
+	 * @static
+	 * @param {string} $buf
+	 * @param {integer} $sepLen set to the length of the terminator found
+	 * @return {integer|false}
+	 */
+	static function headerEnd($buf, &$sepLen)
+	{
+		$crlf = strpos($buf, "\r\n\r\n");
+		$lf = strpos($buf, "\n\n");
+		if ($crlf === false and $lf === false) { $sepLen = 0; return false; }
+		if ($crlf === false or ($lf !== false and $lf < $crlf)) {
+			$sepLen = 2;
+			return $lf;
+		}
+		$sepLen = 4;
+		return $crlf;
+	}
+
+	/**
+	 * Why this request's framing cannot be trusted, or null if it can.
+	 *
+	 * A message that declares its length twice, and differently, has no single
+	 * answer to where it ends. RFC 9112 section 6.1 requires such a message to
+	 * be rejected rather than resolved, and the reason is request smuggling: a
+	 * front-end and a back-end that break the tie differently can be made to
+	 * see different request boundaries in one stream, so one visitor's request
+	 * is read as the tail of another's. Choosing a winner is what makes that
+	 * possible; refusing is what prevents it.
+	 *
+	 * Bare LF is refused for the same reason -- a proxy that accepts only CRLF
+	 * and a server that accepts both do not agree about where a header stops.
+	 *
+	 * @method framingFault
+	 * @static
+	 * @param {string} $head the request head, without the blank line
+	 * @return {string|null}
+	 */
+	static function framingFault($head)
+	{
+		$lines = preg_split("/\r\n|\n/", $head);
+		array_shift($lines);            // the request line is not a header
+
+		$lengths = array();
+		$chunked = false;
+		foreach ($lines as $line) {
+			if ($line === '') continue;
+			$colon = strpos($line, ':');
+			if ($colon === false) continue;
+			$name = strtolower(trim(substr($line, 0, $colon)));
+			$value = trim(substr($line, $colon + 1));
+			if ($name === 'content-length') {
+				// A list in one header is the same conflict written shorter.
+				foreach (explode(',', $value) as $one) {
+					$lengths[trim($one)] = true;
+				}
+			} else if ($name === 'transfer-encoding') {
+				$chunked = true;
+			}
+		}
+
+		if ($chunked and $lengths) {
+			return 'both Content-Length and Transfer-Encoding';
+		}
+		if (count($lengths) > 1) {
+			return 'conflicting Content-Length values';
+		}
+		foreach (array_keys($lengths) as $one) {
+			if ($one === '' or !ctype_digit($one)) {
+				return 'Content-Length is not a number';
+			}
+		}
+		if (strpos($head, "\r\n") === false and strpos($head, "\n") !== false) {
+			return 'bare LF line endings';
+		}
+		return null;
+	}
+
 	static function requestComplete($buf)
 	{
-		$headerEnd = strpos($buf, "\r\n\r\n");
+		$sepLen = 0;
+		$headerEnd = self::headerEnd($buf, $sepLen);
 		if ($headerEnd === false) return false;
 		if ($buf[0] !== 'P') return true;   // only POST/PUT/PATCH carry a body
 		if (preg_match('/transfer-encoding:\s*chunked/i', $buf)) {
-			$bodyPart = substr($buf, $headerEnd + 4);
+			$bodyPart = substr($buf, $headerEnd + $sepLen);
 			return strpos($bodyPart, "\r\n0\r\n") !== false
 				|| strpos($bodyPart, "\n0\n") !== false;
 		}
 		$cl = 0;
 		if (preg_match('/content-length:\s*(\d+)/i', $buf, $m)) $cl = (int) $m[1];
 		if ($cl <= 0) return true;
-		return (strlen($buf) - $headerEnd - 4) >= $cl;
+		return (strlen($buf) - $headerEnd - $sepLen) >= $cl;
 	}
 
 	static function onClientData($client)
@@ -1417,9 +1505,20 @@ class Q_WebServer
 		}
 
 		// Wait for complete headers
-		$headerEnd = strpos($buf, "\r\n\r\n");
+		$sepLen = 0;
+		$headerEnd = self::headerEnd($buf, $sepLen);
 		if ($headerEnd === false) {
 			if (strlen($buf) > 65536) self::closeClient($key);
+			return;
+		}
+
+		// A message whose length is declared twice, and differently, has no
+		// single answer to where it ends. Refusing is what stops the two ends
+		// of a chain disagreeing about it.
+		$fault = self::framingFault(substr($buf, 0, $headerEnd));
+		if ($fault !== null) {
+			self::sendResponse($client, 400, 'Bad Request: ' . $fault);
+			self::closeClient($key);
 			return;
 		}
 
@@ -1439,10 +1538,10 @@ class Q_WebServer
 			}
 			if ($isChunked) {
 				// Chunked: wait for terminating 0\r\n\r\n
-				$bodyPart = substr($buf, $headerEnd + 4);
+				$bodyPart = substr($buf, $headerEnd + $sepLen);
 				if (strpos($bodyPart, "\r\n0\r\n") === false && strpos($bodyPart, "\n0\n") === false) return;
 			} elseif ($cl > 0) {
-				if (strlen($buf) - $headerEnd - 4 < $cl) return;
+				if (strlen($buf) - $headerEnd - $sepLen < $cl) return;
 			}
 		}
 
