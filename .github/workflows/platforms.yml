@@ -1,0 +1,139 @@
+name: Platforms
+
+# Where Exponential Velocity runs, demonstrated rather than claimed.
+#
+# The static binaries cover five targets, because that is what the build
+# toolchain ships for: PHP is C with a great many statically linked
+# dependencies, and it does not cross-compile the way a Go program does. That
+# ceiling is real and no amount of matrix entries moves it.
+#
+# The phar has no such ceiling. It is PHP, so it runs wherever PHP 8.1 or later
+# runs, and that is a far longer list than five. This workflow boots those
+# platforms and watches the phar serve a page on each, so the support table in
+# the README is a record of something observed rather than an assumption.
+#
+# Nothing here gates a release. A platform that breaks should be visible
+# without holding up the platforms that work.
+
+on:
+  push:
+    branches: [maintain]
+    paths:
+      - 'bin/qbixserver.phar'
+      - 'tests/phar-serves.sh'
+      - '.github/workflows/platforms.yml'
+  pull_request:
+    paths:
+      - 'bin/qbixserver.phar'
+      - 'tests/phar-serves.sh'
+      - '.github/workflows/platforms.yml'
+  workflow_dispatch:
+  schedule:
+    # Weekly, so a platform that breaks under us is noticed before someone
+    # reports it rather than after.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ── The BSDs ────────────────────────────────────────────────
+  # Real kernels in a VM, not emulation of a Linux userland, so a difference
+  # in how sockets or signals behave shows up here and nowhere else.
+  bsd:
+    name: ${{ matrix.os }} ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: freebsd
+            version: '14.2'
+            install: pkg install -y php83 curl
+          - os: openbsd
+            version: '7.6'
+            install: pkg_add -I php curl
+          - os: netbsd
+            version: '10.0'
+            install: /usr/sbin/pkg_add php83 curl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Serve a page on ${{ matrix.os }}
+        uses: cross-platform-actions/action@v0.26.0
+        with:
+          operating_system: ${{ matrix.os }}
+          version: ${{ matrix.version }}
+          shell: sh
+          run: |
+            sudo ${{ matrix.install }} || ${{ matrix.install }}
+            sh tests/phar-serves.sh bin/qbixserver.phar
+
+  # ── Linux architectures we ship no binary for ───────────────
+  # A 32-bit Raspberry Pi, an IBM Z mainframe and a RISC-V board are all just
+  # PHP as far as the phar is concerned. Emulated through qemu, so these are
+  # slow, and correctness is the only thing being asked of them.
+  linux-arch:
+    name: linux/${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/386        # 32-bit x86, still in the field on older kit
+          - linux/arm/v7     # Raspberry Pi 2 and 3 in 32-bit mode
+          - linux/arm64      # Raspberry Pi 4 and 5, also a shipped binary
+          - linux/ppc64le    # POWER
+          - linux/s390x      # IBM Z, and big-endian, which finds real bugs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Serve a page on ${{ matrix.platform }}
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD":/src -w /src \
+            php:8.3-cli \
+            sh -c 'apt-get update -qq >/dev/null 2>&1; \
+                   apt-get install -y -qq curl >/dev/null 2>&1; \
+                   sh tests/phar-serves.sh bin/qbixserver.phar'
+
+  # ── Haiku ───────────────────────────────────────────────────
+  # The successor to BeOS, and the one platform here with no ready-made action
+  # and no published image for a CI runner. Haiku carries PHP in its own
+  # package repository, so there is every reason to think the phar runs; this
+  # job is what would establish it.
+  #
+  # It is left disabled rather than passing vacuously. Booting Haiku under qemu
+  # needs an anyboot image, a serial console and a way in, and a job that is
+  # quietly skipped is worse than one that is honestly absent. Enable it by
+  # running this workflow by hand with `haiku` set.
+  haiku:
+    name: haiku x86_64 (experimental)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Boot Haiku and serve a page
+        run: |
+          echo "Haiku support is not yet automated."
+          echo
+          echo "What is known:"
+          echo "  - Haiku ships PHP in HaikuPorts, so the interpreter exists."
+          echo "  - The phar needs nothing but that interpreter."
+          echo "  - tests/phar-serves.sh is POSIX sh and avoids every tool"
+          echo "    Haiku does not have, so it should run there unchanged."
+          echo
+          echo "What is missing: a booted Haiku in CI. The route is a nightly"
+          echo "anyboot image under qemu with SSH enabled, which is a piece of"
+          echo "work in its own right and is not pretended to be done here."
+          exit 1

@@ -1,0 +1,135 @@
+#!/bin/sh
+# Does the phar serve a page on this platform?
+#
+# The static binaries exist for five targets, because that is what the build
+# toolchain ships for. The phar has no such limit: it is PHP, so it runs
+# wherever PHP 8.1 or later does -- the BSDs, the illumos family, the Linux
+# architectures nobody builds binaries for, and Haiku. This is the test that
+# turns that from a claim into something we have watched happen.
+#
+# Deliberately POSIX sh with no bashisms, no arrays, no `local`, no pipefail,
+# and no tool that is not on a minimal install. It has to run under Haiku's
+# sh and Solaris' /bin/sh as well as bash, so the moment it needs bash it
+# stops being able to answer the question it exists to ask.
+#
+#   sh tests/phar-serves.sh [path/to/qbixserver.phar]
+#
+# PHP=/path/to/php  overrides the interpreter.
+
+set -u
+
+PHAR="${1:-bin/qbixserver.phar}"
+PHP="${PHP:-php}"
+PORT="${PORT:-19777}"
+
+echo "=============================================="
+echo " Exponential Velocity - does the phar serve?"
+echo "=============================================="
+echo
+
+if [ ! -f "$PHAR" ]; then
+    echo "  FAIL  no phar at $PHAR"
+    exit 1
+fi
+
+if ! command -v "$PHP" >/dev/null 2>&1; then
+    echo "  FAIL  no php: set PHP=/path/to/php"
+    exit 1
+fi
+
+echo "  platform : $(uname -s) $(uname -m)"
+echo "  php      : $("$PHP" -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)"
+echo "  phar     : $PHAR"
+echo
+
+# Phar reading can be switched off by the ini, and the failure then looks like
+# a broken archive rather than a policy. Say which it is.
+if [ "$("$PHP" -r 'echo ini_get("phar.readonly") === false ? "missing" : "ok";' 2>/dev/null)" = "missing" ]; then
+    echo "  FAIL  this php has no phar support"
+    exit 1
+fi
+
+TMP="${TMPDIR:-/tmp}/qbix-phar-serves.$$"
+mkdir -p "$TMP/web" || { echo "  FAIL  cannot create $TMP"; exit 1; }
+printf '<?php echo "served by the phar";' > "$TMP/web/index.php"
+
+# Fetch with whatever the platform has. curl is not everywhere; FreeBSD has
+# fetch in the base system and several others only have wget.
+fetch_body() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --max-time 10 "$1" 2>/dev/null
+    elif command -v fetch >/dev/null 2>&1; then
+        fetch -q -o - "$1" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O - "$1" 2>/dev/null
+    else
+        # Last resort: PHP is present by definition, so use it.
+        "$PHP" -r 'echo @file_get_contents($argv[1]);' "$1" 2>/dev/null
+    fi
+}
+
+"$PHP" "$PHAR" --root="$TMP/web" --port="$PORT" --workers=2 > "$TMP/log" 2>&1 &
+SERVER=$!
+
+cleanup() {
+    kill "$SERVER" 2>/dev/null
+    # Give it a moment to go before taking the directory out from under it.
+    i=0
+    while [ $i -lt 20 ]; do
+        kill -0 "$SERVER" 2>/dev/null || break
+        i=$((i + 1))
+        sleep 1
+    done
+    kill -9 "$SERVER" 2>/dev/null
+    rm -rf "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+# Startup includes a pre-warm walk, so poll rather than guess at a sleep.
+BODY=""
+i=0
+while [ $i -lt 40 ]; do
+    BODY="$(fetch_body "http://127.0.0.1:$PORT/")"
+    [ -n "$BODY" ] && break
+    if ! kill -0 "$SERVER" 2>/dev/null; then
+        echo "  FAIL  the server exited during startup"
+        echo
+        sed 's/^/    /' "$TMP/log" 2>/dev/null | tail -20
+        exit 1
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+
+FAILED=0
+
+if [ "$BODY" = "served by the phar" ]; then
+    echo "  ok    the phar serves a page"
+else
+    echo "  FAIL  the phar did not serve the page"
+    echo "        got:  '$BODY'"
+    echo "        want: 'served by the phar'"
+    FAILED=1
+fi
+
+# A second request goes to a worker that has already served one, which is the
+# case persistent workers get wrong when they get anything wrong.
+BODY2="$(fetch_body "http://127.0.0.1:$PORT/")"
+if [ "$BODY2" = "served by the phar" ]; then
+    echo "  ok    a reused worker serves the same page"
+else
+    echo "  FAIL  the second request differed from the first"
+    echo "        got:  '$BODY2'"
+    FAILED=1
+fi
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+    echo "  PASS - $(uname -s) $(uname -m) can run Exponential Velocity"
+    exit 0
+fi
+echo "  FAIL - $(uname -s) $(uname -m)"
+echo
+echo "  server log:"
+sed 's/^/    /' "$TMP/log" 2>/dev/null | tail -30
+exit 1
