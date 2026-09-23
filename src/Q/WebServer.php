@@ -805,7 +805,7 @@ class Q_WebServer
 				// Offer it to the cache, exactly as the HTTP/1.1 path does.
 				// Without this the store is never filled from HTTP/2 and every
 				// request pays the full render.
-				Q_WebServer_Cache::put($parsed, $resp);
+				$resp = Q_WebServer_Cache::put($parsed, $resp);
 				Q_WebServer::$http2[$key]->respond($stream, $resp);
 			}
 		);
@@ -1847,7 +1847,7 @@ class Q_WebServer
 				$parsed['_scriptPath'] = $fsPath;
 				$response = self::dispatchToQ($parsed);
 				$response = self::processPhpResponse($response, $parsed['headers']);
-				Q_WebServer_Cache::put($parsed, $response);
+				$response = Q_WebServer_Cache::put($parsed, $response);
 				return $response;
 			}
 
@@ -1876,7 +1876,7 @@ class Q_WebServer
 		if (is_file(self::$rootDir . 'index.php')) {
 			$response = self::dispatchToQ($parsed);
 			$response = self::processPhpResponse($response, $parsed['headers']);
-			Q_WebServer_Cache::put($parsed, $response);
+			$response = Q_WebServer_Cache::put($parsed, $response);
 			return $response;
 		}
 
@@ -2748,7 +2748,7 @@ class Q_WebServer
 		$response = compact('status', 'body', 'headers', '_method');
 		Q_WebServer_Headers::processResponse($client, $response, $parsed['headers']);
 		self::$lastStatus = $status;
-		Q_WebServer_Cache::put($parsed, $response);
+		$response = Q_WebServer_Cache::put($parsed, $response);
 		return false;
 	}
 
@@ -3085,7 +3085,7 @@ WORKER;
 
 		Q_WebServer_Headers::processResponse($client, $response, $parsed['headers']);
 		self::$lastStatus = $response['status'] ?? 200;
-		Q_WebServer_Cache::put($parsed, $response);
+		$response = Q_WebServer_Cache::put($parsed, $response);
 		return false;
 	}
 

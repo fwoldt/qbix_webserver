@@ -355,11 +355,26 @@ class Q_WebServer_Cache
 	 * @static
 	 * @param {array} $parsed Request
 	 * @param {array} $response [status, headers, body]
+	 * @return {array} the response as it should now be sent
+	 *
+	 * Returns rather than modifies in place. Whatever normalising happens here
+	 * -- at present, collapsing the HTML and deriving the validator -- has to
+	 * reach the client as well as the store, or the request that fills the
+	 * cache is served something different from every request after it. That was
+	 * real: with minification on, the response that filled the cache was 95,086
+	 * bytes and every one after it 70,061.
+	 *
+	 * A return value rather than a reference parameter, because a reference
+	 * would break every caller that passes an expression rather than a
+	 * variable, and a caller that ignores the return simply gets today's
+	 * behaviour.
 	 */
 	static function put($parsed, $response)
 	{
-		if (!self::$enabled) return;
-		if ($parsed['method'] !== 'GET') return;
+		// Every exit hands the response back, including the ones that store
+		// nothing, so a caller can always assign the result without checking.
+		if (!self::$enabled) return $response;
+		if ($parsed['method'] !== 'GET') return $response;
 
 		// A request that claimed the re-render and then produced something
 		// uncacheable -- an error, a redirect, a no-store -- must still give
@@ -382,7 +397,7 @@ class Q_WebServer_Cache
 		if ((!$negative and $status !== 200)
 		or self::hasSkipCookie($parsed['headers'])) {
 			self::releaseRevalidation(self::cacheKey($parsed));
-			return;
+			return $response;
 		}
 
 		// Collapse the template engine's indentation, once, here.
@@ -416,28 +431,44 @@ class Q_WebServer_Cache
 			$response['body'] = Q_WebServer_Minify::html($response['body'] ?? '');
 		}
 
+		// From here the stored copy and the caller's copy diverge: what is
+		// stored is the wire form -- compressed, with Content-Encoding on it --
+		// and the caller must not be handed that, or its send path may compress
+		// an already-compressed body.
+		$stored = $response;
+
 		// The validator is taken from the body as the application produced it,
 		// before any compression, because the application's output is the
 		// thing whose sameness we mean. gzip is not guaranteed to produce
 		// identical bytes for identical input across versions or levels, so
 		// hashing the compressed form could invent a new validator for a page
 		// that had not changed -- the exact failure this is here to prevent.
-		$rawBody = $response['body'] ?? '';
+		$rawBody = $stored['body'] ?? '';
 
 		// Before anything below reads the headers or the body. They must come
 		// from the same value: taking headers first and compressing afterwards
 		// stores a gzip body described by the headers of the plain one.
-		$response = self::encodeBody(
-			$response,
+		$stored = self::encodeBody(
+			$stored,
 			isset($parsed['headers']['accept-encoding'])
 				? $parsed['headers']['accept-encoding'] : ''
 		);
 
-		$response['headers'] = self::withEntityTag(
-			$response['headers'] ?? array(), $rawBody
+		$stored['headers'] = self::withEntityTag(
+			$stored['headers'] ?? array(), $rawBody
 		);
 
-		$headers = $response['headers'] ?? array();
+		// The validator travels back to the caller, because it describes the
+		// representation the caller is about to send. Nothing else does: the
+		// Content-Encoding encodeBody() just added belongs to the stored copy.
+		foreach ($stored['headers'] as $name => $value) {
+			if (strcasecmp($name, 'ETag') === 0) {
+				$response['headers'][$name] = $value;
+				break;
+			}
+		}
+
+		$headers = $stored['headers'];
 		$cc = self::parseCacheControl($headers);
 
 		$key = self::cacheKey($parsed);
@@ -445,7 +476,7 @@ class Q_WebServer_Cache
 		// Don't cache if explicitly forbidden
 		if (isset($cc['no-store']) || isset($cc['private'])) {
 			self::releaseRevalidation($key);
-			return;
+			return $response;
 		}
 
 		// Determine TTL
@@ -468,14 +499,14 @@ class Q_WebServer_Cache
 
 		if ($ttl <= 0) {
 			self::releaseRevalidation($key);
-			return; // nothing to cache
+			return $response; // nothing to cache
 		}
 
-		$body = $response['body'] ?? '';
+		$body = $stored['body'] ?? '';
 		$expires = time() + $ttl;
 
 		$entry = array(
-			'status'  => $response['status'] ?? 200,
+			'status'  => $stored['status'] ?? 200,
 			'headers' => $headers,
 			'body'    => $body,
 			'expires' => $expires,
@@ -529,6 +560,8 @@ class Q_WebServer_Cache
 		// another request could claim the re-render, find the entry still
 		// expired, and render it a second time.
 		self::releaseRevalidation($key);
+
+		return $response;
 	}
 
 	/**
