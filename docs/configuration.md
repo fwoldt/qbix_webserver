@@ -76,6 +76,43 @@ Serve multiple domains from one server. Each host can have its own document root
 
 The `Host` header selects the root. Requests for unconfigured hosts use the default `--root` directory. WebSocket, rooms, handlers, and static files all respect the per-host root.
 
+#### Per-host logs
+
+A host can keep its own access and error log, by adding a `log` key to the same entry:
+
+```json
+{
+    "Q": {
+        "webserver": {
+            "hosts": {
+                "example.com": {
+                    "root": "/var/www/example/web",
+                    "log": true
+                },
+                "api.example.com": {
+                    "root": "/var/www/api/web",
+                    "log": {
+                        "dir": "/var/log/api",
+                        "accessName": "web.log",
+                        "errorName": "web-error.log"
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+`"log": true` names the files after the host — `example.com-access.log` and `example.com-error.log`, in the server's own log directory. The object form overrides the directory, either filename, or all three; whatever is left out is named after the host.
+
+A host with no `log` key writes to the server's access log, as before, and so does a request that arrives without a `Host` header. The named formats do not carry the host, so if you would rather keep one log for everything, ask for the header in a custom format instead:
+
+```json
+"log": { "format": "%h %l %u %t \"%r\" %>s %b %{Host}i" }
+```
+
+Each host's files rotate, archive and prune on the same terms as the server's own, and the dashboard's log viewer takes `?host=` to show one of them.
+
 ### Hot reload
 
 Watch `classes/`, `handlers/`, and `config/` for file changes:

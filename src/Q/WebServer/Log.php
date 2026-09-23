@@ -7,7 +7,8 @@
  * Access and error logging with buffered writes, daily rotation,
  * and automatic gzip archiving.
  *
- * Writes access.log (combined format + response time) and error.log.
+ * Writes access.log (combined format + response time) and error.log,
+ * or whatever accessName/errorName call them.
  * Buffered: log lines accumulate in memory and flush on a timer or
  * when the buffer is full — one write() syscall per flush instead of
  * one per request. Daily rotation at midnight. Logs older than
@@ -19,6 +20,8 @@
  *     "dir":              "logs",
  *     "access":           true,
  *     "error":            true,
+ *     "accessName":       "access.log",
+ *     "errorName":        "error.log",
  *     "format":           "qbix",
  *     "bufferSize":       65536,
  *     "flushInterval":    1,
@@ -30,6 +33,35 @@
  *   bufferSize: 0 = unbuffered (flush every line), default 64KB.
  *   flushInterval: seconds between timer flushes, default 1.
  *   Set access/error to false to disable that log entirely.
+ *   accessName/errorName rename the two files -- for one directory
+ *   collecting the logs of several servers, or to match what an
+ *   existing log shipper already watches. A bare filename, no
+ *   directory part: anything else falls back to the default, so a
+ *   name out of config cannot write outside `dir`. Rotation keeps
+ *   the name and inserts the date before the .log, so "site.log"
+ *   rotates to "site.2000-10-10.log".
+ *
+ * A virtual host can log to its own files. The hosts are already
+ * declared for their document root, so the log goes in that same
+ * entry rather than in a second list of domains:
+ *
+ *   "Q": { "webserver": { "hosts": {
+ *     "a.example.com": { "root": "/srv/a", "log": true },
+ *     "b.example.com": { "root": "/srv/b", "log": {
+ *       "dir": "/var/log/b", "accessName": "web.log"
+ *     }}
+ *   }}}
+ *
+ *   log: true       names the files after the host, in `dir`:
+ *                   a.example.com-access.log and -error.log
+ *   log: {...}      overrides dir, accessName, errorName, or all three
+ *   no log key      that host's requests go to the server's own log
+ *
+ * Requests are sorted by the Host header, the same one WebServer
+ * resolves the document root with. A request with no Host header,
+ * or one for a host with no log of its own, goes to the server's
+ * access log. Each host's files rotate, archive and prune on the
+ * same terms as the server's own.
  *   format: "qbix" (default), "combined", "common", or a format string.
  *
  * Format strings take the Apache tokens that make sense here:
@@ -58,6 +90,12 @@ class Q_WebServer_Log
 	static $errorFp = null;
 	static $accessPath = null;
 	static $errorPath = null;
+	static $accessName = 'access.log';
+	static $errorName = 'error.log';
+	// host => record, for virtual hosts that log to their own files.
+	// Each record carries dir, accessName, errorName, the two paths,
+	// the two handles and its own buffer.
+	static $hosts = array();
 	static $dir = null;
 	static $maxSize = 52428800;       // 50MB
 	static $archiveAfterDays = 2;
@@ -86,12 +124,7 @@ class Q_WebServer_Log
 		if (!$dir) {
 			$dir = defined('APP_DIR') ? APP_DIR . '/logs' : 'logs';
 		}
-		if ($dir[0] !== '/') {
-			$base = defined('APP_DIR') ? APP_DIR : getcwd();
-			$dir = $base . '/' . $dir;
-		}
-		if (!is_dir($dir)) @mkdir($dir, 0755, true);
-		self::$dir = $dir;
+		self::$dir = $dir = self::resolveDir($dir);
 
 		self::$maxSize = (int) Q::ifset($config, 'maxSize', 52428800);
 		self::$archiveAfterDays = (int) Q::ifset($config, 'archiveAfterDays', 2);
@@ -105,14 +138,23 @@ class Q_WebServer_Log
 
 		self::$currentDate = date('Y-m-d');
 
+		self::$accessName = self::sanitizeName(
+			Q::ifset($config, 'accessName', null), 'access.log'
+		);
+		self::$errorName = self::sanitizeName(
+			Q::ifset($config, 'errorName', null), 'error.log'
+		);
+
 		if ($accessEnabled) {
-			self::$accessPath = $dir . '/access.log';
+			self::$accessPath = $dir . '/' . self::$accessName;
 			self::$accessFp = fopen(self::$accessPath, 'a');
 		}
 		if ($errorEnabled) {
-			self::$errorPath = $dir . '/error.log';
+			self::$errorPath = $dir . '/' . self::$errorName;
 			self::$errorFp = fopen(self::$errorPath, 'a');
 		}
+
+		self::initHosts($accessEnabled, $errorEnabled);
 
 		self::$enabled = true;
 
@@ -138,6 +180,10 @@ class Q_WebServer_Log
 			? 'buffered (' . round(self::$bufferSize / 1024) . 'KB, '
 			  . self::$flushInterval . 's)'
 			: 'unbuffered';
+		$vhosts = count(self::$hosts);
+		if ($vhosts) {
+			$mode .= ", $vhosts vhost" . ($vhosts === 1 ? '' : 's');
+		}
 		fwrite(STDERR, "  Logging to $dir/ ($mode)\n");
 	}
 
@@ -233,8 +279,17 @@ class Q_WebServer_Log
 
 	static function access($ip, $method, $uri, $status, $size, $referer, $ua, $ms, $extra = array())
 	{
-		if (!self::$accessFp) return;
 		$headers = $extra['headers'] ?? array();
+		// A virtual host with its own log takes the line; everything else,
+		// including a request that arrived without a Host header, goes to
+		// the server's own access log.
+		$host = self::hostKey($headers['host'] ?? ($extra['host'] ?? ''));
+		$rec = ($host !== '' and isset(self::$hosts[$host]))
+			? $host
+			: null;
+		if ($rec === null ? !self::$accessFp : !self::$hosts[$rec]['accessFp']) {
+			return;
+		}
 		// Referer and user agent are passed separately for callers that have
 		// them but not the header array.
 		if ($referer !== '' and $referer !== null and !isset($headers['referer'])) {
@@ -250,6 +305,18 @@ class Q_WebServer_Log
 			'status' => $status, 'size' => $size, 'ms' => $ms,
 			'headers' => $headers,
 		)) . "\n";
+
+		if ($rec !== null) {
+			if (self::$bufferSize <= 0) {
+				@fwrite(self::$hosts[$rec]['accessFp'], $line);
+				return;
+			}
+			self::$hosts[$rec]['buf'] .= $line;
+			if (strlen(self::$hosts[$rec]['buf']) >= self::$bufferSize) {
+				self::flushHost($rec);
+			}
+			return;
+		}
 
 		if (self::$bufferSize <= 0) {
 			// Unbuffered — write immediately
@@ -269,14 +336,18 @@ class Q_WebServer_Log
 	 * @method error
 	 * @static
 	 */
-	static function error($message, $context = '')
+	static function error($message, $context = '', $host = null)
 	{
 		$time = date('Y-m-d H:i:s');
 		$line = "[$time] $message $context\n";
-		if (self::$errorFp) {
+		$host = self::hostKey($host);
+		$fp = ($host !== '' and isset(self::$hosts[$host]))
+			? self::$hosts[$host]['errorFp']
+			: self::$errorFp;
+		if ($fp) {
 			// Errors bypass the buffer — flush immediately
-			self::flushAccess(); // flush any pending access lines too
-			@fwrite(self::$errorFp, $line);
+			self::flush(); // put the pending access lines on disk first
+			@fwrite($fp, $line);
 		}
 		fwrite(STDERR, "[ERROR] $message $context\n");
 	}
@@ -290,6 +361,9 @@ class Q_WebServer_Log
 	static function flush()
 	{
 		self::flushAccess();
+		foreach (self::$hosts as $host => $rec) {
+			self::flushHost($host);
+		}
 	}
 
 	private static function flushAccess()
@@ -298,6 +372,15 @@ class Q_WebServer_Log
 			@fwrite(self::$accessFp, self::$accessBuf);
 			self::$accessBuf = '';
 		}
+	}
+
+	private static function flushHost($host)
+	{
+		if (!isset(self::$hosts[$host])) return;
+		if (self::$hosts[$host]['buf'] === '') return;
+		if (!self::$hosts[$host]['accessFp']) return;
+		@fwrite(self::$hosts[$host]['accessFp'], self::$hosts[$host]['buf']);
+		self::$hosts[$host]['buf'] = '';
 	}
 
 	/**
@@ -318,13 +401,16 @@ class Q_WebServer_Log
 			self::$currentDate = $today;
 			if (self::$accessFp) {
 				self::rotateTo(self::$accessPath, self::$accessFp,
-					self::$dir . "/access.$yesterday.log");
+					self::rotatedPath(self::$dir, self::$accessName, $yesterday));
 				self::$accessFp = fopen(self::$accessPath, 'a');
 			}
 			if (self::$errorFp) {
 				self::rotateTo(self::$errorPath, self::$errorFp,
-					self::$dir . "/error.$yesterday.log");
+					self::rotatedPath(self::$dir, self::$errorName, $yesterday));
 				self::$errorFp = fopen(self::$errorPath, 'a');
+			}
+			foreach (array_keys(self::$hosts) as $host) {
+				self::rotateHost($host, $yesterday);
 			}
 			self::archiveAndPrune();
 			return;
@@ -334,15 +420,251 @@ class Q_WebServer_Log
 		if (self::$accessPath && self::exceedsMax(self::$accessPath)) {
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$accessPath, self::$accessFp,
-				self::$dir . "/access.$stamp.log");
+				self::rotatedPath(self::$dir, self::$accessName, $stamp));
 			self::$accessFp = fopen(self::$accessPath, 'a');
 		}
 		if (self::$errorPath && self::exceedsMax(self::$errorPath)) {
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$errorPath, self::$errorFp,
-				self::$dir . "/error.$stamp.log");
+				self::rotatedPath(self::$dir, self::$errorName, $stamp));
 			self::$errorFp = fopen(self::$errorPath, 'a');
 		}
+		foreach (array_keys(self::$hosts) as $host) {
+			self::rotateHostBySize($host);
+		}
+	}
+
+	/**
+	 * Rotate one virtual host's two logs to a dated name.
+	 *
+	 * @method rotateHost
+	 * @static
+	 * @private
+	 * @param {string} $host
+	 * @param {string} $stamp
+	 */
+	private static function rotateHost($host, $stamp)
+	{
+		$rec = self::$hosts[$host];
+		self::flushHost($host);
+		if ($rec['accessFp']) {
+			self::rotateTo($rec['accessPath'], $rec['accessFp'],
+				self::rotatedPath($rec['dir'], $rec['accessName'], $stamp));
+			self::$hosts[$host]['accessFp'] = fopen($rec['accessPath'], 'a');
+		}
+		if ($rec['errorFp']) {
+			self::rotateTo($rec['errorPath'], $rec['errorFp'],
+				self::rotatedPath($rec['dir'], $rec['errorName'], $stamp));
+			self::$hosts[$host]['errorFp'] = fopen($rec['errorPath'], 'a');
+		}
+	}
+
+	/**
+	 * The mid-day half: rotate a host's logs only once they are too big.
+	 *
+	 * @method rotateHostBySize
+	 * @static
+	 * @private
+	 * @param {string} $host
+	 */
+	private static function rotateHostBySize($host)
+	{
+		$rec = self::$hosts[$host];
+		$stamp = date('Y-m-d-His');
+		if ($rec['accessFp'] and self::exceedsMax($rec['accessPath'])) {
+			self::flushHost($host);
+			self::rotateTo($rec['accessPath'], $rec['accessFp'],
+				self::rotatedPath($rec['dir'], $rec['accessName'], $stamp));
+			self::$hosts[$host]['accessFp'] = fopen($rec['accessPath'], 'a');
+		}
+		if ($rec['errorFp'] and self::exceedsMax($rec['errorPath'])) {
+			self::rotateTo($rec['errorPath'], $rec['errorFp'],
+				self::rotatedPath($rec['dir'], $rec['errorName'], $stamp));
+			self::$hosts[$host]['errorFp'] = fopen($rec['errorPath'], 'a');
+		}
+	}
+
+	/**
+	 * Where a log rotates to: the date goes before the .log, so the
+	 * rotated file sorts next to the live one and still ends in .log,
+	 * which is what archiveAndPrune() globs for.
+	 *
+	 * @method rotatedPath
+	 * @static
+	 * @private
+	 * @param {string} $dir The directory the log lives in
+	 * @param {string} $name The live log's filename
+	 * @param {string} $stamp A date, or a date and time for a mid-day rotation
+	 * @return {string}
+	 */
+	private static function rotatedPath($dir, $name, $stamp)
+	{
+		$stem = substr($name, -4) === '.log' ? substr($name, 0, -4) : $name;
+		return "$dir/$stem.$stamp.log";
+	}
+
+	/**
+	 * Open the log files of every virtual host configured to have its own.
+	 *
+	 * The hosts are the ones already declared under Q/webserver/hosts (or
+	 * domains) for their document root -- a host logs to its own files by
+	 * adding a `log` key to that same entry, so there is one list of
+	 * domains and not two:
+	 *
+	 *   "hosts": {
+	 *     "a.example.com": { "root": "/srv/a", "log": true },
+	 *     "b.example.com": { "root": "/srv/b", "log": {
+	 *       "dir": "/var/log/b", "accessName": "web.log"
+	 *     }}
+	 *   }
+	 *
+	 * `log: true` names the files after the host -- a.example.com-access.log
+	 * and a.example.com-error.log, in the server's own log directory. The
+	 * object form overrides the directory, either filename, or all three.
+	 *
+	 * A host whose files would land on the server's own access or error log
+	 * is skipped with a warning: two handles appending to one file rotate
+	 * against each other, and the second rotation throws away what the first
+	 * had just moved.
+	 *
+	 * @method initHosts
+	 * @static
+	 * @private
+	 * @param {boolean} $accessEnabled Whether access logging is on at all
+	 * @param {boolean} $errorEnabled Whether error logging is on at all
+	 */
+	private static function initHosts($accessEnabled, $errorEnabled)
+	{
+		self::$hosts = array();
+		$configured = Q_Config::get('Q', 'webserver', 'hosts', array());
+		$domains = Q_Config::get('Q', 'webserver', 'domains', array());
+		if (is_array($domains) and is_array($configured)) {
+			$configured = array_merge($domains, $configured);
+		} elseif (is_array($domains)) {
+			$configured = $domains;
+		}
+		if (!is_array($configured)) return;
+
+		foreach ($configured as $host => $conf) {
+			if (!is_array($conf) or !isset($conf['log'])) continue;
+			$logConf = $conf['log'];
+			if ($logConf === false or $logConf === null) continue;
+			if (!is_array($logConf)) $logConf = array();
+
+			$key = self::hostKey($host);
+			if ($key === '') continue;
+			$stem = self::hostStem($key);
+
+			$dir = isset($logConf['dir'])
+				? self::resolveDir($logConf['dir'])
+				: self::$dir;
+			$accessName = self::sanitizeName(
+				Q::ifset($logConf, 'accessName', null), "$stem-access.log"
+			);
+			$errorName = self::sanitizeName(
+				Q::ifset($logConf, 'errorName', null), "$stem-error.log"
+			);
+			$accessPath = $dir . '/' . $accessName;
+			$errorPath = $dir . '/' . $errorName;
+
+			if ($accessPath === self::$accessPath or $errorPath === self::$errorPath) {
+				fwrite(STDERR, "  log: $key would write to the server's own"
+					. " log file, skipping its vhost log\n");
+				continue;
+			}
+
+			self::$hosts[$key] = array(
+				'dir' => $dir,
+				'accessName' => $accessName,
+				'errorName' => $errorName,
+				'accessPath' => $accessPath,
+				'errorPath' => $errorPath,
+				'accessFp' => $accessEnabled ? fopen($accessPath, 'a') : null,
+				'errorFp' => $errorEnabled ? fopen($errorPath, 'a') : null,
+				'buf' => '',
+			);
+		}
+	}
+
+	/**
+	 * A Host header, or a configured host, as the key both sides agree on:
+	 * lower case and without the port. Matches how WebServer resolves a
+	 * request to a virtual host, so a request cannot land on one host's
+	 * document root and the other host's log.
+	 *
+	 * @method hostKey
+	 * @static
+	 * @private
+	 * @param {string} $host
+	 * @return {string} '' when there is nothing usable
+	 */
+	private static function hostKey($host)
+	{
+		if (!is_string($host) or $host === '') return '';
+		return strtolower(preg_replace('/:\d+$/', '', trim($host)));
+	}
+
+	/**
+	 * A hostname as the stem of a filename: what it is called, minus
+	 * anything that has a meaning in a path. A wildcard host therefore
+	 * becomes a name rather than a glob.
+	 *
+	 * @method hostStem
+	 * @static
+	 * @private
+	 * @param {string} $host An already normalised host key
+	 * @return {string}
+	 */
+	private static function hostStem($host)
+	{
+		$stem = preg_replace('/[^a-z0-9._-]+/', '-', $host);
+		$stem = trim($stem, '.-');
+		return $stem === '' ? 'vhost' : $stem;
+	}
+
+	/**
+	 * A log directory as an absolute path, created if it is not there.
+	 * A relative path is read against the application, not against
+	 * whatever directory the server happens to have been started from.
+	 *
+	 * @method resolveDir
+	 * @static
+	 * @private
+	 * @param {string} $dir
+	 * @return {string}
+	 */
+	private static function resolveDir($dir)
+	{
+		if ($dir === '' or $dir[0] !== '/') {
+			$base = defined('APP_DIR') ? APP_DIR : getcwd();
+			$dir = $base . '/' . $dir;
+		}
+		if (!is_dir($dir)) @mkdir($dir, 0755, true);
+		return rtrim($dir, '/');
+	}
+
+	/**
+	 * A log filename out of config, or the default when it is not one.
+	 *
+	 * Only a bare filename is accepted -- no directory part, and not
+	 * . or .. -- so a name out of config writes inside `dir` and
+	 * nowhere else.
+	 *
+	 * @method sanitizeName
+	 * @static
+	 * @private
+	 * @param {string} $name The configured name, or null
+	 * @param {string} $default Used when $name is not a bare filename
+	 * @return {string}
+	 */
+	private static function sanitizeName($name, $default)
+	{
+		if (!is_string($name)) return $default;
+		$name = trim($name);
+		if ($name === '' or $name === '.' or $name === '..') return $default;
+		if (strpbrk($name, "/\\") !== false) return $default;
+		if (strpos($name, "\0") !== false) return $default;
+		return $name;
 	}
 
 	private static function rotateTo($currentPath, &$fp, $targetPath)
@@ -373,9 +695,13 @@ class Q_WebServer_Log
 		$archiveCutoff = $now - (self::$archiveAfterDays * 86400);
 		$deleteCutoff = $now - (self::$deleteAfterDays * 86400);
 
-		foreach (glob(self::$dir . '/*.log') as $file) {
+		// A virtual host may log to its own directory, and each directory
+		// has its own set of live files that must survive the sweep.
+		foreach (self::liveNames() as $dir => $live) {
+		if (!is_dir($dir)) continue;
+		foreach (glob($dir . '/*.log') as $file) {
 			$base = basename($file);
-			if ($base === 'access.log' || $base === 'error.log') continue;
+			if (in_array($base, $live, true)) continue;
 			$mtime = filemtime($file);
 			if ($mtime < $deleteCutoff) { @unlink($file); continue; }
 			if ($mtime < $archiveCutoff && function_exists('gzopen')) {
@@ -395,9 +721,35 @@ class Q_WebServer_Log
 			}
 		}
 
-		foreach (glob(self::$dir . '/*.log.gz') as $file) {
+		foreach (glob($dir . '/*.log.gz') as $file) {
 			if (filemtime($file) < $deleteCutoff) @unlink($file);
 		}
+		}
+	}
+
+	/**
+	 * The live log files, grouped by the directory they sit in.
+	 *
+	 * These are the files being written right now. archiveAndPrune() must
+	 * not gzip or delete one: the handle would go on pointing at a file
+	 * that is no longer there, and the lines would vanish.
+	 *
+	 * @method liveNames
+	 * @static
+	 * @private
+	 * @return {array} dir => array of filenames
+	 */
+	private static function liveNames()
+	{
+		$live = array(
+			self::$dir => array(self::$accessName, self::$errorName)
+		);
+		foreach (self::$hosts as $rec) {
+			if (!isset($live[$rec['dir']])) $live[$rec['dir']] = array();
+			$live[$rec['dir']][] = $rec['accessName'];
+			$live[$rec['dir']][] = $rec['errorName'];
+		}
+		return $live;
 	}
 
 	/**
@@ -413,12 +765,26 @@ class Q_WebServer_Log
 		$errorSize = self::$errorPath && file_exists(self::$errorPath)
 			? filesize(self::$errorPath) : 0;
 		$archives = self::$dir ? count(glob(self::$dir . '/*.gz')) : 0;
+		$hosts = array();
+		foreach (self::$hosts as $host => $rec) {
+			$hosts[$host] = array(
+				'dir' => $rec['dir'],
+				'accessName' => $rec['accessName'],
+				'errorName' => $rec['errorName'],
+				'accessSize' => file_exists($rec['accessPath'])
+					? filesize($rec['accessPath']) : 0,
+				'errorSize' => file_exists($rec['errorPath'])
+					? filesize($rec['errorPath']) : 0,
+				'bufferBytes' => strlen($rec['buf']),
+			);
+		}
 		return array(
 			'dir' => self::$dir,
 			'accessSize' => $accessSize,
 			'errorSize' => $errorSize,
 			'archives' => $archives,
 			'bufferBytes' => strlen(self::$accessBuf),
+			'hosts' => $hosts,
 		);
 	}
 
@@ -427,5 +793,11 @@ class Q_WebServer_Log
 		self::flush();
 		if (self::$accessFp) { @fclose(self::$accessFp); self::$accessFp = null; }
 		if (self::$errorFp) { @fclose(self::$errorFp); self::$errorFp = null; }
+		foreach (self::$hosts as $host => $rec) {
+			if ($rec['accessFp']) @fclose($rec['accessFp']);
+			if ($rec['errorFp']) @fclose($rec['errorFp']);
+			self::$hosts[$host]['accessFp'] = null;
+			self::$hosts[$host]['errorFp'] = null;
+		}
 	}
 }

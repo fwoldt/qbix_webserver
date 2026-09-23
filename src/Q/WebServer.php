@@ -3236,7 +3236,8 @@ WORKER;
 
 		// Log stderr if non-empty
 		if ($stderr !== '') {
-			Q_WebServer_Log::error("CGI stderr ($scriptPath): " . trim($stderr));
+			Q_WebServer_Log::error("CGI stderr ($scriptPath): " . trim($stderr),
+				'', $parsed['headers']['host'] ?? null);
 		}
 
 		// Handle timeout
@@ -4839,7 +4840,16 @@ HTML;
 			$status, $bytes,
 			$parsed['headers']['referer'] ?? '',
 			$parsed['headers']['user-agent'] ?? '',
-			$ms
+			$ms,
+			// Without the headers the line cannot be attributed to a
+			// virtual host, and these are the requests -- cache hits and
+			// static files -- that a busy vhost has most of.
+			array(
+				'path' => $parsed['path'] ?? null,
+				'query' => $parsed['query'] ?? '',
+				'protocol' => 'HTTP/' . ($parsed['httpVersion'] ?? '1.1'),
+				'headers' => $parsed['headers'] ?? array(),
+			)
 		);
 	}
 
