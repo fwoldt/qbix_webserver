@@ -64,6 +64,12 @@ edited down to what a reader actually needs.
 
 ### Added
 
+- The brand and maintainer labels can now carry links. `Q.webserver.brandUrl`
+  links the product name (to its repository), and `Q.webserver.maintainer` /
+  `maintainerUrl` add a "Maintained by <name>" credit that links where you say.
+  All are empty by default, so upstream shows plain text and links nothing it
+  was not given. A url key that is not http/https is dropped rather than
+  linked, so a malformed setting cannot inject a `javascript:` link.
 - The version shown is now the fork's own -- `v0.0.4.26`, the nearest release
   tag on this branch -- not upstream's `1.5.0`, which stays defined as the
   engine this is built on and is named in the footer ("powered by the Qbix

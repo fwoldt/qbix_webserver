@@ -421,6 +421,25 @@ class Q_WebServer_Dashboard
 			? qbix_version_label(true)
 			: (defined('QBIX_SERVER_VERSION') ? QBIX_SERVER_VERSION : '');
 		$verLabel = htmlspecialchars($verLabel, ENT_QUOTES, 'UTF-8');
+		$brandUrl = class_exists('Q_WebServer', false) ? Q_WebServer::brandLink('brandUrl') : '';
+		$maintainer = class_exists('Q_WebServer', false) ? Q_WebServer::brandLink('maintainer') : '';
+		$maintainerUrl = class_exists('Q_WebServer', false) ? Q_WebServer::brandLink('maintainerUrl') : '';
+		$brandUrl = htmlspecialchars($brandUrl, ENT_QUOTES, 'UTF-8');
+		$maintainer = htmlspecialchars($maintainer, ENT_QUOTES, 'UTF-8');
+		$maintainerUrl = htmlspecialchars($maintainerUrl, ENT_QUOTES, 'UTF-8');
+		// The brand name, linked to the product home when one is configured.
+		$brandName = ($brandUrl !== '')
+			? '<a href="' . $brandUrl . '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">' . $brand . '</a>'
+			: $brand;
+		// The maintainer line, shown only when a maintainer is named.
+		$maintainedBy = '';
+		if ($maintainer !== '') {
+			$inner = '<span>Maintained by ' . $maintainer . '</span>';
+			if ($maintainerUrl !== '') {
+				$inner = '<a href="' . $maintainerUrl . '" target="_blank" rel="noopener">' . $inner . '</a>';
+			}
+			$maintainedBy = '<div class="foot-by">' . $inner . '</div>';
+		}
 		$stats = json_encode(self::getStats());
 		$recent = json_encode(array_reverse(array_slice(self::$recentRequests, -50)));
 		$host = $parsed['headers']['host'] ?? 'localhost';
@@ -503,7 +522,7 @@ transition:background .1s}
 .room .n{font-family:'SF Mono',monospace;color:var(--pur)}
 .log-wrap{max-height:50vh;overflow-y:auto;display:flex;flex-direction:column-reverse}
 </style></head><body>
-<h1><span class="dot"></span>$brand</h1>
+<h1><span class="dot"></span>$brandName</h1>
 <div class="sub" id="sub"></div>
 
 <div class="grid">
@@ -737,8 +756,8 @@ ws.onmessage=function(e){var m=JSON.parse(e.data);if(m.type==='request'){A(m.ent
 ws.onclose=function(){wsLive=false;tickUp();setTimeout(C,2000)}}
 C();
 </script>
-<div class="foot">$brand <span style="opacity:.6">$verLabel</span> &#183; <a href="/Q/docs">docs</a> &#183; powered by the Qbix engine</div>
-<div class="foot-by"><a href="https://se7enx.com" target="_blank" rel="noopener"><span>Maintained by 7x</span></a></div>
+<div class="foot">$brandName <span style="opacity:.6">$verLabel</span> &#183; <a href="/Q/docs">docs</a> &#183; powered by the Qbix engine</div>
+$maintainedBy
 </body></html>
 HTML;
 	}

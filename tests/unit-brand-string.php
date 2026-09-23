@@ -47,7 +47,7 @@ check('...and its default is the upstream name, not a fork\'s',
 check('the dashboard heading is not a literal any more',
 	strpos($dash, '>Qbix Server</h1>'), false);
 check('the dashboard heading interpolates the brand',
-	strpos($dash, '$brand</h1>') !== false, true);
+	strpos($dash, '$brandName</h1>') !== false, true);
 check('the dashboard <title> is not a literal',
 	strpos($dash, '<title>Qbix Server Dashboard'), false);
 check('the docs viewer calls brand()',
@@ -68,6 +68,18 @@ check('qbix.json is still qbix.json',
 	strpos($web, 'qbix.json') !== false, true);
 check('the app-detection flag is still isQbixApp',
 	strpos($panel, 'isQbixApp') !== false, true);
+
+// ── Brand and maintainer links are configurable and validated ───
+
+check('brandLink() is defined', (bool) preg_match('/static function brandLink/', $web), true);
+// A non-URL for a url key must be dropped, so a setting cannot inject a
+// javascript: or data: link into the page.
+check('a url key rejects a non-http value',
+	(bool) preg_match('#https\\?://#', $web) && strpos($web, "!preg_match('#^https?://#i'") !== false, true);
+check('the maintainer line is conditional, not hardcoded',
+	strpos($dash, 'Maintained by 7x'), false);
+check('the dashboard builds the maintainer line from config',
+	strpos($dash, '$maintainedBy') !== false, true);
 
 // ── The WebSocket scheme is chosen by the browser ───────────────
 // A hardcoded ws:// is blocked as mixed content on an https page, which is the

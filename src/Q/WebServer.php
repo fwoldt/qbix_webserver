@@ -5471,6 +5471,40 @@ HTML;
 	}
 
 	/**
+	 * A URL for a brand or maintainer label to link to, or '' for no link.
+	 *
+	 * Three keys, all empty by default so upstream shows plain text: brandUrl
+	 * (the product's home, linked from the product name), maintainer (a short
+	 * name; when set, the views show "Maintained by <name>") and maintainerUrl
+	 * (where that name links). A fork fills them; the server invents none.
+	 *
+	 * The values reach HTML, so a caller escapes them at output. A value that
+	 * is not an http/https URL is dropped here rather than linked, so a
+	 * malformed setting cannot produce a javascript: or data: link.
+	 *
+	 * @method brandLink
+	 * @static
+	 * @param {string} $which one of 'brandUrl', 'maintainer', 'maintainerUrl'
+	 * @return {string}
+	 */
+	static $brandLinks = array();
+	static function brandLink($which)
+	{
+		if (!array_key_exists($which, self::$brandLinks)) {
+			$v = class_exists('Q_Config', false)
+				? Q_Config::get('Q', 'webserver', $which, '') : '';
+			$v = is_string($v) ? trim($v) : '';
+			// A label passes through; a URL must be http/https to be used.
+			if ($which !== 'maintainer' && $v !== ''
+				&& !preg_match('#^https?://#i', $v)) {
+				$v = '';
+			}
+			self::$brandLinks[$which] = $v;
+		}
+		return self::$brandLinks[$which];
+	}
+
+	/**
 	 * @method headerLines
 	 * @static
 	 * @param {array} $headers name => value
