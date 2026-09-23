@@ -757,6 +757,55 @@ class Q_WebServer
 		return false;
 	}
 
+	/**
+	 * Does this filename, after every link is followed, still lie in the root?
+	 *
+	 * pathEscapesRoot() above judges the request string, which stops "..", a
+	 * null byte and their encodings. It cannot stop a symbolic link, because
+	 * nothing about the request says there is one: "/notes.txt" is an entirely
+	 * ordinary path whether the file it names is a file or a door to somewhere
+	 * else on the disk.
+	 *
+	 * Without this, a link inside the document root served whatever it pointed
+	 * at -- and a link named *.php was executed, which turns the ability to
+	 * create one file into the ability to run code from anywhere the server
+	 * user can read. Upload directories, shared asset trees and dependency
+	 * installers all create links, so this does not require anyone to be
+	 * careless in an unusual way.
+	 *
+	 * Comparison is on the resolved paths and requires a separator after the
+	 * root, so a sibling directory whose name merely starts the same way --
+	 * /srv/www-old beside /srv/www -- is outside, not inside.
+	 *
+	 * Installations that deliberately serve through links can say so with
+	 * Q.webserver.followSymlinks, which restores the old behaviour.
+	 *
+	 * @method insideRoot
+	 * @static
+	 * @param {string} $fsPath
+	 * @return {boolean} false when the file lies outside and must be refused
+	 */
+	static function insideRoot($fsPath)
+	{
+		static $follow = null;
+		if ($follow === null) {
+			$follow = class_exists('Q_Config', false)
+				? (bool) Q_Config::get('Q', 'webserver', 'followSymlinks', false)
+				: false;
+		}
+		if ($follow) return true;
+
+		$root = realpath(self::$rootDir);
+		if ($root === false) return true;   // nothing to compare against
+		$real = realpath($fsPath);
+		if ($real === false) return true;   // does not exist; other code answers
+
+		$root = rtrim($root, DIRECTORY_SEPARATOR);
+		if ($real === $root) return true;
+		return strncmp($real, $root . DIRECTORY_SEPARATOR,
+			strlen($root) + 1) === 0;
+	}
+
 	static function http2Route($key, $request)
 	{
 		if (!isset(self::$http2[$key])) {
@@ -784,6 +833,10 @@ class Q_WebServer
 		}
 
 		$fsPath = $root . str_replace('/', DIRECTORY_SEPARATOR, $decoded);
+
+		if (is_file($fsPath) and !self::insideRoot($fsPath)) {
+			return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
+		}
 
 		if (is_file($fsPath)) {
 			$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
@@ -880,21 +933,30 @@ class Q_WebServer
 	 */
 	static function resolveScript($path, $fsPath)
 	{
+		// Whatever this resolves to is about to be executed, so the question of
+		// whether it lies in the document root is asked here, once, for every
+		// route into it. A symbolic link named *.php pointed anywhere the
+		// server user can read was otherwise run: that turns being able to
+		// create one file into being able to run code from outside the site
+		// altogether, which is a long way past serving a file one should not.
 		if (is_file($fsPath) and strtolower(pathinfo($fsPath, PATHINFO_EXTENSION)) === 'php') {
-			return $fsPath;
+			return self::insideRoot($fsPath) ? $fsPath : null;
 		}
 
 		$root = rtrim(self::$rootDir, '/\\');
 		if (is_dir($fsPath)) {
 			foreach (array('index.php', 'index.html') as $index) {
 				$candidate = rtrim($fsPath, '/\\') . DIRECTORY_SEPARATOR . $index;
-				if (is_file($candidate)) return $candidate;
+				if (is_file($candidate)) {
+					return self::insideRoot($candidate) ? $candidate : null;
+				}
 			}
 		}
 
 		// The front controller, which is how a framework URL is served.
 		$front = $root . DIRECTORY_SEPARATOR . 'index.php';
-		return is_file($front) ? $front : null;
+		if (!is_file($front)) return null;
+		return self::insideRoot($front) ? $front : null;
 	}
 
 	/**
@@ -1989,6 +2051,9 @@ class Q_WebServer
 		// contract (Q.Utils.sendToPHP posts to action.php/<Module>/<action>).
 		if (!$fsPath || !is_file($fsPath)) {
 			$_pi = self::splitPathInfo($path);
+			if ($_pi !== null and !self::insideRoot($_pi['scriptPath'])) {
+				$_pi = null;
+			}
 			if ($_pi !== null) {
 				$parsed['_scriptPath'] = $_pi['scriptPath'];
 				$parsed['_pathInfo']   = $_pi['pathInfo'];
@@ -2009,6 +2074,17 @@ class Q_WebServer
 		if ($fsPath && is_file($fsPath)) {
 
 			if ($ext === 'php') {
+				// A link named *.php can point anywhere the server user can
+				// read, and running it turns the ability to create one file
+				// into the ability to run code from outside the site. The
+				// request string cannot show this -- "/report.php" says nothing
+				// about what the name leads to -- so it is asked of the
+				// resolved path, here, before anything is executed.
+				if (!self::insideRoot($fsPath)) {
+					self::sendResponse($client, 403,
+						self::renderErrorPage(403, $path), 'text/html; charset=utf-8');
+					return false;
+				}
 				// PHP dispatch (in-process — amphp uses fibers for concurrency)
 				// Run the *requested* script (e.g. action.php), not index.php.
 				$parsed['_scriptPath'] = $fsPath;
@@ -2925,6 +3001,20 @@ class Q_WebServer
 	 */
 	private static function handlePhp($client, $parsed, $scriptPath)
 	{
+		// Every HTTP/1 route that ends in running a PHP file arrives here, so
+		// this is where the file is asked whether it is actually part of the
+		// site. A symbolic link named *.php can point anywhere the server user
+		// can read, and nothing in the request shows it: "/report.php" says
+		// nothing about where that name leads. Running it turns the ability to
+		// create one file into the ability to run code from outside the
+		// document root entirely.
+		if (!self::insideRoot($scriptPath)) {
+			self::sendResponse($client, 403,
+				self::renderErrorPage(403, $parsed['uri'] ?? ''),
+				'text/html; charset=utf-8');
+			return false;
+		}
+
 		// ── CGI carveout: check if this script should use php-cgi ──
 		// Scripts matching Q.webserver.cgi.patterns run via php-cgi subprocess
 		// where native header(), setcookie(), headers_list() all work.
@@ -3528,6 +3618,11 @@ WORKER;
 		$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
 		if (!in_array($ext, self::$allowedExtensions)) {
 			self::sendResponse($client, 403, self::renderErrorPage(403, $path), 'text/html; charset=utf-8');
+			return;
+		}
+		// A link inside the root may still point outside it.
+		if (!self::insideRoot($fsPath)) {
+			self::sendResponse($client, 403, self::renderErrorPage(403, $fsPath), 'text/html; charset=utf-8');
 			return;
 		}
 
