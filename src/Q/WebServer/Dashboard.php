@@ -459,7 +459,7 @@ background:var(--bg);color:var(--txt);padding:24px;font-size:13px;max-width:1200
 h1{font-size:20px;font-weight:600;margin-bottom:4px;color:var(--ac);display:flex;align-items:center;gap:10px}
 h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--grn);animation:pulse 2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.sub{font-size:12px;color:var(--dim);margin-bottom:20px}.foot{font-size:11px;color:var(--dim);text-align:center;margin-top:28px;padding-top:16px;border-top:1px solid rgba(128,128,128,.18)}.foot a{color:var(--dim);text-decoration:none}.foot a:hover{color:var(--txt)}.foot-by{text-align:center;margin-top:12px}.foot-by span{display:inline-block;color:#ff7a1a;border:1px solid #fff;border-radius:6px;padding:4px 14px;font-size:11px;letter-spacing:.02em}
+.sub{font-size:12px;color:var(--dim);margin-bottom:20px}.foot{font-size:11px;color:var(--dim);text-align:center;margin-top:28px;padding-top:16px;border-top:1px solid rgba(128,128,128,.18)}.foot a{color:var(--dim);text-decoration:none}.foot a:hover{color:var(--txt)}.foot-by{text-align:center;margin-top:12px}.foot-by a{text-decoration:none}.foot-by span{display:inline-block;color:#ff7a1a;border:1px solid #fff;border-radius:6px;padding:4px 14px;font-size:11px;letter-spacing:.02em}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}
 .card{background:var(--sfc);border:1px solid var(--bdr);border-radius:8px;padding:14px}
 .card .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
@@ -738,7 +738,7 @@ ws.onclose=function(){wsLive=false;tickUp();setTimeout(C,2000)}}
 C();
 </script>
 <div class="foot">$brand <span style="opacity:.6">$verLabel</span> &#183; <a href="/Q/docs">docs</a> &#183; powered by the Qbix engine</div>
-<div class="foot-by"><span>Maintained by 7x</span></div>
+<div class="foot-by"><a href="https://se7enx.com" target="_blank" rel="noopener"><span>Maintained by 7x</span></a></div>
 </body></html>
 HTML;
 	}
