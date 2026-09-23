@@ -112,9 +112,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The nightly spc binary has Windows extraction bugs.
-          # Clone from source and run with the runner's PHP instead.
-          git clone --depth 1 https://github.com/crazywhalecc/static-php-cli.git spc-src
+          # The nightly spc binary has Windows extraction bugs, so this runs
+          # spc from source with the runner's PHP instead.
+          #
+          # Pinned to a release rather than tracking the default branch. It was
+          # unpinned, which meant the Windows build inherited whatever was in
+          # upstream's tip on the day -- and upstream's last release is four
+          # months behind that tip, so the one platform built from source was
+          # also the only one built from code nobody had cut a version of. The
+          # symptom was PHP's own configure appearing to succeed and `nmake
+          # clean` then failing in two seconds, while every other package built
+          # normally.
+          #
+          # Raising this is a deliberate step: check the platform still builds
+          # before moving it.
+          git clone --depth 1 --branch 2.8.5 \
+            https://github.com/crazywhalecc/static-php-cli.git spc-src
           cd spc-src
           php -v
           composer install --no-dev --no-interaction --quiet 2>&1
