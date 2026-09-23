@@ -225,13 +225,12 @@ class Q_WebServer_Headers
 		// rather than stated wrongly.
 		$reason = $reasons[$status] ?? '';
 		$out = "HTTP/1.1 $status $reason\r\n";
-		foreach ($headers as $k => $v) {
-			$out .= "$k: $v\r\n";
-		}
+		$out .= Q_WebServer::headerLines($headers);
 		// One line per cookie. The header array is associative and cannot
 		// hold duplicates, which is why they are gathered into a list above
 		// rather than merged back into it.
 		foreach ($cookieHeaders as $ch) {
+			if (preg_match('/[\r\n]/', (string) $ch)) continue;
 			$out .= "Set-Cookie: $ch\r\n";
 		}
 		self::writeAll($client, $out . "\r\n" . $body);
@@ -276,7 +275,7 @@ class Q_WebServer_Headers
 			$headers['Connection'] = 'close';
 
 			$out = "HTTP/1.1 200 OK\r\n";
-			foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
+			$out .= Q_WebServer::headerLines($headers);
 			self::writeAll($client, $out . "\r\n");
 
 			$fp = fopen($compressed['path'], 'rb');
@@ -302,7 +301,7 @@ class Q_WebServer_Headers
 			$headers['Connection'] = 'close';
 
 			$out = "HTTP/1.1 200 OK\r\n";
-			foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
+			$out .= Q_WebServer::headerLines($headers);
 			self::writeAll($client, $out . "\r\n" . $body);
 			return;
 		}
@@ -312,7 +311,7 @@ class Q_WebServer_Headers
 		$headers['Connection'] = 'close';
 
 		$out = "HTTP/1.1 200 OK\r\n";
-		foreach ($headers as $k => $v) $out .= "$k: $v\r\n";
+		$out .= Q_WebServer::headerLines($headers);
 		self::writeAll($client, $out . "\r\n");
 
 		$fp = fopen($fsPath, 'rb');

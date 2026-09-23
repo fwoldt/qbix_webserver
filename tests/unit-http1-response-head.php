@@ -38,11 +38,17 @@ function check($what, $got, $want)
 // exercised through a copy of its source rather than by loading the class.
 // The copy is taken from the file at run time, so it cannot drift from it.
 $src = file_get_contents(__DIR__ . '/../src/Q/WebServer.php');
-if (!preg_match('/\n\tstatic function http1Head\(.*?\n\t\}\n/s', $src, $m)) {
-	fwrite(STDERR, "  FAIL - http1Head() not found in src/Q/WebServer.php\n");
-	exit(1);
+// http1Head() delegates its header serialisation to headerLines(), so both
+// have to come across for the copy to behave like the original.
+$methods = '';
+foreach (array('http1Head', 'headerLines') as $name) {
+	if (!preg_match('/\n\tstatic function ' . $name . '\(.*?\n\t\}\n/s', $src, $m)) {
+		fwrite(STDERR, "  FAIL - $name() not found in src/Q/WebServer.php\n");
+		exit(1);
+	}
+	$methods .= $m[0];
 }
-eval('class T { ' . $m[0] . ' }');
+eval('class T { ' . $methods . ' }');
 
 function head($extra, $type = 'text/plain', $len = 3)
 {

@@ -3200,9 +3200,11 @@ WORKER;
 		stream_set_blocking($pipes[1], false);
 		stream_set_blocking($pipes[2], false);
 
-		// Send request body to stdin
+		// Send request body to stdin. A short write here hands the CGI script a
+		// truncated body while CONTENT_LENGTH still claims the full size, so
+		// the script blocks waiting for bytes that were never sent.
 		if (!empty($parsed['body'])) {
-			@fwrite($pipes[0], $parsed['body']);
+			self::writeAll($pipes[0], $parsed['body']);
 		}
 		fclose($pipes[0]);
 
@@ -3319,11 +3321,13 @@ WORKER;
 		);
 		$reason = $reasons[$status] ?? 'OK';
 		$out = "HTTP/1.1 $status $reason\r\n";
-		foreach ($headers as $k => $v) {
-			$out .= "$k: $v\r\n";
-		}
-		// Append all Set-Cookie headers (can't use associative array)
+		$out .= self::headerLines($headers);
+		// Append all Set-Cookie headers (can't use associative array).
+		// A cookie value is as capable of carrying CRLF as any other header,
+		// and more likely to hold something a visitor chose, so the pairs go
+		// through the same filter rather than around it.
 		foreach ($extraHeaders as $pair) {
+			if (preg_match('/[\r\n]/', (string) $pair[0] . (string) $pair[1])) continue;
 			$out .= $pair[0] . ': ' . $pair[1] . "\r\n";
 		}
 		self::writeAll($client, $out . "\r\n" . $body);
@@ -3522,7 +3526,7 @@ WORKER;
 					$body = Q_WebServer_Headers::maybeCompress($body, $contentType, $reqHeaders, $gzHeaders);
 				}
 				$out = "HTTP/1.1 200 OK\r\n" . $baseHeaders;
-				foreach ($gzHeaders as $k => $v) $out .= "$k: $v\r\n";
+				$out .= self::headerLines($gzHeaders);
 				$out .= "Content-Length: " . strlen($body) . "\r\n"
 					. "Connection: $connHeader\r\n\r\n";
 				self::$lastStatus = 200;
@@ -4349,15 +4353,21 @@ HTML;
 						$hdrs['Set-Cookie'] = $ch;
 					}
 					$out = "HTTP/1.1 $status " . Q_WebServer::statusText($status) . "\r\n";
-					foreach ($hdrs as $k => $v) $out .= "$k: $v\r\n";
+					$out .= Q_WebServer::headerLines($hdrs);
 					$out .= "\r\n";
-					@fwrite($_streamingClient, $out);
+					Q_WebServer::writeAll($_streamingClient, $out);
 				}
+				// Chunked framing states a length and then supplies exactly
+				// that many bytes. A short write leaves the client reading the
+				// next chunk's header as body, and nothing downstream can
+				// resynchronise, so these writes have to complete or fail
+				// loudly rather than return a count nobody reads.
 				if (strlen($chunk) > 0) {
-					@fwrite($_streamingClient, dechex(strlen($chunk)) . "\r\n" . $chunk . "\r\n");
+					Q_WebServer::writeAll($_streamingClient,
+						dechex(strlen($chunk)) . "\r\n" . $chunk . "\r\n");
 				}
 				if ($phase & PHP_OUTPUT_HANDLER_FINAL) {
-					@fwrite($_streamingClient, "0\r\n\r\n");
+					Q_WebServer::writeAll($_streamingClient, "0\r\n\r\n");
 				}
 				return ''; // consume
 			}, 0, PHP_OUTPUT_HANDLER_FLUSHABLE | PHP_OUTPUT_HANDLER_CLEANABLE
@@ -5027,11 +5037,35 @@ HTML;
 			. "\r\nContent-Type: $type\r\nContent-Length: " . (int) $length
 			. "\r\nConnection: $conn\r\n";
 
-		// A header value carrying CR or LF lets whoever supplied it write
-		// headers of its own, or a second response entirely. Values reach here
-		// from application output and from stored cache entries, so this is not
-		// a theoretical source.
-		foreach ($extra as $k => $v) {
+		return $out . self::headerLines($extra);
+	}
+
+	/**
+	 * Serialise a header map into response lines.
+	 *
+	 * Every place that writes headers to a client goes through here. That is
+	 * the point of it: a header value carrying CR or LF lets whoever supplied
+	 * it write headers of its own, or a second response entirely, and values
+	 * reach us from application output and from stored cache entries, so this
+	 * is not a theoretical source. A guard that lives in one of six
+	 * hand-written loops protects one of six responses, which is why the loops
+	 * were replaced by a call rather than by six copies of the check.
+	 *
+	 * A header that cannot be represented is dropped rather than truncated or
+	 * escaped. Truncating keeps an attacker-chosen prefix, and escaping invents
+	 * a value the caller never asked to send; omitting it is the only option
+	 * that states nothing false.
+	 *
+	 * @method headerLines
+	 * @static
+	 * @param {array} $headers name => value
+	 * @return {string} zero or more "Name: value\r\n" lines, no blank line
+	 */
+	static function headerLines($headers)
+	{
+		if (!is_array($headers)) return '';
+		$out = '';
+		foreach ($headers as $k => $v) {
 			if (preg_match('/[\r\n]/', (string) $k . (string) $v)) continue;
 			$out .= "$k: $v\r\n";
 		}
