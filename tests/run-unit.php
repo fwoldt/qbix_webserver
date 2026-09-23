@@ -29,7 +29,22 @@ $files = array_merge(
 	glob($dir . '/unit-*.php') ?: array(),
 	array_filter(glob($dir . '/http2-*.php') ?: array(), function ($f) {
 		return basename($f) !== 'http2-serve.php';
-	})
+	}),
+	// Named explicitly, because it does not follow the naming convention and
+	// would otherwise be picked up by nothing that runs before a commit.
+	//
+	// It checks that bin/qbixserver.phar was built from the sources beside it.
+	// The archive is committed and is what a Composer install runs, so a stale
+	// one ships working source and broken behaviour to anyone who runs from the
+	// archive rather than from src/. That happened: a release was cut whose
+	// source carried a fix and whose archive did not, and it had to be
+	// withdrawn.
+	//
+	// The release workflow already gates on this, which is the real safety net.
+	// This adds the same check to the suite a developer runs locally, so the
+	// drift is visible before a commit rather than at the point of release.
+	// It needs no server and no network, which is this runner's criterion.
+	array_filter(array($dir . '/phar-is-current.php'), 'file_exists')
 );
 sort($files);
 
