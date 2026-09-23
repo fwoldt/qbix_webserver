@@ -113,6 +113,31 @@ check('...and only after containment',
 check('but before the application gets the path',
 	$builtin !== null and $resolve !== null and $builtin < $resolve, true);
 
+// ── And what it answers is counted ──────────────────────────────
+
+// http2Request() is the one place every directly-returned HTTP/2 response
+// passes through, and until it recorded them the dashboard could not see most
+// of HTTP/2 at all. A script goes to the worker pool, which records it on its
+// own event, so PHP looked fine on both protocols; static files and every
+// refusal returned from http2Route() and were counted nowhere.
+//
+// Measured before the fix: five requests for /.git/config over HTTP/1.1 moved
+// the 4xx counter from 2 to 7, and five identical requests over HTTP/2 moved
+// it from 7 to 7. A browser negotiates HTTP/2, so a scan showed as nothing.
+$wrapper = strpos($src, 'function http2Request');
+check('http2Request() is present', $wrapper !== false, true);
+if ($wrapper !== false) {
+	$w = substr($src, $wrapper, 4000);
+	$w = substr($w, 0, ($n = strpos($w, "\n\t/**")) === false ? strlen($w) : $n);
+	check('an HTTP/2 response it answers itself is recorded',
+		strpos($w, 'recordCompleted') !== false, true);
+	// The null case belongs to the pool. Recording it here as well would count
+	// every PHP request over HTTP/2 twice, which is the opposite mistake and
+	// just as invisible.
+	check('...and only when there is a response, so the pool does not double-count',
+		(bool) preg_match('/is_array\(\$response\)/', $w), true);
+}
+
 if ($fail) {
 	printf("\n  FAIL - %d of %d case(s)\n", $fail, $pass + $fail);
 	exit(1);

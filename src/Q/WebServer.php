@@ -702,14 +702,48 @@ class Q_WebServer
 	 */
 	static function http2Request($key, $request)
 	{
+		$started = microtime(true);
 		try {
-			return self::http2Route($key, $request);
+			$response = self::http2Route($key, $request);
 		} catch (\Throwable $e) {
-			return Q_WebServer_Http2_ErrorPage::response(
+			$response = Q_WebServer_Http2_ErrorPage::response(
 				get_class($e) . ': ' . $e->getMessage(),
 				isset($request['stream']) ? $request['stream'] : 0
 			);
 		}
+		// Record it here, which is the one place every directly-returned HTTP/2
+		// response passes through.
+		//
+		// Until this was added the dashboard could not see most of HTTP/2. A
+		// script is handed to the worker pool, and the pool calls
+		// recordCompleted() when it answers -- so PHP was counted on both
+		// protocols and looked fine. Everything http2Route() answers itself was
+		// not counted at all: static files, and every refusal.
+		//
+		// Refusals are the ones that matter. Five requests for /.git/config
+		// over HTTP/1.1 moved the 4xx counter from 2 to 7; five identical
+		// requests over HTTP/2 moved it from 7 to 7. A browser negotiates
+		// HTTP/2, so somebody probing this server with any modern client
+		// produced a dashboard showing nothing had happened.
+		//
+		// null means the pool has taken it and will record it on its own
+		// event, so recording here too would count it twice.
+		if (is_array($response)) {
+			self::recordCompleted(
+				array(
+					'method' => $request['method'] ?? 'GET',
+					'uri' => $request['path'] ?? '/',
+					'headers' => $request['headers'] ?? array(),
+					'clientIp' => self::$clientInfo[$key]['ip'] ?? '',
+					'cookies' => array(),
+				),
+				$response['status'] ?? 200,
+				isset($response['body']) ? strlen((string) $response['body']) : 0,
+				(microtime(true) - $started) * 1000,
+				false
+			);
+		}
+		return $response;
 	}
 
 	/**

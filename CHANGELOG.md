@@ -44,6 +44,14 @@ edited down to what a reader actually needs.
   The blocked list and the extension allow-list were consulted on one path and
   not the other, so everything they protected was protected only from clients
   old enough to ask in the older protocol.
+- **The dashboard could not see most of HTTP/2.** A script is handed to the
+  worker pool, which records it when it answers, so PHP requests were counted
+  on both protocols and the numbers looked right. Everything the HTTP/2 route
+  answered itself — static files, and *every refusal* — was counted nowhere.
+  Measured: five requests for `/.git/config` over HTTP/1.1 moved the 4xx
+  counter from 2 to 7; five identical requests over HTTP/2 moved it from 7 to
+  7. A browser negotiates HTTP/2, so anyone probing the server with a modern
+  client produced a dashboard showing that nothing had happened.
 - A signed-in visitor's pages were cached and served to everybody else. The
   cache skips a request carrying a session cookie, but the match required the
   configured name followed immediately by `=`. Exponential's cookie is
