@@ -55,27 +55,27 @@ jobs:
             # optional: without it the source transform cannot run and the
             # server dies at startup on token_get_all().
             #
-            # No sudo: these VMs run as root and do not carry it. The form
-            # this replaced was `sudo X || X`, which looked like it wanted
-            # privileges and in fact only ever worked through the fallback.
+            # sudo is required: the VM does not run as root. The original form
+            # was `sudo X || X`, and it was the sudo branch that worked, not
+            # the fallback -- pkg without it reports "Insufficient privileges".
             install: |
-              pkg install -y php83 curl
+              sudo pkg install -y php83 curl
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
-                pkg install -y php83-$e || true
+                sudo pkg install -y php83-$e || true
               done
           - os: openbsd
             version: '7.6'
             install: |
-              pkg_add -I php curl || true
+              sudo pkg_add -I php curl || true
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
-                pkg_add -I php-$e || true
+                sudo pkg_add -I php-$e || true
               done
           - os: netbsd
             version: '10.0'
             install: |
-              /usr/sbin/pkg_add php83 curl || true
+              sudo /usr/sbin/pkg_add php83 curl || true
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
-                /usr/sbin/pkg_add php83-$e || true
+                sudo /usr/sbin/pkg_add php83-$e || true
               done
 
     steps:
@@ -189,9 +189,9 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg install -y php83 curl
+            sudo pkg install -y php83 curl
             for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
-              pkg install -y php83-$e || true
+              sudo pkg install -y php83-$e || true
             done
           run: sh tests/phar-serves.sh bin/qbixserver.phar
 
