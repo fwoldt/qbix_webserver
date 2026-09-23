@@ -92,7 +92,9 @@ Access and error logs with buffered writes, daily rotation, gzip archiving, and 
                 "flushInterval": 1,
                 "maxSize": 52428800,
                 "archiveAfterDays": 2,
-                "deleteAfterDays": 30
+                "deleteAfterDays": 30,
+                "fileMode": null,
+                "dirMode": "0755"
             }
         }
     }
@@ -109,6 +111,33 @@ Access and error logs with buffered writes, daily rotation, gzip archiving, and 
 | `maxSize` | `52428800` (50 MB) | Rotate mid-day if a log file exceeds this. |
 | `archiveAfterDays` | `2` | Compress rotated logs to .gz after this many days. |
 | `deleteAfterDays` | `30` | Delete archived logs older than this. |
+| `fileMode` | unset | Permissions for the log files, as octal digits in a string: `"0640"`. Unset means a file is created at `0666` minus the umask, usually `0644`. |
+| `dirMode` | `"0755"` | Permissions for the log directory. Set explicitly, it is enforced past the umask; left alone, it behaves as it always has. |
+
+#### Who can read your logs
+
+An access log names the people who visited and what they asked for. Created at the umask, it is `0644` — readable by every account on the machine. On a box that is only yours that may be fine; on a shared one, or on anything holding personal data, it is not.
+
+```json
+"log": { "dir": "/var/log/qbix", "fileMode": "0640", "dirMode": "0750" }
+```
+
+Both keys are applied when the file is created, not after: the mode is in place before the first byte, so there is no moment in which the file exists more widely readable than you asked. That holds for the files rotation creates, and for the `.gz` an archive run writes — a compressed log is the same log and gets the same mode.
+
+#### One Unix user per site
+
+Where each site runs as its own user and a group needs to read across them, the pair to use is a setgid directory and group-readable files:
+
+```json
+"log": { "dir": "/var/log/qbix", "fileMode": "0660", "dirMode": "2770" }
+```
+
+The setgid bit passes the directory's group to everything created inside it. It does not grant the group anything — that is what `fileMode` is for, and why the two belong together.
+
+Two things to know before setting this up:
+
+- **Set the group first.** `chgrp webops /var/log/qbix`, then start the server. Linux drops the setgid bit silently when the process setting it is neither root nor a member of the directory's group, so the order matters.
+- **`chmod` needs ownership.** If the directory already exists and belongs to somebody else, the mode cannot be applied; the server says so once on startup rather than failing to start or complaining per file.
 
 **Buffered writes** accumulate log lines in memory and flush them in a single `write()` syscall — either when the buffer fills or on the timer. This cuts the per-request overhead roughly in half vs writing every line:
 

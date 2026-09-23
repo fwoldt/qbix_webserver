@@ -27,7 +27,9 @@
  *     "flushInterval":    1,
  *     "maxSize":          52428800,
  *     "archiveAfterDays": 2,
- *     "deleteAfterDays":  30
+ *     "deleteAfterDays":  30,
+ *     "fileMode":         null,
+ *     "dirMode":          "0755"
  *   }}}
  *
  *   bufferSize: 0 = unbuffered (flush every line), default 64KB.
@@ -40,6 +42,17 @@
  *   name out of config cannot write outside `dir`. Rotation keeps
  *   the name and inserts the date before the .log, so "site.log"
  *   rotates to "site.2000-10-10.log".
+ *
+ *   fileMode/dirMode: the permissions the log files and their
+ *   directory are created with, written as octal digits the way
+ *   `Q/webserver/socketMode` is. Left out, a file gets 0666 minus the
+ *   umask and the directory 0755 minus it -- what this server has
+ *   always done. An access log names the people who visited, so on a
+ *   machine with other accounts on it "0640" is the better answer, and
+ *   where each site runs as its own user, "0660" with a directory of
+ *   "2770" lets a shared group read what it is meant to and nobody
+ *   else. Those two belong together: the setgid bit passes the group
+ *   on, it does not grant the group anything.
  *
  * A virtual host can log to its own files. The hosts are already
  * declared for their document root, so the log goes in that same
@@ -54,7 +67,9 @@
  *
  *   log: true       names the files after the host, in `dir`:
  *                   a.example.com-access.log and -error.log
- *   log: {...}      overrides dir, accessName, errorName, or all three
+ *   log: {...}      overrides dir, accessName, errorName, fileMode,
+ *                   dirMode, or all of them -- a host can be stricter
+ *                   than the server and inherits what it omits
  *   no log key      that host's requests go to the server's own log
  *
  * Requests are sorted by the Host header, the same one WebServer
@@ -84,6 +99,16 @@
  *
  * @class Q_WebServer_Log
  */
+
+// Q_WebServer_Modes decides the permissions the files below are created
+// with. The server's autoloader finds it by name; requiring it here as
+// well is what makes this class usable on its own, which is how the
+// tests drive it.
+if (!class_exists('Q_WebServer_Modes', false)
+and is_file(__DIR__ . '/Modes.php')) {
+	require_once __DIR__ . '/Modes.php';
+}
+
 class Q_WebServer_Log
 {
 	static $accessFp = null;
@@ -97,6 +122,11 @@ class Q_WebServer_Log
 	// the two handles and its own buffer.
 	static $hosts = array();
 	static $dir = null;
+	// Parsed once in init(); null means "not configured", which means
+	// every file is created exactly as it was before these keys existed.
+	static $fileMode = null;
+	static $dirMode = null;
+	static $dirModeExplicit = false;
 	static $maxSize = 52428800;       // 50MB
 	static $archiveAfterDays = 2;
 	static $deleteAfterDays = 30;
@@ -120,11 +150,22 @@ class Q_WebServer_Log
 		$config = Q_Config::get('Q', 'webserver', 'log', array());
 		if (empty($config)) return;
 
+		// Read before resolveDir(), which is what creates the directory.
+		self::$fileMode = Q_WebServer_Modes::parse(
+			Q::ifset($config, 'fileMode', null)
+		);
+		self::$dirModeExplicit = Q::ifset($config, 'dirMode', null) !== null;
+		self::$dirMode = Q_WebServer_Modes::parse(
+			Q::ifset($config, 'dirMode', null), 0755
+		);
+
 		$dir = Q::ifset($config, 'dir', null);
 		if (!$dir) {
 			$dir = defined('APP_DIR') ? APP_DIR . '/logs' : 'logs';
 		}
-		self::$dir = $dir = self::resolveDir($dir);
+		self::$dir = $dir = self::resolveDir(
+			$dir, self::$dirMode, self::$dirModeExplicit
+		);
 
 		self::$maxSize = (int) Q::ifset($config, 'maxSize', 52428800);
 		self::$archiveAfterDays = (int) Q::ifset($config, 'archiveAfterDays', 2);
@@ -147,14 +188,23 @@ class Q_WebServer_Log
 
 		if ($accessEnabled) {
 			self::$accessPath = $dir . '/' . self::$accessName;
-			self::$accessFp = fopen(self::$accessPath, 'a');
+			self::$accessFp = self::openLog(self::$accessPath, self::$fileMode);
 		}
 		if ($errorEnabled) {
 			self::$errorPath = $dir . '/' . self::$errorName;
-			self::$errorFp = fopen(self::$errorPath, 'a');
+			self::$errorFp = self::openLog(self::$errorPath, self::$fileMode);
 		}
 
 		self::initHosts($accessEnabled, $errorEnabled);
+
+		// chmod needs ownership, so a directory left behind by another
+		// user keeps its own permissions however this is configured.
+		// Worth saying once, at startup, rather than per file.
+		if (self::$dirModeExplicit
+		and !Q_WebServer_Modes::verify($dir, self::$dirMode)) {
+			fwrite(STDERR, "  log: $dir is not "
+				. decoct(self::$dirMode) . ", chmod did not take\n");
+		}
 
 		self::$enabled = true;
 
@@ -402,12 +452,12 @@ class Q_WebServer_Log
 			if (self::$accessFp) {
 				self::rotateTo(self::$accessPath, self::$accessFp,
 					self::rotatedPath(self::$dir, self::$accessName, $yesterday));
-				self::$accessFp = fopen(self::$accessPath, 'a');
+				self::$accessFp = self::openLog(self::$accessPath, self::$fileMode);
 			}
 			if (self::$errorFp) {
 				self::rotateTo(self::$errorPath, self::$errorFp,
 					self::rotatedPath(self::$dir, self::$errorName, $yesterday));
-				self::$errorFp = fopen(self::$errorPath, 'a');
+				self::$errorFp = self::openLog(self::$errorPath, self::$fileMode);
 			}
 			foreach (array_keys(self::$hosts) as $host) {
 				self::rotateHost($host, $yesterday);
@@ -421,13 +471,13 @@ class Q_WebServer_Log
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$accessPath, self::$accessFp,
 				self::rotatedPath(self::$dir, self::$accessName, $stamp));
-			self::$accessFp = fopen(self::$accessPath, 'a');
+			self::$accessFp = self::openLog(self::$accessPath, self::$fileMode);
 		}
 		if (self::$errorPath && self::exceedsMax(self::$errorPath)) {
 			$stamp = date('Y-m-d-His');
 			self::rotateTo(self::$errorPath, self::$errorFp,
 				self::rotatedPath(self::$dir, self::$errorName, $stamp));
-			self::$errorFp = fopen(self::$errorPath, 'a');
+			self::$errorFp = self::openLog(self::$errorPath, self::$fileMode);
 		}
 		foreach (array_keys(self::$hosts) as $host) {
 			self::rotateHostBySize($host);
@@ -450,12 +500,16 @@ class Q_WebServer_Log
 		if ($rec['accessFp']) {
 			self::rotateTo($rec['accessPath'], $rec['accessFp'],
 				self::rotatedPath($rec['dir'], $rec['accessName'], $stamp));
-			self::$hosts[$host]['accessFp'] = fopen($rec['accessPath'], 'a');
+			self::$hosts[$host]['accessFp'] = self::openLog(
+				$rec['accessPath'], $rec['fileMode']
+			);
 		}
 		if ($rec['errorFp']) {
 			self::rotateTo($rec['errorPath'], $rec['errorFp'],
 				self::rotatedPath($rec['dir'], $rec['errorName'], $stamp));
-			self::$hosts[$host]['errorFp'] = fopen($rec['errorPath'], 'a');
+			self::$hosts[$host]['errorFp'] = self::openLog(
+				$rec['errorPath'], $rec['fileMode']
+			);
 		}
 	}
 
@@ -475,12 +529,16 @@ class Q_WebServer_Log
 			self::flushHost($host);
 			self::rotateTo($rec['accessPath'], $rec['accessFp'],
 				self::rotatedPath($rec['dir'], $rec['accessName'], $stamp));
-			self::$hosts[$host]['accessFp'] = fopen($rec['accessPath'], 'a');
+			self::$hosts[$host]['accessFp'] = self::openLog(
+				$rec['accessPath'], $rec['fileMode']
+			);
 		}
 		if ($rec['errorFp'] and self::exceedsMax($rec['errorPath'])) {
 			self::rotateTo($rec['errorPath'], $rec['errorFp'],
 				self::rotatedPath($rec['dir'], $rec['errorName'], $stamp));
-			self::$hosts[$host]['errorFp'] = fopen($rec['errorPath'], 'a');
+			self::$hosts[$host]['errorFp'] = self::openLog(
+				$rec['errorPath'], $rec['fileMode']
+			);
 		}
 	}
 
@@ -555,8 +613,19 @@ class Q_WebServer_Log
 			if ($key === '') continue;
 			$stem = self::hostStem($key);
 
+			// A host may be stricter than the server, and inherits when
+			// it says nothing.
+			$fileMode = Q_WebServer_Modes::parse(
+				Q::ifset($logConf, 'fileMode', null), self::$fileMode
+			);
+			$dirExplicit = isset($logConf['dirMode'])
+				? true
+				: self::$dirModeExplicit;
+			$dirMode = Q_WebServer_Modes::parse(
+				Q::ifset($logConf, 'dirMode', null), self::$dirMode
+			);
 			$dir = isset($logConf['dir'])
-				? self::resolveDir($logConf['dir'])
+				? self::resolveDir($logConf['dir'], $dirMode, $dirExplicit)
 				: self::$dir;
 			$accessName = self::sanitizeName(
 				Q::ifset($logConf, 'accessName', null), "$stem-access.log"
@@ -579,8 +648,11 @@ class Q_WebServer_Log
 				'errorName' => $errorName,
 				'accessPath' => $accessPath,
 				'errorPath' => $errorPath,
-				'accessFp' => $accessEnabled ? fopen($accessPath, 'a') : null,
-				'errorFp' => $errorEnabled ? fopen($errorPath, 'a') : null,
+				'fileMode' => $fileMode,
+				'accessFp' => $accessEnabled
+					? self::openLog($accessPath, $fileMode) : null,
+				'errorFp' => $errorEnabled
+					? self::openLog($errorPath, $fileMode) : null,
 				'buf' => '',
 			);
 		}
@@ -631,16 +703,38 @@ class Q_WebServer_Log
 	 * @static
 	 * @private
 	 * @param {string} $dir
+	 * @param {integer|null} [$mode=null] Mode for the directory
+	 * @param {boolean} [$explicit=false] Whether $mode came from config
 	 * @return {string}
 	 */
-	private static function resolveDir($dir)
+	private static function resolveDir($dir, $mode = null, $explicit = false)
 	{
 		if ($dir === '' or $dir[0] !== '/') {
 			$base = defined('APP_DIR') ? APP_DIR : getcwd();
 			$dir = $base . '/' . $dir;
 		}
-		if (!is_dir($dir)) @mkdir($dir, 0755, true);
+		Q_WebServer_Modes::dir($dir, $mode, $explicit);
 		return rtrim($dir, '/');
+	}
+
+	/**
+	 * Open a log for appending, at the configured mode.
+	 *
+	 * Every log file this class opens goes through here -- the two at
+	 * startup, the two each rotation replaces, and each host's pair --
+	 * so a mode set in config reaches all of them and not just the ones
+	 * created at startup.
+	 *
+	 * @method openLog
+	 * @static
+	 * @private
+	 * @param {string} $path
+	 * @param {integer|null} $mode
+	 * @return {resource|false}
+	 */
+	private static function openLog($path, $mode)
+	{
+		return Q_WebServer_Modes::open($path, 'a', $mode);
 	}
 
 	/**
@@ -669,6 +763,9 @@ class Q_WebServer_Log
 
 	private static function rotateTo($currentPath, &$fp, $targetPath)
 	{
+		// No chmod here on purpose: rename() keeps the inode, so the
+		// rotated file carries the mode it already had, and the fresh
+		// live file that replaces it is opened through openLog().
 		if ($fp) @fclose($fp);
 		if (file_exists($currentPath) && filesize($currentPath) > 0) {
 			@rename($currentPath, $targetPath);
@@ -708,7 +805,9 @@ class Q_WebServer_Log
 				$gzPath = $file . '.gz';
 				if (!file_exists($gzPath)) {
 					$in = fopen($file, 'rb');
-					$out = gzopen($gzPath, 'wb9');
+					$out = Q_WebServer_Modes::gzopen(
+						$gzPath, 'wb9', self::fileModeFor($dir)
+					);
 					if ($in && $out) {
 						while (!feof($in)) gzwrite($out, fread($in, 65536));
 						fclose($in); gzclose($out);
@@ -725,6 +824,30 @@ class Q_WebServer_Log
 			if (filemtime($file) < $deleteCutoff) @unlink($file);
 		}
 		}
+	}
+
+	/**
+	 * The file mode that applies in one log directory.
+	 *
+	 * A gzipped log is still that log, so it gets the mode of the files
+	 * it sits among rather than whatever the umask says. Where several
+	 * hosts share a directory and disagree, the bits common to both are
+	 * used -- never wider than either host asked for.
+	 *
+	 * @method fileModeFor
+	 * @static
+	 * @private
+	 * @param {string} $dir
+	 * @return {integer|null}
+	 */
+	private static function fileModeFor($dir)
+	{
+		$mode = ($dir === self::$dir) ? self::$fileMode : null;
+		foreach (self::$hosts as $rec) {
+			if ($rec['dir'] !== $dir or $rec['fileMode'] === null) continue;
+			$mode = ($mode === null) ? $rec['fileMode'] : ($mode & $rec['fileMode']);
+		}
+		return $mode;
 	}
 
 	/**
@@ -780,6 +903,10 @@ class Q_WebServer_Log
 		}
 		return array(
 			'dir' => self::$dir,
+			'fileMode' => self::$fileMode === null
+				? null : decoct(self::$fileMode),
+			'dirMode' => self::$dirModeExplicit
+				? decoct(self::$dirMode) : null,
 			'accessSize' => $accessSize,
 			'errorSize' => $errorSize,
 			'archives' => $archives,

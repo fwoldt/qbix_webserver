@@ -20,9 +20,28 @@
  *   minSize  (int,  default 1024)   only precompress files at least this many bytes
  *   level    (int,  default 6)      gzip level
  *   dir      (string, default sys_temp/qbixserver-precompress) cache directory
+ *   fileMode (string, default null) permissions for the .gz entries
+ *   dirMode  (string, default "0755") permissions for the directory
+ *
+ * A word about that default directory: it is under the system temp
+ * directory, which on a normal machine is world-readable and shared with
+ * every other account. The entries in it are response bodies that were
+ * served to somebody. On a machine with other users on it, set `dir` to
+ * somewhere of your own, or set `dirMode`/`fileMode` -- "2770" and
+ * "0660" hand the cache to one group and to nobody else.
  *
  * @class Q_WebServer_Precompress
  */
+
+// Q_WebServer_Modes decides the permissions the files below are created
+// with. The server's autoloader finds it by name; requiring it here as
+// well is what makes this class usable on its own, which is how the
+// tests drive it.
+if (!class_exists('Q_WebServer_Modes', false)
+and is_file(__DIR__ . '/Modes.php')) {
+	require_once __DIR__ . '/Modes.php';
+}
+
 class Q_WebServer_Precompress
 {
 	protected static $dir = false; // false = not yet resolved, null = unavailable
@@ -78,8 +97,15 @@ class Q_WebServer_Precompress
 				return null; // compression didn't help — let caller serve raw
 			}
 			// Write atomically (rename) so concurrent workers never read a partial file.
+			// The mode goes on the temporary file, before the rename: set
+			// afterwards, the entry would be visible under its final name --
+			// which is the name other workers look for -- for as long as it
+			// took to get to the chmod.
 			$tmp = $cachePath . '.' . getmypid() . '.tmp';
-			if (@file_put_contents($tmp, $gz) !== false) {
+			$mode = Q_WebServer_Modes::parse(
+				Q_Config::get('Q', 'webserver', 'precompress', 'fileMode', null)
+			);
+			if (Q_WebServer_Modes::put($tmp, $gz, 0, $mode) !== false) {
 				@rename($tmp, $cachePath);
 				self::enforceLimit($dir);
 			} else {
@@ -139,9 +165,12 @@ class Q_WebServer_Precompress
 		if (!$dir) {
 			$dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'qbixserver-precompress';
 		}
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0755, true);
-		}
+		$configured = Q_Config::get('Q', 'webserver', 'precompress', 'dirMode', null);
+		Q_WebServer_Modes::dir(
+			$dir,
+			Q_WebServer_Modes::parse($configured, 0755),
+			$configured !== null
+		);
 		self::$dir = is_dir($dir) ? $dir : null;
 		return self::$dir;
 	}
