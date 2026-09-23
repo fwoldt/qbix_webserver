@@ -84,7 +84,7 @@ jobs:
           version: ${{ matrix.version }}
           shell: sh
           run: |
-            sudo ${{ matrix.install }} || ${{ matrix.install }}
+            ${{ matrix.install }}
             sh tests/phar-serves.sh bin/qbixserver.phar
 
   # ── Linux architectures we ship no binary for ───────────────
