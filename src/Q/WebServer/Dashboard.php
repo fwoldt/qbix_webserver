@@ -194,7 +194,14 @@ class Q_WebServer_Dashboard
 			'requests' => $reqs,
 			'rps' => $rps, 'currentRps' => $currentRps,
 			'avgMs' => $avgMs,
-			'slowest' => self::$stats['slowest'],
+			// Rounded here rather than where it is displayed. microtime()
+			// subtraction gives thirteen decimal places, and the dashboard
+			// printed all of them -- "slowest: 1541.8879985809326ms" --
+			// which overflowed the card it sits in. avgMs a few lines up was
+			// already rounded, so the two numbers beside each other disagreed
+			// about how precise this server's timings are. Rounding at the
+			// source fixes /Q/health and anything else reading this too.
+			'slowest' => round(self::$stats['slowest'], 1),
 			'slowestUri' => self::$stats['slowestUri'],
 			'status2xx' => self::$stats['status2xx'],
 			'status3xx' => self::$stats['status3xx'],

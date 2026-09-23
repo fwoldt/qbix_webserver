@@ -76,6 +76,18 @@ edited down to what a reader actually needs.
   The blocked list and the extension allow-list were consulted on one path and
   not the other, so everything they protected was protected only from clients
   old enough to ask in the older protocol.
+- **Durations were printed to thirteen decimal places.** The dashboard card
+  read `Avg response 258.4ms` above `slowest: 1541.8879985809326ms` — two
+  numbers side by side disagreeing about how precisely this server measures
+  anything, with the second long enough to break the width of the card holding
+  it. The same raw value went out in `/Q/health`, and the console access log
+  had it too (`GET /slow.php (125.39982795715ms)`) while the *file* access log
+  had always used one decimal. Rounded where the numbers are produced rather
+  than where they are shown, so every consumer benefits.
+- **The log filled with `ReflectionProperty::setAccessible() is deprecated`.**
+  Once per static property, every time a snapshot was taken. The call has had
+  no effect since PHP 8.1 — this package's own minimum — and PHP 8.5 deprecates
+  it, so the only thing it still did was write the notice.
 - **The dashboard showed `\u00B7` and `\u2014` as text.** Thirteen JavaScript
   escapes were written directly into the dashboard's HTML, where nothing
   interprets them — PHP reads only `\u{00B7}`, with braces, and JavaScript

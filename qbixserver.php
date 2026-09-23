@@ -1057,7 +1057,13 @@ $reset = "\033[0m";
 Q_WebServer::$onRequest = function ($method, $uri, $status, $ms) use ($colors, $reset, $opts) {
 	$color = $colors[(int)($status / 100)] ?? '';
 	$time = date('H:i:s');
-	fwrite(STDERR, "$time {$color}{$status}{$reset} $method $uri ({$ms}ms)\n");
+	// %.1f, not {$ms}. This is a microtime() difference, so interpolating it
+	// prints thirteen decimal places: "GET /slow.php (125.39982795715ms)".
+	// The file access log already used %.1f, so the two logs disagreed about
+	// the same request, and the console -- the one a person actually watches
+	// while the server runs -- was the unreadable one.
+	fwrite(STDERR, sprintf("%s %s%d%s %s %s (%.1fms)\n",
+		$time, $color, $status, $reset, $method, $uri, $ms));
 };
 
 // ── Start server ────────────────────────────────────

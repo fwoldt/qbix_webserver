@@ -58,7 +58,11 @@ class Q_WebServer_Snapshot
 			self::$snapshot[$cls] = array();
 			self::$reflectors[$cls] = array();
 			foreach ($props as $prop) {
-				$prop->setAccessible(true);
+				// No setAccessible() call. Reflection has reached private and
+				// protected members without one since PHP 8.1, which is this
+				// package's minimum, and PHP 8.5 deprecates it -- so the only
+				// thing it did here was write a deprecation notice into the
+				// log once per property, every time a snapshot was taken.
 				try {
 					$val = $prop->getValue(null);
 					if (is_resource($val)) continue;
@@ -191,7 +195,11 @@ class Q_WebServer_Snapshot
 			self::$snapshot[$cls] = array();
 			self::$reflectors[$cls] = array();
 			foreach ($props as $prop) {
-				$prop->setAccessible(true);
+				// No setAccessible() call. Reflection has reached private and
+				// protected members without one since PHP 8.1, which is this
+				// package's minimum, and PHP 8.5 deprecates it -- so the only
+				// thing it did here was write a deprecation notice into the
+				// log once per property, every time a snapshot was taken.
 				try {
 					$val = $prop->hasDefaultValue()
 						? $prop->getDefaultValue()
