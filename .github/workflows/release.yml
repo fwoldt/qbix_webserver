@@ -54,7 +54,26 @@ jobs:
             spc_os: macos
             spc_arch: aarch64
             extensions: "pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
-          - os: windows-latest
+          # Pinned, not 'windows-latest'. The label moved to the
+          # windows-2025-vs2026 image, which installs Visual Studio 2026 at
+          # 'C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise' -- VS 2026 is
+          # version 18, not a '2022' directory. spc finds Visual Studio by
+          # checking six hardcoded paths for 2022 and 2019 and nothing else, so
+          # on that image findVisualStudio() returns false, and the caller
+          # indexes 'version' on it. That is why the build died with
+          #
+          #     Current VS version  is not supported yet!
+          #
+          # -- an empty version, because there was no array to read it from.
+          # Nothing about this build changed; the runner did.
+          #
+          # spc's Windows support is written and tested against VS 2022, and
+          # the libraries it builds there (libiconv-win, libsodium, libffi)
+          # carry MSVC17 project files. Teaching its path list about VS 18
+          # would get past the check and into a toolset mismatch inside those
+          # projects, so the honest fix is to build on the toolchain spc
+          # targets. windows-2022 is still a supported image.
+          - os: windows-2022
             name: windows-x64
             # Fails at the moment: the static PHP build cannot fetch icu. It
             # must not block the platforms that work while that is true, and
@@ -186,6 +205,50 @@ jobs:
       - name: Setup MSVC environment (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+
+      # spc locates Visual Studio by testing six hardcoded paths, and reports
+      # nothing useful when none of them exist: findVisualStudio() returns
+      # false, the caller reads ['version'] off it, and the message that
+      # reaches the log is "Current VS version  is not supported yet!" with an
+      # empty version. That happens twenty minutes into the job, after every
+      # source has been downloaded, and it says nothing about Visual Studio's
+      # location -- which is the only thing wrong.
+      #
+      # So the same question is asked here, in two seconds, and answered in
+      # full. This is a guard against the runner image moving again, not
+      # against anything in this repository.
+      - name: Check Visual Studio is where spc looks for it (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = @(
+            'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe',
+            'C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe',
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\MSBuild.exe',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\MSBuild\Current\Bin\MSBuild.exe',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\MSBuild\Current\Bin\MSBuild.exe'
+          )
+          $found = $paths | Where-Object { Test-Path $_ }
+          if ($found) {
+            Write-Host "spc will find Visual Studio at:"
+            $found | ForEach-Object { Write-Host "  $_" }
+            exit 0
+          }
+          Write-Host "::error::spc cannot find Visual Studio, and will fail later with an empty version."
+          Write-Host ""
+          Write-Host "It only looks in these six places:"
+          $paths | ForEach-Object { Write-Host "  $_" }
+          Write-Host ""
+          Write-Host "What is actually installed on this runner:"
+          Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "  $($_.FullName)" }
+          Get-ChildItem 'C:\Program Files (x86)\Microsoft Visual Studio' -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "  $($_.FullName)" }
+          Write-Host ""
+          Write-Host "Runner image: $env:ImageOS $env:ImageVersion"
+          Write-Host "Pin 'runs-on' to an image carrying VS 2022, or teach spc the new path."
+          exit 1
 
       - name: Run spc doctor (Unix, best-effort)
         if: runner.os != 'Windows'
@@ -436,40 +499,71 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
-      # Every release carried RELEASE_NOTES.md, a file describing v1.5.0. So
-      # each one announced the same changes regardless of what was in it, and
-      # the history read as a list of version numbers attached to somebody
-      # else's release notes. The tag's own annotation is written per release
-      # and says what changed, so that is what the release should show.
-      - name: Take the release notes from the tag
+      # Where a release note comes from, and why a tag alone no longer makes a
+      # release.
+      #
+      # This has now been wrong in three different ways. Every release once
+      # carried RELEASE_NOTES.md, a file describing v1.5.0, so each one
+      # announced the same changes regardless of what was in it. Moving to the
+      # tag's annotation fixed that, and left a subtler problem: a tag is cheap
+      # and gets made whenever a build is worth having, so eight releases went
+      # out in a single day, three of them with no title at all, and the
+      # history read as noise.
+      #
+      # The notes now come from CHANGELOG.md, and the presence of a section is
+      # what decides whether a release is published. Tag as often as is useful;
+      # a tag with no section builds, tests, and stops. Writing the section is
+      # the act of deciding to release, which is why the version and its notes
+      # can no longer describe different things.
+      - name: Take the release notes from CHANGELOG.md
         run: |
-          git fetch --force --tags --depth=1
           tag='${{ github.ref_name }}'
-          if [ -n "$(git tag -l --format='%(contents)' "$tag" | tr -d '[:space:]')" ]; then
-            git tag -l --format='%(contents)' "$tag" > tag-notes.md
-          else
-            echo "No annotation on $tag." > tag-notes.md
-            cat RELEASE_NOTES.md >> tag-notes.md
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md is missing."
+            echo "PUBLISH=no" >> "$GITHUB_ENV"
+            exit 0
           fi
-          # The first line of an annotation is the version, and the summary
-          # is the first non-empty line after it. Taking line one gave titles
-          # that only repeated the tag, which is the thing the reader can
-          # already see.
-          summary=$(tail -n +2 tag-notes.md | grep -m1 -v '^[[:space:]]*$' || true)
-          if [ -n "$summary" ]; then
-            printf '%s — %s\n' "$tag" "$(echo "$summary" | sed 's/\.$//')" > tag-title.txt
-          else
-            printf '%s\n' "$tag" > tag-title.txt
+          # The section for this tag: its heading, up to the next one.
+          awk -v tag="$tag" '
+            $0 ~ "^## " tag "([ \t]|$)" { found = 1; print; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > section.md
+          if [ ! -s section.md ]; then
+            echo "::notice::No CHANGELOG.md section for $tag, so no release is published."
+            echo "Add a '## $tag' section and re-tag to publish one."
+            echo "PUBLISH=no" >> "$GITHUB_ENV"
+            exit 0
           fi
-          # The body is everything after that summary line.
-          awk 'f{print} /^[[:space:]]*$/{if(!f && NR>1) next} NR>1 && !f && NF {f=1}' \
-            tag-notes.md > tag-body.md
-          [ -s tag-body.md ] || tail -n +2 tag-notes.md > tag-body.md
+          # The heading is 'vX.Y.Z.N — summary', which is the release title
+          # already written the way a reader wants it.
+          head -1 section.md | sed 's/^##[[:space:]]*//' > tag-title.txt
+          # The body is the rest, with the leading blank lines and the bare
+          # date line dropped -- GitHub shows the date itself.
+          tail -n +2 section.md \
+            | sed '/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}[[:space:]]*$/d' \
+            | awk 'NF {f = 1} f' > tag-body.md
+          # Then the two links that make this findable: the whole changelog,
+          # and what actually changed since the release before this one.
+          prev=$(git tag -l 'v*' --sort=version:refname \
+            | grep -B1 -x "$tag" | head -1)
+          {
+            printf '\n---\n\n'
+            printf '[Full changelog](https://github.com/%s/blob/%s/CHANGELOG.md)' \
+              '${{ github.repository }}' "$tag"
+            if [ -n "$prev" ] && [ "$prev" != "$tag" ]; then
+              printf ' · [All commits since %s](https://github.com/%s/compare/%s...%s)' \
+                "$prev" '${{ github.repository }}' "$prev" "$tag"
+            fi
+            printf '\n'
+          } >> tag-body.md
           echo "RELEASE_TITLE=$(cat tag-title.txt)" >> "$GITHUB_ENV"
+          echo "PUBLISH=yes" >> "$GITHUB_ENV"
           echo "--- title ---"; cat tag-title.txt
-          echo "--- body ---";  head -20 tag-body.md
+          echo "--- body ---";  cat tag-body.md
 
       - name: Create Release
+        if: env.PUBLISH == 'yes'
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ env.RELEASE_TITLE }}
