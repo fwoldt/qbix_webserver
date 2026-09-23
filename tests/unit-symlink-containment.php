@@ -80,19 +80,38 @@ if (!$port) { fwrite(STDERR, "  FAIL - no free port\n"); exit(1); }
 
 $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($phar)
 	. ' --root=' . escapeshellarg($root) . ' --port=' . $port . ' --workers=2';
-$proc = proc_open($cmd . ' > ' . escapeshellarg($base . '/log') . ' 2>&1',
-	array(), $pipes);
+// No shell redirection: `cmd > log 2>&1` makes proc_open start a shell,
+// so the pid it reports is the shell's and terminating it leaves the
+// server running. Three processes leaked per run, and a day of runs
+// left thirty-nine of them on this machine. Descriptors do the same
+// redirection without a shell in between.
+$descriptors = array(
+	0 => array('file', '/dev/null', 'r'),
+	1 => array('file', $base . '/log', 'w'),
+	2 => array('file', $base . '/log', 'a'),
+);
+$proc = proc_open($cmd, $descriptors, $pipes);
 if (!is_resource($proc)) { fwrite(STDERR, "  FAIL - could not start\n"); exit(1); }
-register_shutdown_function(function () use ($proc, $base) {
+register_shutdown_function(function () use ($proc) {
 	$st = @proc_get_status($proc);
-	if ($st and $st['running']) {
+	if (!$st) { @proc_close($proc); return; }
+	$pid = (int) ($st['pid'] ?? 0);
+	if (!empty($st['running']) and $pid > 0) {
+		// Ask, wait, then insist. The server reaps its own workers on SIGTERM,
+		// so the parent going is enough -- but only if it actually goes.
 		@proc_terminate($proc, 15);
-		if (function_exists('posix_kill') and !empty($st['pid'])) {
-			@posix_kill($st['pid'], 15);
+		for ($i = 0; $i < 40; ++$i) {
+			$now = @proc_get_status($proc);
+			if (!$now or empty($now['running'])) break;
+			usleep(250000);
+		}
+		$now = @proc_get_status($proc);
+		if ($now and !empty($now['running'])) {
+			@proc_terminate($proc, 9);
+			if (function_exists('posix_kill')) @posix_kill($pid, 9);
 		}
 	}
 	@proc_close($proc);
-	@unlink($base . '/log');
 });
 
 $up = false;
