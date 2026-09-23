@@ -377,7 +377,17 @@ function qbix_data_path($relativePath) {
 // Check this BEFORE loading Q shim, because if neither the root
 // nor src/Q.php exist, the user just downloaded the binary and
 // ran it in an empty directory — show them how to get started.
-if (!$servingFromPhar) {
+//
+// --stop and --reload are exempt. They read a pid file and send a signal, and
+// never serve anything, so a document root is nothing to do with them. The
+// check ran first regardless, so a control command issued from a directory
+// without one printed the getting-started help and exited 0 without
+// signalling anything. Exit 0 is what made it invisible: the caller saw
+// success and believed the signal had been sent. That is why `velocity
+// graceful` appeared to reload a server it had never contacted, and why the
+// polite half of `velocity stop` did nothing and left the signal fallback to
+// do the work.
+if (!$servingFromPhar && empty($opts['signal'])) {
 	$resolvedWebDir = realpath($webDir);
 	if (!$resolvedWebDir || !is_dir($resolvedWebDir)) {
 		$target = $opts['root'] ?: './web';
