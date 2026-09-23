@@ -51,7 +51,6 @@ jobs:
             extensions: "pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
           - os: macos-latest
             name: macos-arm64
-            experimental: true
             spc_os: macos
             spc_arch: aarch64
             extensions: "pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
@@ -68,10 +67,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
-    # macOS arm64 builds, but the binary returns an empty body for every
-    # PHP script -- found once tests/clean-body.sh could actually run
-    # there. Until that is fixed the leg must not block the other three
-    # platforms from being released, and its artifacts are not published.
+    # A leg marked experimental may fail without holding the others back.
+    # macOS is no longer one: it builds and passes its tests. Windows still
+    # cannot fetch icu, and that should be visible rather than blocking.
     continue-on-error: ${{ matrix.experimental == true }}
 
     steps:
@@ -388,6 +386,8 @@ jobs:
             bin/qbixserver.phar
             artifacts/qbixserver-linux-x86_64/qbixserver-linux-x86_64
             artifacts/qbixserver-linux-aarch64/qbixserver-linux-aarch64
+            artifacts/qbixserver-macos-arm64/qbixserver-macos-arm64
+            artifacts/qbixserver-macos-arm64/php-macos-arm64
             artifacts/qbixserver-windows-x64/qbixserver-windows-x64.exe
             artifacts/qbixserver-windows-x64/qbixserver-windows-x64-gui.exe
             artifacts/qbixserver-windows-x64/qbix_fork.dll

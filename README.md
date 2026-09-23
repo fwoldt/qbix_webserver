@@ -188,20 +188,16 @@ nature rather than by neglect.
 |---|---|---|
 | **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) | shipped |
 | **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) | shipped |
-| **macOS** arm64 | — | builds; not yet verified |
+| **macOS** arm64 &middot; Apple Silicon | [`qbixserver-macos-arm64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-macos-arm64) | shipped |
 | **Windows** x64 | — | does not build |
 
-Two of the four are not shipped, and it is worth being plain about why rather
-than leaving a download that disappoints.
-
-**macOS** builds, and whether the binary works is an open question rather than
-a known failure. Its test could not run on the macOS runner for several
-releases -- it looked for a PHP that was not on PATH -- and when that was fixed
-it failed with an empty body on every request, which read exactly like a server
-returning nothing. It was not. The test harness starts the server with
-`setsid`, which is util-linux and absent on macOS, so the server was never
-started at all. That is fixed; until a run confirms the binary actually serves,
-it is not published.
+**macOS took a while to arrive, and was never actually broken.** Its test could
+not run on the macOS runner for several releases -- it looked for a PHP that was
+not on PATH -- and once that was fixed it failed with an empty body on every
+request, which reads exactly like a server returning nothing. It was not. The
+harness starts the server with `setsid`, which is util-linux and absent on
+macOS, so the server was never started at all. With that fixed the binary passes
+every assertion, and it ships from the next release on.
 
 **Windows** does not currently produce a binary. The static PHP build fails
 fetching the `icu` library that `intl` needs, and the packaging step then finds
