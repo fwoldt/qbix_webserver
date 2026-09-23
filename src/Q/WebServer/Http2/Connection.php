@@ -254,6 +254,85 @@ class Q_WebServer_Http2_Connection
 		$F = 'Q_WebServer_Http2_Frame';
 		$type = $frame['type'];
 		$stream = $frame['stream'];
+		$length = strlen($frame['payload']);
+
+		// ── What the RFC fixes exactly ──────────────────────────
+		//
+		// These are the checks it words as MUST, and they are here rather than
+		// in each case below because a peer that gets one of them wrong is not
+		// making a request we should try to understand. An unknown frame type
+		// is deliberately not among them: section 4.1 requires those to be
+		// discarded, since that is how the protocol is extended, and the
+		// switch below already ignores them.
+
+		// 4.2. A frame larger than the size we advertised. Accepting it means
+		// buffering whatever a peer felt like sending.
+		if ($length > $this->maxFrameSize
+			and $type !== $F::HEADERS and $type !== $F::CONTINUATION) {
+			$this->goaway($F::FRAME_SIZE_ERROR);
+			return false;
+		}
+
+		// 6.1. DATA always belongs to a stream. Stream 0 is the connection,
+		// which has no body.
+		if ($type === $F::DATA and $stream === 0) {
+			$this->goaway($F::PROTOCOL_ERROR);
+			return false;
+		}
+
+		// 6.5. SETTINGS carries whole six-octet entries and nothing else, and
+		// an acknowledgement has nothing to say.
+		if ($type === $F::SETTINGS) {
+			if ($frame['flags'] & $F::FLAG_ACK) {
+				if ($length !== 0) {
+					$this->goaway($F::FRAME_SIZE_ERROR);
+					return false;
+				}
+			} else if ($length % 6 !== 0) {
+				$this->goaway($F::FRAME_SIZE_ERROR);
+				return false;
+			}
+			if ($stream !== 0) {
+				$this->goaway($F::PROTOCOL_ERROR);
+				return false;
+			}
+		}
+
+		// 6.7. PING is eight octets, always, and belongs to the connection.
+		if ($type === $F::PING) {
+			if ($length !== 8) {
+				$this->goaway($F::FRAME_SIZE_ERROR);
+				return false;
+			}
+			if ($stream !== 0) {
+				$this->goaway($F::PROTOCOL_ERROR);
+				return false;
+			}
+		}
+
+		// 6.9. An increment of zero advances nothing, so a peer sending one is
+		// not doing what it believes it is doing.
+		if ($type === $F::WINDOW_UPDATE) {
+			if ($length !== 4) {
+				$this->goaway($F::FRAME_SIZE_ERROR);
+				return false;
+			}
+			$bits = unpack('N', $frame['payload']);
+			if ((reset($bits) & 0x7fffffff) === 0) {
+				$this->goaway($F::PROTOCOL_ERROR);
+				return false;
+			}
+		}
+
+		// 6.4 and 6.8: RST_STREAM is four octets, GOAWAY at least eight.
+		if ($type === $F::RST_STREAM and $length !== 4) {
+			$this->goaway($F::FRAME_SIZE_ERROR);
+			return false;
+		}
+		if ($type === $F::GOAWAY and $length < 8) {
+			$this->goaway($F::FRAME_SIZE_ERROR);
+			return false;
+		}
 
 		switch ($type) {
 
