@@ -110,8 +110,18 @@ echo
 echo "  via $VIA"
 echo
 
-( setsid "${RUN[@]}" --root="$ROOT" --port=$PORT --workers=2 \
-    >"$TMP/server.log" 2>&1 </dev/null & )
+# setsid is util-linux and does not exist on macOS. Without this fallback the
+# server was never started there at all, and every assertion failed with an
+# empty body -- which read exactly like a binary that returns nothing, and was
+# reported as one for several releases. The detach is only so the trap can
+# reap it; a subshell background job achieves the same where setsid is absent.
+if command -v setsid >/dev/null 2>&1; then
+    ( setsid "${RUN[@]}" --root="$ROOT" --port=$PORT --workers=2 \
+        >"$TMP/server.log" 2>&1 </dev/null & )
+else
+    ( "${RUN[@]}" --root="$ROOT" --port=$PORT --workers=2 \
+        >"$TMP/server.log" 2>&1 </dev/null & )
+fi
 
 for _ in $(seq 1 25); do
     sleep 0.4

@@ -188,25 +188,29 @@ nature rather than by neglect.
 |---|---|---|
 | **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) | shipped |
 | **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) | shipped |
-| **macOS** arm64 | — | builds, does not work |
+| **macOS** arm64 | — | builds; not yet verified |
 | **Windows** x64 | — | does not build |
 
 Two of the four are not shipped, and it is worth being plain about why rather
 than leaving a download that disappoints.
 
-**macOS** builds a binary that answers every PHP request with an empty body.
-This went unnoticed for several releases because the test that would have
-caught it could not run on the macOS runner at all; the moment it could, it
-failed. Publishing a server that returns nothing is worse than publishing no
-macOS build.
+**macOS** builds, and whether the binary works is an open question rather than
+a known failure. Its test could not run on the macOS runner for several
+releases -- it looked for a PHP that was not on PATH -- and when that was fixed
+it failed with an empty body on every request, which read exactly like a server
+returning nothing. It was not. The test harness starts the server with
+`setsid`, which is util-linux and absent on macOS, so the server was never
+started at all. That is fixed; until a run confirms the binary actually serves,
+it is not published.
 
 **Windows** does not currently produce a binary. The static PHP build fails
 fetching the `icu` library that `intl` needs, and the packaging step then finds
-no `php.exe` and skips. Both steps were marked to continue on error, so the job
-reported success and shipped only a stray `.dll` -- which is why this went
-unnoticed for as long as it did.
+no `php.exe` and skips. Six steps on that path were marked to continue on
+error, among them the PHP build and the smoke test, so the job reported success
+and shipped only a stray `.dll`. The job now checks that a binary exists before
+uploading anything, which is the check that would have caught it at the time.
 
-Until both are fixed, **macOS and Windows users should run the phar**, which
+Until both are settled, **macOS and Windows users should run the phar**, which
 works on all four platforms. It needs a PHP 8.1+ interpreter, which on those
 two is the easier thing to obtain anyway.
 
