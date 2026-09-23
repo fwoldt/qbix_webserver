@@ -207,6 +207,19 @@ jobs:
             $exts = "${{ matrix.extensions }}"
             php spc-src\bin\spc download --for-extensions="$exts" --with-php=$phpVer
           }
+          # One failed fetch should not cost the whole platform. v0.0.4.23 lost
+          # its Windows binary to a single curl exit 22 on the icu archive,
+          # which is reachable and was simply unlucky; the step below then
+          # found no php.exe and skipped, and the job reported success.
+          for ($try = 1; $try -le 3 -and $LASTEXITCODE -ne 0; $try++) {
+            Write-Host "download failed, retry $try of 3 in 15s"
+            Start-Sleep -Seconds 15
+            php spc-src\bin\spc download --for-extensions="$exts" --with-php=$phpVer
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::spc download failed after 3 retries"
+            exit 1
+          }
           # Store which extensions we got
           Set-Content -Path "win_exts.txt" -Value $exts
 
