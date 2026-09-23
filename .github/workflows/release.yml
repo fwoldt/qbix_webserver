@@ -411,9 +411,20 @@ jobs:
             echo "No annotation on $tag." > tag-notes.md
             cat RELEASE_NOTES.md >> tag-notes.md
           fi
-          # The first line is the summary; the rest is the body.
-          head -1 tag-notes.md > tag-title.txt
-          tail -n +2 tag-notes.md > tag-body.md
+          # The first line of an annotation is the version, and the summary
+          # is the first non-empty line after it. Taking line one gave titles
+          # that only repeated the tag, which is the thing the reader can
+          # already see.
+          summary=$(tail -n +2 tag-notes.md | grep -m1 -v '^[[:space:]]*$' || true)
+          if [ -n "$summary" ]; then
+            printf '%s — %s\n' "$tag" "$(echo "$summary" | sed 's/\.$//')" > tag-title.txt
+          else
+            printf '%s\n' "$tag" > tag-title.txt
+          fi
+          # The body is everything after that summary line.
+          awk 'f{print} /^[[:space:]]*$/{if(!f && NR>1) next} NR>1 && !f && NF {f=1}' \
+            tag-notes.md > tag-body.md
+          [ -s tag-body.md ] || tail -n +2 tag-notes.md > tag-body.md
           echo "RELEASE_TITLE=$(cat tag-title.txt)" >> "$GITHUB_ENV"
           echo "--- title ---"; cat tag-title.txt
           echo "--- body ---";  head -20 tag-body.md
