@@ -45,6 +45,28 @@ class Q_WebServer_Pool
 	protected static $inputWrapperRegistered = false;
 
 	/**
+	 * Whether workers persist between requests, rather than one per request.
+	 *
+	 * Declared, along with $maxRequests below, because PHP 8.2 deprecates
+	 * creating a property by assigning to it. The constructor assigned both,
+	 * so every start emitted two deprecation notices -- harmless where they
+	 * are only displayed, and fatal where the installation has chosen to treat
+	 * a deprecation as an error, which is what stopped the server on FreeBSD
+	 * after the banner had already been printed.
+	 *
+	 * @property $octane
+	 * @type {boolean}
+	 */
+	protected $octane = true;
+
+	/**
+	 * How many requests a persistent worker serves before retiring itself.
+	 * @property $maxRequests
+	 * @type {integer}
+	 */
+	protected $maxRequests = 1000;
+
+	/**
 	 * @method __construct
 	 * @param {integer} [$size=4]
 	 */
