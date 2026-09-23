@@ -67,6 +67,59 @@ class Q_WebServer
 	}
 
 	/**
+	 * Write every byte to a non-blocking stream without blocking the loop.
+	 *
+	 * writeAll() above switches the stream to blocking, which is right for a
+	 * process that owns one connection and has nothing else to do until the
+	 * write finishes. It is wrong wherever a single process is multiplexing
+	 * work for many peers: the parent dispatching to a pool of workers, or a
+	 * broadcast walking every WebSocket client. Blocking there lets one
+	 * unresponsive peer hold up everybody else.
+	 *
+	 * This waits for writability instead, with a deadline, and reports failure
+	 * rather than stalling. The distinction matters because the data at these
+	 * call sites is length-prefixed: a short write is not partial delivery, it
+	 * is corruption, since the reader consumes the length we declared and then
+	 * finds the next record starting mid-payload.
+	 *
+	 * @method writeFully
+	 * @static
+	 * @param {resource} $stream a non-blocking stream
+	 * @param {string} $data
+	 * @param {double} [$timeout=2.0] seconds to wait in total for buffer space
+	 * @return {boolean} false if the stream died or stayed full past $timeout
+	 */
+	static function writeFully($stream, $data, $timeout = 2.0)
+	{
+		$length = strlen($data);
+		if ($length === 0) return true;
+		if (!is_resource($stream)) return false;
+
+		$written = 0;
+		$deadline = microtime(true) + $timeout;
+		while ($written < $length) {
+			$n = @fwrite($stream, substr($data, $written));
+			if ($n === false) return false;
+			if ($n === 0) {
+				// The buffer is full. Wait for the reader to drain it.
+				$remaining = $deadline - microtime(true);
+				if ($remaining <= 0) return false;
+				$read = null;
+				$except = null;
+				$write = array($stream);
+				$sec = (int) $remaining;
+				$usec = (int) (($remaining - $sec) * 1000000);
+				if (@stream_select($read, $write, $except, $sec, $usec) <= 0) {
+					return false;
+				}
+				continue;
+			}
+			$written += $n;
+		}
+		return true;
+	}
+
+	/**
 	 * Search paths for app/user files.
 	 *
 	 * Q::$paths is declared by the webserver's STANDALONE shim (src/Q.php), not

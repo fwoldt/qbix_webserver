@@ -742,8 +742,16 @@ class Q_WebServer_Pool
 			));
 		}
 
-		$written = @fwrite($this->workers[$index]['socket'], pack('N', strlen($msg)) . $msg);
-		if ($written === false || $written === 0) {
+		// The request is length-prefixed and the parent's end of the socket is
+		// non-blocking, so fwrite() may place only part of it. Testing for
+		// false or zero caught a worker that had died but counted a short
+		// write as a success: the worker then read the length we declared,
+		// consumed fewer bytes than that, and every request it was sent
+		// afterwards began mid-message. writeFully() completes the record or
+		// reports that it could not, and does not block the parent -- which is
+		// dispatching for every other worker and client at the same time.
+		$packet = pack('N', strlen($msg)) . $msg;
+		if (!Q_WebServer::writeFully($this->workers[$index]['socket'], $packet)) {
 			// Worker died before receiving the request — recycle and re-queue.
 			// The responder goes back on the queue too: without it a request
 			// that arrived over HTTP/2 would be answered as HTTP/1.1, written

@@ -252,32 +252,7 @@ class Q_WebSocket
 	 */
 	static function writeFully($socket, $data, $timeout = 2.0)
 	{
-		$length = strlen($data);
-		if ($length === 0) return true;
-		if (!is_resource($socket)) return false;
-
-		$written = 0;
-		$deadline = microtime(true) + $timeout;
-		while ($written < $length) {
-			$n = @fwrite($socket, substr($data, $written));
-			if ($n === false) return false;
-			if ($n === 0) {
-				// Socket buffer is full. Wait for the peer to drain it.
-				$remaining = $deadline - microtime(true);
-				if ($remaining <= 0) return false;
-				$read = null;
-				$except = null;
-				$write = array($socket);
-				$sec = (int) $remaining;
-				$usec = (int) (($remaining - $sec) * 1000000);
-				if (@stream_select($read, $write, $except, $sec, $usec) <= 0) {
-					return false;
-				}
-				continue;
-			}
-			$written += $n;
-		}
-		return true;
+		return Q_WebServer::writeFully($socket, $data, $timeout);
 	}
 
 	static function encodeAndSend($socket, $opcode, $payload)

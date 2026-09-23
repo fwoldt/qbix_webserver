@@ -37,11 +37,16 @@ function check($what, $got, $want)
 		var_export($got, true), var_export($want, true));
 }
 
-// Q_WebSocket pulls in the event loop and the worker machinery, so the method
+// These classes pull in the event loop and the worker machinery, so the method
 // under test is exercised through a copy of its source taken at run time.
 $src = file_get_contents(__DIR__ . '/../src/Q/WebSocket.php');
-if (!preg_match('/\n\tstatic function writeFully\(.*?\n\t\}\n/s', $src, $m)) {
-	fwrite(STDERR, "  FAIL - writeFully() not found in src/Q/WebSocket.php\n");
+$wsSrc = file_get_contents(__DIR__ . '/../src/Q/WebServer.php');
+$poolSrc = file_get_contents(__DIR__ . '/../src/Q/WebServer/Pool.php');
+
+// The implementation lives on Q_WebServer, beside writeAll(), because three
+// classes need it and a copy in each is how a fix reaches two of them.
+if (!preg_match('/\n\tstatic function writeFully\(.*?\n\t\}\n/s', $wsSrc, $m)) {
+	fwrite(STDERR, "  FAIL - writeFully() not found in src/Q/WebServer.php\n");
 	exit(1);
 }
 eval('class T { ' . $m[0] . ' }');
@@ -182,9 +187,26 @@ check('no worker pipe is still written with a bare fwrite', $rawPipeWrites, 0);
 $pipeWrites = preg_match_all('/self::writeFully\([^;]*\[\x27pipe\x27\]/', $src);
 check('every worker pipe write goes through writeFully', $pipeWrites >= 4, true);
 
+check('the WebSocket helper delegates rather than keeping a second copy',
+	(bool) preg_match('/static function writeFully\([^)]*\)\s*\{\s*return Q_WebServer::writeFully\(/s', $src),
+	true);
+
+// The worker pool sends each request as pack('N', len) . msg over a socket
+// whose parent end is non-blocking, so it has exactly the same exposure. Its
+// old check caught a dead worker but treated a short write as a success, which
+// is the case that desynchronises the pipe for every later request.
+check('the pool dispatches requests through writeFully',
+	(bool) preg_match('/Q_WebServer::writeFully\(\$this->workers\[\$index\]\[\x27socket\x27\], \$packet\)/', $poolSrc),
+	true);
+
+check('the pool no longer writes a request with a bare fwrite',
+	preg_match_all('/@fwrite\(\$this->workers\[\$index\]\[\x27socket\x27\]/', $poolSrc), 0);
+
+check('the pool no longer treats a short write as success',
+	preg_match_all('/\$written === false \|\| \$written === 0/', $poolSrc), 0);
+
 // The chunked-streaming path in the web server has the same shape: it states a
 // length in hex and then supplies that many bytes.
-$wsSrc = file_get_contents(__DIR__ . '/../src/Q/WebServer.php');
 check('chunked streaming writes its length prefix through writeAll',
 	(bool) preg_match('/Q_WebServer::writeAll\(\$_streamingClient,\s*\n?\s*dechex\(strlen\(\$chunk\)\)/', $wsSrc),
 	true);
