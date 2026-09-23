@@ -197,10 +197,15 @@ jobs:
         if: matrix.os == 'dragonflybsd'
         with:
           usesh: true
+          # No sudo here: vmactions runs prepare as root, unlike
+          # cross-platform-actions above, which runs as a user and
+          # needs it. The two privilege models are not the same, and
+          # pkg without the privileges it needs says only
+          # "Insufficient privileges" without saying whose.
           prepare: |
-            sudo pkg install -y php83 curl
+            pkg install -y php83 curl
             for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
-              sudo pkg install -y php83-$e || true
+              pkg install -y php83-$e || true
             done
           run: sh tests/phar-serves.sh bin/qbixserver.phar
 
