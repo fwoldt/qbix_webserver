@@ -83,22 +83,36 @@ cd webserver
 php qbixserver.php
 ```
 
-Or grab a self-contained binary (PHP bundled, nothing to install):
+### Download a binary
+
+Self-contained: PHP is inside the binary, so there is nothing to install and
+no version of PHP on the machine to conflict with.
 
 ```bash
-# Linux
-curl -LO https://github.com/Qbix/webserver/releases/latest/download/qbixserver-linux-x86_64
-chmod +x qbixserver-linux-x86_64
-./qbixserver-linux-x86_64
+# Linux x86_64
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64
+chmod +x qbixserver-linux-x86_64 && ./qbixserver-linux-x86_64
 
-# macOS (Apple Silicon)
-curl -LO https://github.com/Qbix/webserver/releases/latest/download/qbixserver-macos-arm64
-chmod +x qbixserver-macos-arm64
-./qbixserver-macos-arm64
+# Linux aarch64 -- also what a Raspberry Pi 4 or 5 runs
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64
+chmod +x qbixserver-linux-aarch64 && ./qbixserver-linux-aarch64
 
-# Windows
-curl -LO https://github.com/Qbix/webserver/releases/latest/download/qbixserver-windows-x64.exe
+# Windows x64
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-windows-x64.exe
 qbixserver-windows-x64.exe
+```
+
+[**All downloads &rarr;**](https://github.com/se7enxweb/qbix-webserver/releases/latest)
+
+### Or run the phar, anywhere PHP runs
+
+The binaries exist for convenience, not necessity. `qbixserver.phar` is the
+same server and needs nothing but a PHP 8.1 or later interpreter, which is why
+it runs on far more than the handful of platforms we can build binaries for.
+
+```bash
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver.phar
+php qbixserver.phar --root=./web
 ```
 
 ## Use With Your Existing Codebase
@@ -160,16 +174,86 @@ Most apps work immediately. A few things to be aware of:
 
 ## Platform Support
 
-| Platform | Workers | COW | Mode |
+There are two ways to run Exponential Velocity, and they reach different
+numbers of platforms.
+
+### Binaries — nothing to install
+
+A static build with PHP inside it. We ship these for the targets the build
+toolchain supports; PHP is C with a great many statically linked dependencies
+and does not cross-compile the way a Go program does, so this list is short by
+nature rather than by neglect.
+
+| Platform | Download |
+|---|---|
+| **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) |
+| **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) |
+| **Windows** x64 | [`qbixserver-windows-x64.exe`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-windows-x64.exe) |
+| **Windows** x64, no console | [`qbixserver-windows-x64-gui.exe`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-windows-x64-gui.exe) |
+| **macOS** arm64 | *not published — see below* |
+
+**macOS is currently not shipped.** The binary builds, but it answers every PHP
+request with an empty body. That went unnoticed for several releases because
+the test which would have caught it could not run on the macOS runner at all;
+once it could, it failed immediately. Publishing a server that returns nothing
+is worse than publishing no macOS build, so the artifact is withheld until it
+is fixed. macOS users should run the phar, which works.
+
+### The phar — anywhere PHP 8.1+ runs
+
+[`qbixserver.phar`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver.phar)
+is the whole server in one file. It has no architecture and no libc of its own,
+so the only question is whether the platform has a PHP, and a great many do.
+
+The [Platforms workflow](../../actions/workflows/platforms.yml) boots these and
+watches a page come back, so the list below is a record of something observed
+rather than an assumption. Its current state is the authority; a badge cannot
+be out of date the way a hand-written tick can.
+
+[![Platforms](../../actions/workflows/platforms.yml/badge.svg)](../../actions/workflows/platforms.yml)
+
+| | Platforms exercised |
+|---|---|
+| **BSD** | FreeBSD 14, OpenBSD 7.6, NetBSD 10, DragonFly BSD |
+| **illumos** | OmniOS |
+| **Linux, glibc** | x86_64, aarch64, armv5, armv7, i386, ppc64le, riscv64, s390x |
+| **Linux, musl** | Alpine on x86_64, aarch64, i386 |
+
+`s390x` is there because it is big-endian, and `armv7` because it is what a
+32-bit Raspberry Pi runs. Alpine is there because musl is a different C library
+rather than a different build of the same one, and assumptions about DNS,
+threads and locales break there first.
+
+**Haiku** is wanted and not yet done. It carries PHP in HaikuPorts, so there is
+every reason to think the phar runs, but nothing has watched it happen and the
+job says so rather than passing vacuously.
+
+**What cannot work:** anything without a PHP 8.1+ interpreter. That rules out
+the 8-bit machines regardless of how the brands are doing — a Commodore 64 or
+an Apple II is a 6502 with 64KB of memory, and PHP needs an MMU, a 32- or
+64-bit CPU and tens of megabytes. The nearest thing in that lineage with any
+path at all is the Amiga family (AmigaOS 4, MorphOS, AROS), which are real
+multitasking systems, and even there someone has to produce a current PHP first.
+
+### How workers behave, per platform
+
+| Platform | Workers | Copy-on-write | Mode |
 |---|---|---|---|
-| **Linux** x86_64, aarch64 | pcntl_fork | Yes — 120KB per worker | Persistent or fork-per-request |
-| **macOS** Intel, Apple Silicon | pcntl_fork | Yes | Persistent or fork-per-request |
-| **FreeBSD** | pcntl_fork | Yes | Persistent or fork-per-request |
-| **Windows** x64 | php-cgi subprocess | No | Persistent workers with source-transform shimming |
+| **Linux** x86_64, aarch64 | `pcntl_fork` | Yes — 120KB per worker | Persistent or fork-per-request |
+| **macOS** Intel, Apple Silicon | `pcntl_fork` | Yes | Persistent or fork-per-request |
+| **BSD**, **illumos** | `pcntl_fork` | Yes | Persistent or fork-per-request |
+| **Windows** x64 | `php-cgi` subprocess | No | Persistent workers, source-transform shimming |
 
-On Linux and macOS, the server runs thousands of COW-forked workers at ~120KB each. On Windows, pcntl doesn't exist, so the server spawns `php-cgi` subprocesses for process isolation. Workers are still persistent and shimmed — the same code runs, you just don't get the COW memory savings. The 28-function source transform still clears state between requests.
+On Linux, the BSDs and macOS the server runs COW-forked workers at ~120KB each.
+Windows has no `pcntl`, so it spawns `php-cgi` subprocesses for isolation:
+workers are still persistent and still shimmed, you simply do not get the COW
+memory saving. The 28-function source transform still clears state between
+requests.
 
-**PHP 8.6+ (epoll/kqueue):** The server auto-detects PHP 8.6's native `Io\Poll` API and uses `epoll` on Linux or `kqueue` on macOS for event notification — no PECL extensions needed. On older PHP versions, the server uses `stream_select` (which works fine, just O(n) per tick instead of O(1)). Revolt is also supported if installed.
+**PHP 8.6+ (epoll/kqueue):** the server detects PHP 8.6's native `Io\Poll` API
+and uses `epoll` on Linux or `kqueue` on the BSDs and macOS, with no PECL
+extensions. On older PHP it uses `stream_select`, which works fine — it is just
+O(n) per tick instead of O(1). Revolt is used if installed.
 
 ## Examples
 

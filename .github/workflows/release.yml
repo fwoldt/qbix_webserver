@@ -351,6 +351,7 @@ jobs:
           generate_release_notes: false
           fail_on_unmatched_files: false
           files: |
+            bin/qbixserver.phar
             artifacts/qbixserver-linux-x86_64/qbixserver-linux-x86_64
             artifacts/qbixserver-linux-aarch64/qbixserver-linux-aarch64
             artifacts/qbixserver-windows-x64/qbixserver-windows-x64.exe
