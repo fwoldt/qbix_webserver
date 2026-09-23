@@ -4887,6 +4887,70 @@ HTML;
 		return $backlog;
 	}
 
+	/**
+	 * Close every descriptor a forked worker has no business holding.
+	 *
+	 * A child of fork() inherits the parent's whole descriptor table. The
+	 * worker needs exactly one of them -- its half of the socket pair the pool
+	 * created for it -- and inherits, in addition: the listening socket, the
+	 * TLS listener, the Unix socket, and every client connection the parent had
+	 * open at that moment, including other people's requests in flight.
+	 *
+	 * That is an isolation failure on its own, with no multi-tenancy involved.
+	 * A worker serving one request holds the socket of another visitor's
+	 * request and can read from it. It is also a correctness problem: a
+	 * listening socket held open by sixteen workers is not closed when the
+	 * parent closes it, so a restart can find the port still bound, and a
+	 * client socket the parent has finished with is not released until every
+	 * worker that inherited it exits.
+	 *
+	 * Workers never accept: stream_socket_accept() appears only in this class,
+	 * and the pool dispatches over its socket pair. So the listeners are safe
+	 * to close here and must be.
+	 *
+	 * Called from the child branch of Pool::forkWorker(), before the worker
+	 * runs any application code.
+	 *
+	 * @method closeInheritedDescriptors
+	 * @static
+	 * @return {integer} how many were closed, for the test to assert on
+	 */
+	static function closeInheritedDescriptors()
+	{
+		$closed = 0;
+
+		foreach (array('socket', 'tlsSocket', 'udsSocket') as $name) {
+			if (isset(self::$$name) and is_resource(self::$$name)) {
+				@fclose(self::$$name);
+				$closed++;
+			}
+			self::$$name = null;
+		}
+
+		// Client connections the parent had open at the moment of the fork.
+		// Another visitor's request is not this worker's to hold, let alone
+		// to read.
+		foreach (self::$clients as $key => $client) {
+			if (is_resource($client)) {
+				@fclose($client);
+				$closed++;
+			}
+		}
+		self::$clients = array();
+		self::$buffers = array();
+
+		// HTTP/2 connections wrap a client socket of their own.
+		foreach (self::$http2 as $key => $conn) {
+			if (is_object($conn) and isset($conn->socket) and is_resource($conn->socket)) {
+				@fclose($conn->socket);
+				$closed++;
+			}
+		}
+		self::$http2 = array();
+
+		return $closed;
+	}
+
 	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array())
 	{
 		static $reasons = array(

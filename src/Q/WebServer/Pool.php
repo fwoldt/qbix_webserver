@@ -125,7 +125,38 @@ class Q_WebServer_Pool
 
 		if ($pid === 0) {
 			// ── CHILD ──
+			//
+			// fork() hands the child the parent's entire descriptor table. The
+			// worker needs one descriptor -- its half of this pair -- and this
+			// used to close exactly one: the other half. Everything else came
+			// with it.
+			//
+			// What it inherited: the listening socket, the TLS listener, the
+			// Unix socket, every client connection the parent had open at that
+			// instant, and the parent's end of every *other* worker's socket
+			// pair. A worker could therefore read another visitor's request,
+			// and another worker's replies, on an installation serving one
+			// site with one tenant. It also kept the listening socket alive
+			// after the parent closed it.
+			//
+			// Order matters only in that all of it must happen before the
+			// worker runs any application code.
 			fclose($pair[0]);
+
+			// The parent's end of every worker forked before this one.
+			foreach ($this->workers as $other) {
+				if (isset($other['socket']) and is_resource($other['socket'])) {
+					@fclose($other['socket']);
+				}
+			}
+			$this->workers = array();
+			$this->watchers = array();
+
+			// Listeners and client connections live on the server, not here.
+			if (method_exists('Q_WebServer', 'closeInheritedDescriptors')) {
+				Q_WebServer::closeInheritedDescriptors();
+			}
+
 			self::childRun($pair[1], $this->octane, $this->maxRequests);
 			exit(0);
 		}
