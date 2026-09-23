@@ -38,14 +38,31 @@ if (!defined('QBIX_SERVER_BUILD')) {
 	$__sha = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
 		. ' rev-parse --short HEAD 2>/dev/null'));
 	if ($__sha !== '') {
-		$__dirty = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
-			. ' status --porcelain 2>/dev/null'));
-		if ($__dirty !== '') $__sha .= '-dirty';
+		$__dirtyOut = (string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+			. ' status --porcelain 2>/dev/null');
+		foreach (explode("\n", $__dirtyOut) as $__l) {
+			$__l = trim($__l);
+			if ($__l === '') continue;
+			$__path = preg_replace('/^\S+\s+/', '', $__l);
+			if ($__path === 'bin/qbixserver.phar' || $__path === 'qbix-build.php') continue;
+			$__sha .= '-dirty'; break;
+		}
 	}
 	define('QBIX_SERVER_BUILD', $__sha !== '' ? $__sha : 'source');
 	unset($__sha);
 }
 if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', gmdate('Y-m-d H:i:s') . ' UTC');
+
+// Our shipped version -- the fork's release line, not upstream's 1.5.0,
+// which stays defined above as the base this is built on. Stamped at build
+// time; from source, ask git for the nearest release tag; else fall back to
+// the upstream number so the label is never empty.
+if (!defined('QBIX_SHIP_VERSION')) {
+	$__ship = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+		. " describe --tags --abbrev=0 --match 'v0.0.*' 2>/dev/null"));
+	define('QBIX_SHIP_VERSION', $__ship !== '' ? $__ship : ('v' . QBIX_SERVER_VERSION));
+	unset($__ship);
+}
 
 /**
  * Version and build as one string, e.g. "1.5.0+4002cee". The build is semver
@@ -55,7 +72,8 @@ if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', gmdate(
 if (!function_exists('qbix_version_label')) {
 	function qbix_version_label($withDate = false)
 	{
-		$v = QBIX_SERVER_VERSION;
+		// Our shipped version leads; it already carries its own leading "v".
+		$v = defined('QBIX_SHIP_VERSION') ? QBIX_SHIP_VERSION : ('v' . QBIX_SERVER_VERSION);
 		$b = defined('QBIX_SERVER_BUILD') ? QBIX_SERVER_BUILD : '';
 		if ($b !== '' && $b !== 'source') $v .= '+' . $b;
 		if ($withDate && defined('QBIX_SERVER_BUILD_DATE') && QBIX_SERVER_BUILD_DATE !== '') {
@@ -98,7 +116,7 @@ foreach ($argv as $i => $arg) {
 	if ($i === 0) continue;
 	if ($arg === '--help' || $arg === '-h') {
 		$me = basename($argv[0]);
-		echo "Qbix Server v" . qbix_version_label(true) . "\n\n";
+		echo "Qbix Server " . qbix_version_label(true) . "\n\n";
 		echo "Usage: $me [options]\n\n";
 		echo "Options:\n";
 		echo "  --root=DIR       Document root (default: ./web)\n";
@@ -136,7 +154,7 @@ foreach ($argv as $i => $arg) {
 		exit(0);
 	}
 	if ($arg === '--version' || $arg === '-v') {
-		echo "Qbix Server v" . qbix_version_label(true) . "\n";
+		echo "Qbix Server " . qbix_version_label(true) . "\n";
 		exit(0);
 	}
 	if ($arg === '-t') {
@@ -968,7 +986,7 @@ if (!empty($opts['signal'])) {
 // ── Config test (-t) ────────────────────────────────
 
 if (!empty($opts['test'])) {
-	echo "Qbix Server v" . qbix_version_label(true) . "\n";
+	echo "Qbix Server " . qbix_version_label(true) . "\n";
 	echo "Config: OK\n";
 	echo "  Root:       $webDir\n";
 	echo "  Host:       {$opts['host']}\n";
@@ -1343,7 +1361,7 @@ if ($opts['workers'] > 0) {
 }
 
 fwrite(STDERR, "  ┌" . str_repeat('─', $W) . "┐\n");
-fwrite(STDERR, "  │" . str_pad("  Qbix Server v" . qbix_version_label(), $W) . "│\n");
+fwrite(STDERR, "  │" . str_pad("  Qbix Server " . qbix_version_label(), $W) . "│\n");
 fwrite(STDERR, "  ├" . str_repeat('─', $W) . "┤\n");
 $httpLine = "  http://{$opts['host']}:{$opts['port']}";
 fwrite(STDERR, "  │" . str_pad($httpLine, $W) . "│\n");

@@ -64,6 +64,12 @@ edited down to what a reader actually needs.
 
 ### Added
 
+- The version shown is now the fork's own -- `v0.0.4.26`, the nearest release
+  tag on this branch -- not upstream's `1.5.0`, which stays defined as the
+  engine this is built on and is named in the footer ("powered by the Qbix
+  engine"). The ship version is stamped from `git describe` at build time, so
+  reading it costs nothing at runtime. The dashboard footer also carries a
+  "Maintained by 7x" line.
 - The served views now carry a footer, and the version display carries the
   build: the short commit and the datetime the phar was built, e.g.
   `Exponential Velocity v1.5.0+a34150c (2026-09-23 17:16 UTC)`. `build-phar.php`

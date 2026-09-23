@@ -56,14 +56,29 @@ if (is_dir($webDir)) {
 // bundled. From source the server falls back to asking git directly.
 $sha = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
 	. ' rev-parse --short HEAD 2>/dev/null'));
-$dirty = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
-	. ' status --porcelain 2>/dev/null'));
+$dirtyOut = (string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+	. ' status --porcelain 2>/dev/null');
+$dirty = '';
+foreach (explode("\n", $dirtyOut) as $__l) {
+	$__l = trim($__l);
+	if ($__l === '') continue;
+	// The build outputs change every build by design; they are not
+	// uncommitted source work, so they do not make the tree "dirty".
+	$__path = preg_replace('/^\S+\s+/', '', $__l);
+	if ($__path === 'bin/qbixserver.phar' || $__path === 'qbix-build.php') continue;
+	$dirty = $__l; break;
+}
 if ($sha === '') $sha = 'unknown';
 if ($dirty !== '') $sha .= '-dirty';
 $buildDate = gmdate('Y-m-d H:i:s') . ' UTC';
+// Our shipped version -- the fork's release line (v0.0.*), not upstream's.
+// The nearest release tag reachable from this commit; empty if none.
+$shipVer = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+	. " describe --tags --abbrev=0 --match 'v0.0.*' 2>/dev/null"));
 $buildPhp = "<?php\n"
 	. "if (!defined('QBIX_SERVER_BUILD')) define('QBIX_SERVER_BUILD', " . var_export($sha, true) . ");\n"
-	. "if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', " . var_export($buildDate, true) . ");\n";
+	. "if (!defined('QBIX_SERVER_BUILD_DATE')) define('QBIX_SERVER_BUILD_DATE', " . var_export($buildDate, true) . ");\n"
+	. ($shipVer !== '' ? "if (!defined('QBIX_SHIP_VERSION')) define('QBIX_SHIP_VERSION', " . var_export($shipVer, true) . ");\n" : '');
 $phar->addFromString('qbix-build.php', $buildPhp);
 // Also on disk beside qbixserver.php: the server is often run as a plain
 // file (a Composer vendor copy), not through the phar stub, and then the
