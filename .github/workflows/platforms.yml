@@ -112,7 +112,12 @@ jobs:
           - linux/arm/v7     # Raspberry Pi 2 and 3 in 32-bit mode
           - linux/arm64      # Raspberry Pi 4 and 5, also a shipped binary
           - linux/ppc64le    # POWER
-          - linux/riscv64    # RISC-V, and the newest architecture here
+          # RISC-V, the newest architecture here. PCRE's JIT segfaults under
+          # qemu-riscv64 -- a pure-regex unit test dumps core with it on and
+          # passes with it off -- so the container turns it off above. That is
+          # an emulation fault rather than anything about RISC-V or about this
+          # server, and real hardware is untested either way.
+          - linux/riscv64
           - linux/s390x      # IBM Z, and big-endian, which finds real bugs
 
     steps:
@@ -128,6 +133,8 @@ jobs:
             sh -c 'apt-get update -qq >/dev/null 2>&1; \
                    apt-get install -y -qq curl >/dev/null 2>&1; \
                    docker-php-ext-install pcntl >/dev/null 2>&1; \
+                   [ "$(uname -m)" = riscv64 ] \
+                     && echo pcre.jit=0 > /usr/local/etc/php/conf.d/99-no-pcre-jit.ini; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
 
   # ── musl, rather than glibc ─────────────────────────────────
