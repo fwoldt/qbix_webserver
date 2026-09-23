@@ -54,6 +54,10 @@ jobs:
             # Every extension is its own package here. tokenizer is not
             # optional: without it the source transform cannot run and the
             # server dies at startup on token_get_all().
+            #
+            # No sudo: these VMs run as root and do not carry it. The form
+            # this replaced was `sudo X || X`, which looked like it wanted
+            # privileges and in fact only ever worked through the fallback.
             install: |
               pkg install -y php83 curl
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
