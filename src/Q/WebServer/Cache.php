@@ -307,6 +307,7 @@ class Q_WebServer_Cache
 		if ($expires === 0 or $expires > time()) {
 			self::$hits++;
 			$entry['headers']['X-Cache'] = 'HIT';
+			$entry['headers']['Age'] = self::age($entry);
 			if (!$fromApcu and self::$apcuEnabled
 			and strlen($entry['body']) <= self::$apcuMaxSize) {
 				apcu_store('qcache:' . $key, $entry, self::ttlRemaining($entry));
@@ -324,9 +325,7 @@ class Q_WebServer_Cache
 				self::$hits++;
 				self::$stale++;
 				$entry['headers']['X-Cache'] = 'STALE';
-				$entry['headers']['Age'] = (string) max(
-					0, time() - (int) (isset($entry['stored']) ? $entry['stored'] : 0)
-				);
+				$entry['headers']['Age'] = self::age($entry);
 				return $entry;
 			}
 
@@ -679,6 +678,33 @@ class Q_WebServer_Cache
 	// ── Internals ────────────────────────────────────────
 
 	/**
+	 * How old a stored response is, in seconds.
+	 *
+	 * RFC 9111 requires a cache to generate an Age field whenever it reuses a
+	 * stored response, and the requirement is not a formality. Age is how a
+	 * client, and every cache between here and it, works out how much of the
+	 * response's freshness lifetime is left. Without it a response already 290
+	 * seconds into a 300 second lifetime looks newly generated, so the next
+	 * cache downstream holds it for a further 300 -- and the lifetime
+	 * multiplies at every hop rather than running out.
+	 *
+	 * Measured from when the entry was stored, which for this cache is when the
+	 * application produced it, so it is the age of the representation rather
+	 * than of the file on disk.
+	 *
+	 * @method age
+	 * @static
+	 * @param {array} $entry
+	 * @return {string} seconds, never negative
+	 */
+	static function age($entry)
+	{
+		$stored = isset($entry['stored']) ? (int) $entry['stored'] : 0;
+		if ($stored <= 0) return '0';
+		return (string) max(0, time() - $stored);
+	}
+
+	/**
 	 * Give a response a validator derived from what it says.
 	 *
 	 * Without this a cached page carries only Last-Modified, and that is the
@@ -747,7 +773,10 @@ class Q_WebServer_Cache
 		// expiry rather than a renewed one, so it revalidated sooner and more
 		// often -- the opposite of the point. Keeping the freshness directives
 		// in the index costs a few dozen bytes per page.
-		$keep = array('etag', 'last-modified', 'cache-control', 'expires', 'vary');
+		// Age travels with the rest, because a 304 updates the client's stored
+		// headers just as a 200 does. Omitting it leaves the client believing
+		// its copy was revalidated against a freshly generated response.
+		$keep = array('etag', 'last-modified', 'cache-control', 'expires', 'vary', 'age');
 		$headers = array();
 		foreach ($entry['headers'] as $name => $value) {
 			if (in_array(strtolower($name), $keep, true)) {
@@ -888,7 +917,8 @@ class Q_WebServer_Cache
 		foreach ($headers as $k => $v) {
 			$lk = strtolower($k);
 			if (in_array($lk, array(
-				'etag', 'last-modified', 'cache-control', 'expires', 'vary', 'date'
+				'etag', 'last-modified', 'cache-control', 'expires', 'vary', 'date',
+				'age'
 			), true)) {
 				$out[$k] = $v;
 			}
