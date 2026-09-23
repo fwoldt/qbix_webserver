@@ -24,6 +24,7 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 	static $lastError = null;
 
 	protected $running = false;
+	protected $stopRequested = false;
 	protected $nextId = 1;
 	protected $readers = array();     // id => [stream, callback]
 	protected $writers = array();     // id => [stream, callback]
@@ -115,10 +116,22 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 	function disable($id) { $this->disabled[$id] = true; }
 	function enable($id) { unset($this->disabled[$id]); }
 	function running() { return $this->running; }
-	function stop() { $this->running = false; }
+
+	/**
+	 * Ask run() to return after the current tick.
+	 *
+	 * The extra flag is there because stop() is almost always called from
+	 * inside a callback, part-way through a tick that would otherwise go on to
+	 * block in stream_select() with no timeout. Clearing $running does not
+	 * reach that select, so the loop could sit in it indefinitely while the
+	 * caller believed it had been asked to stop. tick() reads this and hands
+	 * control back instead.
+	 */
+	function stop() { $this->running = false; $this->stopRequested = true; }
 
 	function run()
 	{
+		$this->stopRequested = false;
 		$this->running = true;
 		while ($this->running && $this->hasWatchers()) {
 			$this->tick(null);
@@ -157,6 +170,13 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 
 		// 3. Signals
 		if (function_exists('pcntl_signal_dispatch')) pcntl_signal_dispatch();
+
+		// A handler just run -- a shutdown signal, most often -- may have
+		// asked the loop to stop. Falling through to the select below would
+		// block on whatever watchers are left, with nothing remaining to
+		// deliver an event, which is how a shutdown that has already done
+		// its work ends up waiting for ever.
+		if ($this->stopRequested) return;
 
 		// 4. Stream select
 		//

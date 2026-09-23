@@ -1076,15 +1076,30 @@ class Q_WebServer
 	{
 		if (!self::$running) return;
 		if (function_exists('pcntl_signal')) {
+			// A shutdown signal has to end the process, not merely ask the
+			// loop to wind down. Asking was what these did, and it was not
+			// enough: stop() closes the listeners and takes the pool down, and
+			// the handler then returned into a loop that still held timers --
+			// metrics flushing, cache maintenance -- so hasWatchers() stayed
+			// true and the process went on sleeping and waking for ever. From
+			// the outside that is a server that ignores SIGTERM: `velocity
+			// stop` waited out its timeout and reported "still running; try
+			// kill" every single time, with the listening socket already gone.
+			//
+			// Exiting here is safe because everything that needed ordering has
+			// already happened inside stop(): connections drained, workers
+			// signalled and reaped, sockets closed, the UDS path unlinked.
 			Q_Evented::onSignal(SIGINT, function () {
 				echo "\n  Graceful shutdown (SIGINT)...\n";
 				self::stop();
 				Q_Evented::stop();
+				exit(0);
 			});
 			Q_Evented::onSignal(SIGTERM, function () {
 				echo "\n  Graceful shutdown (SIGTERM)...\n";
 				self::stop();
 				Q_Evented::stop();
+				exit(0);
 			});
 			Q_Evented::onSignal(SIGHUP, function () {
 				echo "\n  Reloading (SIGHUP)...\n";
