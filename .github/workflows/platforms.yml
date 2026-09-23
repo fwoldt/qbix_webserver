@@ -51,15 +51,28 @@ jobs:
         include:
           - os: freebsd
             version: '14.2'
-            # FreeBSD packages phar apart from php, and without it the phar is
-            # not a broken archive -- it is a file the interpreter cannot open.
-            install: pkg install -y php83 php83-phar curl || pkg install -y php83 curl
+            # Every extension is its own package here. tokenizer is not
+            # optional: without it the source transform cannot run and the
+            # server dies at startup on token_get_all().
+            install: |
+              pkg install -y php83 curl
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+                pkg install -y php83-$e || true
+              done
           - os: openbsd
             version: '7.6'
-            install: pkg_add -I php php-phar curl || pkg_add -I php curl
+            install: |
+              pkg_add -I php curl || true
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+                pkg_add -I php-$e || true
+              done
           - os: netbsd
             version: '10.0'
-            install: /usr/sbin/pkg_add php83 php83-phar curl || /usr/sbin/pkg_add php83 curl
+            install: |
+              /usr/sbin/pkg_add php83 curl || true
+              for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+                /usr/sbin/pkg_add php83-$e || true
+              done
 
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +184,11 @@ jobs:
         if: matrix.os == 'dragonflybsd'
         with:
           usesh: true
-          prepare: pkg install -y php83 curl
+          prepare: |
+            pkg install -y php83 curl
+            for e in phar tokenizer pcntl posix sockets session filter ctype mbstring; do
+              pkg install -y php83-$e || true
+            done
           run: sh tests/phar-serves.sh bin/qbixserver.phar
 
       - name: Serve a page on ${{ matrix.os }}
