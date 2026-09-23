@@ -72,20 +72,27 @@ class Q_WebServer_Pool
 			'Q', 'webserver', 'maxRequests', 1000
 		);
 
-		// In octane mode, default compat on (unless explicitly disabled)
-		// so lifecycle functions are shimmed for shared-nothing safety.
-		if ($this->octane) {
-			$compatSet = Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', null);
-			if ($compatSet === null) {
-				Q_Config::set('Q', 'compat', 'skipSourceCodeTransform', false);
-			}
-			$compatFile = dirname(__DIR__) . '/WebServer/Compat.php';
-			if (!class_exists('Q_WebServer_Compat', false) && is_file($compatFile)) {
-				require_once $compatFile;
-			}
-			if (class_exists('Q_WebServer_Compat', false)) {
-				Q_WebServer_Compat::init();
-			}
+		// Compat on by default unless explicitly disabled, in either mode.
+		// It shims the lifecycle functions for shared-nothing safety, which
+		// only a persistent worker needs -- but it also shims header() and
+		// setcookie(), which every worker needs. Those are no-ops under the
+		// CLI SAPI, so without the shim headers_list() comes back empty and
+		// the response goes out with neither Set-Cookie nor Location: the
+		// credentials are accepted, the redirect is issued, and the session
+		// cookie never reaches the browser.
+		// Q_WebServer_Compat::init() returns immediately when compat is
+		// configured off, so the decision stays with the config key and is
+		// not implied by the fork mode.
+		$compatSet = Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', null);
+		if ($compatSet === null) {
+			Q_Config::set('Q', 'compat', 'skipSourceCodeTransform', false);
+		}
+		$compatFile = dirname(__DIR__) . '/WebServer/Compat.php';
+		if (!class_exists('Q_WebServer_Compat', false) && is_file($compatFile)) {
+			require_once $compatFile;
+		}
+		if (class_exists('Q_WebServer_Compat', false)) {
+			Q_WebServer_Compat::init();
 		}
 
 		if ($this->octane) {
@@ -234,7 +241,25 @@ class Q_WebServer_Pool
 				$resp['headers'], $resp['cookies'] ?? array());
 			$handled++;
 
-			if (!$octane) break;
+			if (!$octane) {
+				// This worker is about to exit. Compat has taken over
+				// register_shutdown_function, so PHP's own shutdown will not
+				// fire what the request registered -- and eZ writes its
+				// session in one of those callbacks. Without this the session
+				// is never stored: the login is accepted, the cookie goes out,
+				// and the next request finds nothing behind it, so the user is
+				// back at the login form.
+				if (class_exists('Q_WebServer_Compat', false)
+					and Q_WebServer_Compat::isEnabled()) {
+					try {
+						Q_WebServer_Compat::shutdown();
+					} catch (\Throwable $e) {
+						// The response is already on its way; a failure in
+						// cleanup must not turn it into a lost request.
+					}
+				}
+				break;
+			}
 
 			// ── Octane: reset state for the next request ──
 
@@ -1220,7 +1245,13 @@ class Q_WebServer_Pool
 				'headers' => array('Content-Type' => 'text/plain')
 			));
 		}
-		fwrite($sock, pack('N', strlen($j)) . $j);
+		// The worker's reply is length-prefixed exactly like the request that
+		// arrived, so a short write here desynchronises the parent's reader
+		// instead of losing a few bytes: it takes the length we declared,
+		// finds the next reply beginning inside this one, and every response
+		// after it belongs to the wrong request. The child's end is blocking,
+		// so writeAll is the right one of the two.
+		Q_WebServer::writeAll($sock, pack('N', strlen($j)) . $j);
 	}
 }
 
