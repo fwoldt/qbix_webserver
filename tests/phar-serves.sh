@@ -85,16 +85,35 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Startup includes a pre-warm walk, so poll rather than guess at a sleep.
+# Startup includes a pre-warm walk, so poll rather than guess at a sleep. The
+# limit is generous because several of the platforms this runs on are emulated
+# a whole architecture at a time, where everything takes the time it takes and
+# a short deadline measures the emulator rather than the server.
+WAIT="${WAIT:-120}"
 BODY=""
 i=0
-while [ $i -lt 40 ]; do
+while [ $i -lt "$WAIT" ]; do
     BODY="$(fetch_body "http://127.0.0.1:$PORT/")"
     [ -n "$BODY" ] && break
     if ! kill -0 "$SERVER" 2>/dev/null; then
-        echo "  FAIL  the server exited during startup"
+        # Reap it so $? is the exit status rather than "no such job". A server
+        # that died without writing a line is the case that most needs the
+        # status reported: otherwise there is nothing at all to go on.
+        wait "$SERVER" 2>/dev/null
+        STATUS=$?
+        echo "  FAIL  the server exited during startup (status $STATUS)"
         echo
-        sed 's/^/    /' "$TMP/log" 2>/dev/null | tail -20
+        if [ -s "$TMP/log" ]; then
+            sed 's/^/    /' "$TMP/log" 2>/dev/null | tail -20
+        else
+            echo "    it wrote nothing before exiting"
+            echo "    php: $("$PHP" -r 'echo PHP_VERSION." ".PHP_OS_FAMILY;' 2>&1)"
+            echo "    extensions the server needs:"
+            for x in pcntl posix sockets tokenizer phar session; do
+                printf '      %-10s %s\n' "$x" \
+                    "$("$PHP" -r "echo extension_loaded('$x') ? 'yes' : 'MISSING';" 2>&1)"
+            done
+        fi
         exit 1
     fi
     i=$((i + 1))
