@@ -2636,9 +2636,16 @@ class Q_WebServer_Panel
 		// Ask the log itself where it writes: it resolved `dir` against
 		// APP_DIR at startup and knows the configured filenames, neither
 		// of which can be reconstructed from the config key alone.
-		$file = $type === 'error'
-			? Q_WebServer_Log::$errorPath
-			: Q_WebServer_Log::$accessPath;
+		// ?host= picks a virtual host's own log; without it, the server's.
+		$host = strtolower(trim($params['host'] ?? ''));
+		if ($host !== '' and isset(Q_WebServer_Log::$hosts[$host])) {
+			$rec = Q_WebServer_Log::$hosts[$host];
+			$file = $type === 'error' ? $rec['errorPath'] : $rec['accessPath'];
+		} else {
+			$file = $type === 'error'
+				? Q_WebServer_Log::$errorPath
+				: Q_WebServer_Log::$accessPath;
+		}
 		if (!$file) {
 			$logDir = Q_Config::get('Q', 'webserver', 'log', 'dir', 'logs');
 			$name = $type === 'error'
