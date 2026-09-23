@@ -117,6 +117,48 @@ class Q_WebServer_Pool
 			Q_WebServer_Compat::init();
 		}
 
+		// Parent-side preload, before the snapshot and before the fork.
+		//
+		// This is the one lever that moves per-worker memory. A worker that
+		// bootstraps a heavy framework on its first request builds that state in
+		// its own heap -- private to it, paid once per worker. Measured on this
+		// installation each warm worker held ~209 MB, so 64 of them was ~13 GB of
+		// the same kernel loaded 64 times.
+		//
+		// Loading it HERE, in the parent, before the children exist, means fork()
+		// hands every worker the same pages copy-on-write. They stay shared until
+		// a worker writes to them, and a warmed framework is mostly read -- class
+		// tables, parsed configuration, type registries -- so the shared fraction
+		// is large and the private residue small.
+		//
+		// The preload is a script named by Q.webserver.preload, run once in an
+		// isolated scope. It is off unless configured, because what is safe to
+		// load before a fork is application-specific: loading classes and parsing
+		// configuration is fork-safe, but a database handle opened here would be
+		// shared by every child and corrupt. The script's job is to warm the
+		// former and open none of the latter; the app provides it.
+		$preload = Q_Config::get('Q', 'webserver', 'preload', null);
+		if (is_string($preload) && $preload !== '' && is_file($preload)) {
+			$before = memory_get_usage(true);
+			$__run = static function ($__preloadFile) {
+				require $__preloadFile;
+			};
+			try {
+				$__run($preload);
+				$grew = (memory_get_usage(true) - $before) / 1048576;
+				fwrite(STDERR, sprintf(
+					"  preload %s warmed %.1f MB in the parent (shared by every worker)\n",
+					basename($preload), $grew));
+			} catch (\Throwable $e) {
+				// A preload that throws must not stop the server from starting --
+				// the workers can still warm themselves lazily, the old way.
+				if (class_exists('Q_WebServer_Log', false)) {
+					Q_WebServer_Log::error('preload ' . basename($preload)
+						. ' failed, workers will warm lazily: ' . $e->getMessage());
+				}
+			}
+		}
+
 		if ($this->octane) {
 			$snapFile = dirname(__DIR__) . '/WebServer/Snapshot.php';
 			if (!class_exists('Q_WebServer_Snapshot', false) && is_file($snapFile)) {
