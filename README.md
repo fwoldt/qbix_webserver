@@ -175,86 +175,101 @@ Most apps work immediately. A few things to be aware of:
 
 ## Platform Support
 
-There are two ways to run Exponential Velocity, and they reach different
+There are two ways to run Exponential Velocity, and they reach very different
 numbers of platforms.
 
-### Binaries — nothing to install
+A **binary** carries its own PHP, so there is nothing to install. We ship these
+for the targets the build toolchain supports, and that list is short by nature:
+PHP is C with a great many statically linked dependencies and does not
+cross-compile the way a Go program does.
 
-A static build with PHP inside it. We ship these for the targets the build
-toolchain supports; PHP is C with a great many statically linked dependencies
-and does not cross-compile the way a Go program does, so this list is short by
-nature rather than by neglect.
+The **phar** is the same server in one file and carries no PHP of its own, so
+the only question it asks of a platform is whether PHP 8.1 or later runs there.
+That is a far longer list, and it is the reason the table below is as wide as
+it is.
+
+### Binaries — nothing to install
 
 | Platform | Download | State |
 |---|---|---|
 | **Linux** x86_64 | [`qbixserver-linux-x86_64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64) | shipped |
 | **Linux** aarch64 &middot; Raspberry Pi 4 / 5 | [`qbixserver-linux-aarch64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-aarch64) | shipped |
 | **macOS** arm64 &middot; Apple Silicon | [`qbixserver-macos-arm64`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-macos-arm64) | shipped |
-| **Windows** x64 | — | does not build |
-
-**macOS took a while to arrive, and was never actually broken.** Its test could
-not run on the macOS runner for several releases -- it looked for a PHP that was
-not on PATH -- and once that was fixed it failed with an empty body on every
-request, which reads exactly like a server returning nothing. It was not. The
-harness starts the server with `setsid`, which is util-linux and absent on
-macOS, so the server was never started at all. With that fixed the binary passes
-every assertion, and it ships from the next release on.
-
-**Windows** does not currently produce a binary. The static PHP build fails
-fetching the `icu` library that `intl` needs, and the packaging step then finds
-no `php.exe` and skips. Six steps on that path were marked to continue on
-error, among them the PHP build and the smoke test, so the job reported success
-and shipped only a stray `.dll`. The job now checks that a binary exists before
-uploading anything, which is the check that would have caught it at the time.
-
-Until both are settled, **macOS and Windows users should run the phar**, which
-works on all four platforms. It needs a PHP 8.1+ interpreter, which on those
-two is the easier thing to obtain anyway.
+| **Windows** x64 | — | does not build yet |
 
 ### The phar — anywhere PHP 8.1+ runs
 
 [`qbixserver.phar`](https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver.phar)
-is the whole server in one file. It has no architecture and no libc of its own,
-so the only question is whether the platform has a PHP, and a great many do.
 
-The [Platforms workflow](../../actions/workflows/platforms.yml) boots each of
-these and watches for a page to come back. The badge is the authority for
-whether they currently pass -- it cannot go stale the way a hand-written tick
-in a table can, and a platform listed here is one we test, not one we promise.
+```bash
+php qbixserver.phar --root=./web
+```
 
 [![Platforms](../../actions/workflows/platforms.yml/badge.svg)](../../actions/workflows/platforms.yml)
 
-| | Platforms exercised |
+**Proven.** Each of these boots in CI and is watched serving a page, twice — the
+second request goes to a worker that has already served one, which is where a
+persistent-worker server goes wrong if it goes wrong anywhere. The badge above
+is the authority; a row here is a platform we test, not one we promise.
+
+| Family | Platforms | Notable because |
+|---|---|---|
+| **Linux** glibc | x86_64, aarch64, armv5, armv7, i386, ppc64le, riscv64, s390x | eight architectures from one file |
+| **Linux** musl | Alpine on x86_64, aarch64, i386 | a different C library, not a different build |
+| **BSD** | FreeBSD 14, DragonFly BSD | real kernels in a VM, not emulated Linux |
+| **illumos** | OmniOS | the surviving OpenSolaris line |
+
+Two of those earn their place for specific reasons. **s390x is big-endian**, and
+this server has several binary protocols — `pack('N')` framing, ETags, HPACK,
+shared-dictionary compression — so it is where a byte-order mistake shows up;
+the full suite passes there. **Alpine** is not exotic at all, it is most of the
+Docker images in the world, and musl is where assumptions about DNS, threads
+and locales break first.
+
+**Hardware this already covers.** A Raspberry Pi 4 or 5 runs the shipped
+aarch64 binary; a Pi 2, 3 or Zero 2 runs the phar on armv7. **IBM Z** is s390x
+and **IBM Power** is ppc64le, both proven above; an IBM xSeries is ordinary
+x86_64.
+
+**Expected, not yet proven.** These have a maintained PHP 8.1+ and no reason not
+to work, but nothing here has watched them do it, so they are listed as what
+they are:
+
+| Platform | Why it should work | Why it is not proven |
+|---|---|---|
+| **AIX** on Power | IBM ships PHP 8 in the AIX Toolbox | no CI runner, no emulator |
+| **IBM i** (AS/400) | a maintained PHP 8 is published for it | same |
+| **OpenBSD**, **NetBSD** | PHP 8 in ports and pkgsrc | in the matrix; being worked on |
+| **Solaris 11** | PHP 8 packages exist | no runner |
+| **Haiku** | PHP is in HaikuPorts | its installer is GUI-only, so CI cannot boot it unattended |
+| **Windows** via the phar | PHP 8 for Windows is official | the phar path is untested there; only the binary is known broken |
+
+The test for any of them is one line on the machine in question:
+
+```bash
+php -v
+```
+
+If that says 8.1 or later, download the phar and run it. That really is the
+whole requirement, and if it works we would like to hear so we can move the row
+up a table.
+
+**Not possible.** Worth stating plainly, because the question comes up:
+
+| Platform | Why not |
 |---|---|
-| **BSD** | FreeBSD 14, OpenBSD 7.6, NetBSD 10, DragonFly BSD |
-| **illumos** | OmniOS |
-| **Linux, glibc** | x86_64, aarch64, armv5, armv7, i386, ppc64le, riscv64, s390x |
-| **Linux, musl** | Alpine on x86_64, aarch64, i386 |
-
-`s390x` is there because it is big-endian, and `armv7` because it is what a
-32-bit Raspberry Pi runs. Alpine is there because musl is a different C library
-rather than a different build of the same one, and assumptions about DNS,
-threads and locales break there first.
-
-**Haiku** is wanted and not yet done. It carries PHP in HaikuPorts, so there is
-every reason to think the phar runs, but nothing has watched it happen and the
-job says so rather than passing vacuously.
-
-**What cannot work:** anything without a PHP 8.1+ interpreter. That rules out
-the 8-bit machines regardless of how the brands are doing — a Commodore 64 or
-an Apple II is a 6502 with 64KB of memory, and PHP needs an MMU, a 32- or
-64-bit CPU and tens of megabytes. The nearest thing in that lineage with any
-path at all is the Amiga family (AmigaOS 4, MorphOS, AROS), which are real
-multitasking systems, and even there someone has to produce a current PHP first.
+| Commodore 64, Apple II, other 8-bit machines | a 6502 with 64KB. PHP needs an MMU, a 32- or 64-bit CPU and tens of megabytes. Memory is not the binding constraint; nothing about the machine is. |
+| AmigaOS 4, MorphOS | real multitasking systems with ample RAM, but their PHP ports stop at 5.x. This is a missing port, not a hardware limit — AROS on x86 is the only one with a plausible path. |
+| z/OS | no current PHP 8 for USS that we know of |
 
 ### How workers behave, per platform
 
 | Platform | Workers | Copy-on-write | Mode |
 |---|---|---|---|
-| **Linux** x86_64, aarch64 | `pcntl_fork` | Yes — 120KB per worker | Persistent or fork-per-request |
-| **macOS** Intel, Apple Silicon | `pcntl_fork` | Yes | Persistent or fork-per-request |
-| **BSD**, **illumos** | `pcntl_fork` | Yes | Persistent or fork-per-request |
-| **Windows** x64 (via phar) | `php-cgi` subprocess | No | Persistent workers, source-transform shimming |
+| **Linux** x86_64, aarch64 | `pcntl_fork` | yes — 120KB per worker | persistent or fork-per-request |
+| **macOS** Intel, Apple Silicon | `pcntl_fork` | yes | persistent or fork-per-request |
+| **BSD**, **illumos** | `pcntl_fork` | yes | persistent or fork-per-request |
+| **Windows** x64 (via phar) | `php-cgi` subprocess | no | persistent workers, source-transform shimming |
 
 On Linux, the BSDs and macOS the server runs COW-forked workers at ~120KB each.
 Windows has no `pcntl`, so it spawns `php-cgi` subprocesses for isolation:
@@ -266,6 +281,11 @@ requests.
 and uses `epoll` on Linux or `kqueue` on the BSDs and macOS, with no PECL
 extensions. On older PHP it uses `stream_select`, which works fine — it is just
 O(n) per tick instead of O(1). Revolt is used if installed.
+
+**One platform needs a note.** `riscv64` passes only with PCRE's JIT disabled:
+under `qemu-riscv64` a pure-regex test dumps core with `pcre.jit=1` and passes
+51 cases with it off. That is the emulator, not RISC-V and not this server, and
+real hardware is untested either way.
 
 ## Examples
 
