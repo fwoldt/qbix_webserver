@@ -85,9 +85,11 @@ jobs:
       matrix:
         platform:
           - linux/386        # 32-bit x86, still in the field on older kit
+          - linux/arm/v5     # ARMv5, the oldest the official image carries
           - linux/arm/v7     # Raspberry Pi 2 and 3 in 32-bit mode
           - linux/arm64      # Raspberry Pi 4 and 5, also a shipped binary
           - linux/ppc64le    # POWER
+          - linux/riscv64    # RISC-V, and the newest architecture here
           - linux/s390x      # IBM Z, and big-endian, which finds real bugs
 
     steps:
@@ -103,6 +105,74 @@ jobs:
             sh -c 'apt-get update -qq >/dev/null 2>&1; \
                    apt-get install -y -qq curl >/dev/null 2>&1; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
+
+  # ── musl, rather than glibc ─────────────────────────────────
+  # Alpine is not an exotic platform, it is most of the Docker images in the
+  # world, and it is the one place here where the C library underneath PHP is
+  # a different implementation rather than a different build. Assumptions about
+  # DNS, threads and locales are what break, and they break here first.
+  musl:
+    name: alpine ${{ matrix.platform }} (musl)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - linux/386
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Serve a page on ${{ matrix.platform }}
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD":/src -w /src \
+            php:8.3-cli-alpine \
+            sh -c 'apk add --no-cache curl >/dev/null 2>&1; \
+                   sh tests/phar-serves.sh bin/qbixserver.phar'
+
+  # ── The other Unixes ───────────────────────────────────────
+  # DragonFly went its own way after FreeBSD 4 and schedules differently.
+  # illumos is the surviving OpenSolaris line, and carries a genuinely
+  # different set of system calls underneath the same POSIX surface.
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: dragonflybsd
+            action: vmactions/dragonflybsd-vm@v1
+            install: pkg install -y php83 curl
+          - os: omnios
+            action: vmactions/omnios-vm@v1
+            install: pkg install php-83 curl || pkg install curl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Serve a page on ${{ matrix.os }}
+        uses: vmactions/dragonflybsd-vm@v1
+        if: matrix.os == 'dragonflybsd'
+        with:
+          usesh: true
+          prepare: pkg install -y php83 curl
+          run: sh tests/phar-serves.sh bin/qbixserver.phar
+
+      - name: Serve a page on ${{ matrix.os }}
+        uses: vmactions/omnios-vm@v1
+        if: matrix.os == 'omnios'
+        with:
+          usesh: true
+          prepare: pkg install php-83 curl || pkg install curl
+          run: sh tests/phar-serves.sh bin/qbixserver.phar
 
   # ── Haiku ───────────────────────────────────────────────────
   # The successor to BeOS, and the one platform here with no ready-made action
