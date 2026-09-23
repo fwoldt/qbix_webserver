@@ -126,8 +126,11 @@ jobs:
           #
           # Raising this is a deliberate step: check the platform still builds
           # before moving it.
-          git clone --depth 1 --branch 2.8.5 \
-            https://github.com/crazywhalecc/static-php-cli.git spc-src
+          # One line on purpose. This step runs under PowerShell, where the
+          # line continuation is a backtick and a backslash is just an
+          # argument -- so a wrapped command here clones "\" and then tries to
+          # run the URL as a program.
+          git clone --depth 1 --branch 2.8.5 https://github.com/crazywhalecc/static-php-cli.git spc-src
           cd spc-src
           php -v
           composer install --no-dev --no-interaction --quiet 2>&1
