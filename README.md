@@ -254,13 +254,75 @@ If that says 8.1 or later, download the phar and run it. That really is the
 whole requirement, and if it works we would like to hear so we can move the row
 up a table.
 
-**Not possible.** Worth stating plainly, because the question comes up:
+**Not today.** Worth stating plainly, because these come up and deserve a
+straight answer rather than silence. One of them is a hardware limit and the
+others are simply work nobody has finished:
 
 | Platform | Why not |
 |---|---|
 | Commodore 64, Apple II, other 8-bit machines | a 6502 with 64KB. PHP needs an MMU, a 32- or 64-bit CPU and tens of megabytes. Memory is not the binding constraint; nothing about the machine is. |
-| AmigaOS 4, MorphOS | real multitasking systems with ample RAM, but their PHP ports stop at 5.x. This is a missing port, not a hardware limit — AROS on x86 is the only one with a plausible path. |
+| AmigaOS 4, MorphOS, AROS | not yet, and not because of the hardware — their PHP ports stop at 5.x. See below: the work is a PHP port, and once someone finishes one the phar runs unchanged. |
 | z/OS | no current PHP 8 for USS that we know of |
+
+#### AmigaOS, MorphOS and AROS — what it would take, for anyone tempted
+
+This question gets asked seriously, so here is a serious answer. AmigaOS 4,
+MorphOS and AROS are real pre-emptive multitasking systems, a modern machine
+running one has gigabytes of memory, and **memory has never been the
+constraint.** The gap is simply that PHP on those systems stopped at 5.x, and
+the distance from there to 8.1 is library work.
+
+The encouraging part is where that work stops. **Nothing in it is about this
+server.** The phar has no architecture and no C library of its own, so the day a
+PHP 8.1 exists for one of these systems is the day Velocity can run on it,
+with no port of our code at all. One person finishing a PHP port unlocks the
+whole thing.
+
+What follows is a map drawn from PHP's requirements and the documented shape of
+those systems. Nobody here has attempted it, so treat it as terrain to survey
+rather than a report from inside.
+
+**Start with AROS on x86.** It is the shortest path by a distance: ordinary x86
+toolchains, no PowerPC cross-compiler to build first, and the most conventional
+libc of the three.
+
+**Two things are interesting rather than routine, and worth knowing early:**
+
+*Process creation.* AmigaOS creates processes with `CreateNewProc()`, which
+starts a new process running a named function rather than duplicating the
+caller. Velocity's fastest mode uses copy-on-write `fork()`, so that mode would
+not carry across — but the server already has a path for exactly this, because
+Windows has no `fork()` either. It runs there through `php-cgi` subprocesses,
+persistent and shimmed, just without the memory sharing. So this costs
+performance, not viability.
+
+*Sockets and files.* Networking comes from `bsdsocket.library`, whose handles
+live in their own namespace rather than the file descriptor table PHP assumes.
+This is the piece that decides whether PHP compiles or actually serves, and it
+is where a porter's time is best spent first.
+
+**The rest is ordinary work, and there is a lot of it:**
+
+| Area | What is needed |
+|---|---|
+| C library | `newlib` and `clib2` need the gaps PHP 8 assumes closed — `getaddrinfo`, full `poll`/`select` semantics, `mmap`-style allocation for the Zend memory manager |
+| Toolchain | a current GCC or Clang for the target, building PHP 8's C99/C11 sources |
+| Dependencies | current PCRE2, libxml2, OpenSSL, zlib, libiconv — each its own port |
+| Signals | POSIX signal semantics, used here for shutdown and reaping workers |
+| Extensions | `sockets` needs the bsdsocket reconciliation above; `pcntl` and `posix` follow from process creation |
+
+None of that is exotic. It is the same list every platform has worked through
+at some point, and the Amiga community has closed longer ones.
+
+**If you get there, tell us.** The test is one line on the machine:
+
+```bash
+php -v
+```
+
+If it reports 8.1 or later, then `php qbixserver.phar --root=./web` should
+simply work. Send word that it serves a page and the row moves into the proven
+table the same day — and it would be the most interesting entry in it.
 
 ### How workers behave, per platform
 
