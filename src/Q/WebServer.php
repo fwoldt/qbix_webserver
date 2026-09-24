@@ -1585,11 +1585,9 @@ class Q_WebServer
 			return 'conflicting Content-Length values';
 		}
 		foreach (array_keys($lengths) as $one) {
-			// Back to a string first. A numeric array key comes back as an
-			// integer, and ctype_digit() reads an integer from -128 to 255 as
-			// a character code: every body of 0-47 or 58-255 bytes was refused
-			// as "not a number", while 48-57 (the codes of '0'-'9') and 256+
-			// happened to pass.
+			// A numeric key comes back as an int, and ctype_digit() reads an
+			// int from -128 to 255 as an ASCII code: Content-Length: 100 would
+			// be chr(100), "d", and refused. Compare the text that was sent.
 			$one = (string) $one;
 			if ($one === '' or !ctype_digit($one)) {
 				return 'Content-Length is not a number';
