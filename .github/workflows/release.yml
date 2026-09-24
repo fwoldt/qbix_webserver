@@ -367,6 +367,23 @@ jobs:
           Write-Host "Building with extensions: $exts"
           php spc-src\bin\spc build "$exts" --build-cli --build-micro --with-libs=libjpeg,libwebp,freetype
 
+      # spc writes the compiler's own output only to its log files, so a
+      # failed build said "exited with code 2" and nothing else, release after
+      # release. Print the errors and the end of each log where it failed.
+      - name: Show why the PHP build failed (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($f in 'log\spc.output.log', 'log\spc.shell.log', 'spc-src\log\spc.output.log', 'spc-src\log\spc.shell.log') {
+            if (-not (Test-Path $f)) { continue }
+            Write-Host "::group::$f -- lines with errors"
+            Select-String -Path $f -Pattern 'error|fatal|unresolved|cannot open' | Select-Object -Last 80 | ForEach-Object { $_.Line }
+            Write-Host "::endgroup::"
+            Write-Host "::group::$f -- last 150 lines"
+            Get-Content $f -Tail 150
+            Write-Host "::endgroup::"
+          }
+
       - name: Build qbix_fork.dll (Windows)
         if: runner.os == 'Windows'
         continue-on-error: true
