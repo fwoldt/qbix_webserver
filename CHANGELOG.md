@@ -98,11 +98,25 @@ edited down to what a reader actually needs.
   recompiled on every include.
 - `is_link()` was false for every link under the compat wrapper, which
   answered link queries with `stat()` instead of `lstat()`.
+- **Includes no longer cost a leaked resource each.** A template engine
+  includes the same compiled templates over and over (~1 900 includes of a
+  few dozen files on one search page), and each was a real open through the
+  wrapper. Included files are now read once and their bytes kept (at most
+  4 MB per process), served while a real stat taken in the same request
+  still matches their mtime and size -- so what runs is always the file as
+  it is on disk. Mixed traffic now grows a worker ~0.1 MB a request.
+- **Edited and regenerated files are picked up without a restart.** The
+  opcode cache reads its clock only at request startup, which a persistent
+  worker never repeats, so it never revalidated a cached script: a
+  regenerated template or an edited class ran its old compile until the
+  server restarted. The wrapper now invalidates a script's compile when it
+  sees the file's mtime move. The transform cache had the same fault -- an
+  edited file that needs the transform kept its old transformed source --
+  and now re-transforms on a changed mtime.
 
 Together: a worker that grew ~2 MB a request (1.1 GB after 600 on an
-Exponential install) now grows ~0.2 MB a request on mixed traffic, the rest
-being one unwrap per include of a file that needs no transform, which the
-worker memory ceiling below bounds.
+Exponential install) now grows ~0.1 MB a request on mixed traffic, bounded
+by the worker memory ceiling below.
 
 - **The "Worker Memory (COW)" card reported several times the real memory.** It
   summed each worker's RSS, and RSS counts a shared copy-on-write page in full
@@ -128,6 +142,10 @@ worker memory ceiling below bounds.
 
 ### Added
 
+- `Q_WebServer_Pool::retireAfterResponse($reason)`, for application code that
+  can run only once per process -- one that defines constants from the
+  request, say. The request is answered normally; the parent then replaces
+  the worker and logs the reason. Outside a pool worker it does nothing.
 - **A per-request health check that replaces a worker instead of letting it
   grow.** After each request a worker checks that its output stack is back to
   the one empty capture buffer and that its heap is under

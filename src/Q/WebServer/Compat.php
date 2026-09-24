@@ -592,6 +592,18 @@ class Q_WebServer_Compat
 			? (int) self::$transformCache[$filePath]['mtime'] : 0;
 	}
 
+	/**
+	 * Drop a file's cached transform (or sentinel), so the next open reads
+	 * and transforms the file again. For a file that changed on disk.
+	 * @method forgetTransform
+	 * @static
+	 * @param {string} $filePath
+	 */
+	static function forgetTransform($filePath)
+	{
+		unset(self::$transformCache[$filePath]);
+	}
+
 	static function getCachedTransform($filePath)
 	{
 		if (!isset(self::$transformCache[$filePath])) return null;
@@ -2360,6 +2372,130 @@ class Q_WebServer_CompatFileWrapper
 	const STAT_MEMO_MAX = 8192;
 
 	/**
+	 * STREAM_OPEN_FOR_INCLUDE: set in stream_open()'s options for include
+	 * and require, never for fopen() or file_get_contents(). PHP does not
+	 * define the constant for PHP code.
+	 */
+	const OPEN_FOR_INCLUDE = 0x80;
+
+	/**
+	 * The bytes of files included through the wrapper, by path, with the
+	 * mtime and size they were read at: path => array(mtime, size, bytes).
+	 *
+	 * A template engine includes the same compiled templates over and over
+	 * -- one search page, ~1 900 includes of a few dozen files -- and each
+	 * real open is an unwrap, which leaves a resource behind for the life of
+	 * the worker (see self::unwrap()). Kept here, an include costs one real
+	 * stat per path per request (remembered in $statMemo) and no open at all
+	 * while the file's mtime and size still match that stat.
+	 *
+	 * What is served is always the file's real contents as of a stat taken
+	 * in this request; nothing is ever served that was not read from the
+	 * file. Bounded by CONTENT_CACHE_MAX bytes per process and emptied when
+	 * full. Filled in the parent by the warm-up, it is shared by every
+	 * worker copy-on-write. Exempt from the snapshot restore.
+	 *
+	 * @var array
+	 */
+	private static $contentCache = array();
+	private static $contentBytes = 0;
+	const CONTENT_CACHE_MAX = 4194304;
+	const CONTENT_FILE_MAX = 524288;
+
+	/**
+	 * The mtime each included path had when this process last served it.
+	 *
+	 * The opcode cache reads its clock only at request startup, which a
+	 * persistent worker never repeats, so it never revalidates a script it
+	 * holds: a regenerated template or an edited class kept running the old
+	 * compile until a restart. When a path's mtime moves, its compile is
+	 * invalidated here, and the include that follows compiles the new bytes.
+	 *
+	 * @var array
+	 */
+	private static $servedMtime = array();
+
+	/**
+	 * A path's real stat, taken at most once per request. A missing path is
+	 * answered with glob(), without the real wrapper.
+	 *
+	 * @method realStat
+	 * @static
+	 * @param {string} $realPath
+	 * @return {array|false}
+	 */
+	static function realStat($realPath)
+	{
+		if (isset(self::$statMemo[$realPath])) {
+			return self::$statMemo[$realPath];
+		}
+		if (self::existsAndIsDir($realPath) === null) {
+			return false;
+		}
+		self::unwrap();
+		$stat = @stat($realPath);
+		self::rewrap();
+		if (!$stat) return false;
+		if (count(self::$statMemo) >= self::STAT_MEMO_MAX) {
+			self::$statMemo = array();
+		}
+		return self::$statMemo[$realPath] = $stat;
+	}
+
+	/**
+	 * Record the mtime a path is being served at, and drop the opcode
+	 * cache's compile of it if the file has changed since.
+	 */
+	private static function noteServed($realPath, $mtime)
+	{
+		if (isset(self::$servedMtime[$realPath])
+			and self::$servedMtime[$realPath] !== $mtime
+			and function_exists('opcache_invalidate')) {
+			@opcache_invalidate($realPath, true);
+		}
+		if (count(self::$servedMtime) >= self::STAT_MEMO_MAX) {
+			self::$servedMtime = array();
+		}
+		self::$servedMtime[$realPath] = $mtime;
+	}
+
+	/** Serve $bytes from memory as this stream. */
+	private function serveBytes($bytes, $mtime, &$opened_path, $realPath)
+	{
+		$this->buffer = $bytes;
+		$this->position = 0;
+		$this->transformed = true;
+		$this->mtime = $mtime;
+		$opened_path = $realPath;
+		return true;
+	}
+
+	/**
+	 * Read an included file that needs no transform, keep its bytes if they
+	 * fit, and serve them. The caller has unwrapped.
+	 */
+	private function readAndServe($realPath, $stat, &$opened_path)
+	{
+		$bytes = @file_get_contents($realPath);
+		if ($bytes === false) return false;
+		$size = strlen($bytes);
+		// Only kept when the bytes are the size the stat said: a file being
+		// rewritten under us is served, not remembered.
+		if ($stat and $size === (int) $stat['size'] and $size <= self::CONTENT_FILE_MAX) {
+			if (self::$contentBytes + $size > self::CONTENT_CACHE_MAX) {
+				self::$contentCache = array();
+				self::$contentBytes = 0;
+			}
+			if (isset(self::$contentCache[$realPath])) {
+				self::$contentBytes -= self::$contentCache[$realPath][1];
+			}
+			self::$contentCache[$realPath] = array((int) $stat['mtime'], $size, $bytes);
+			self::$contentBytes += $size;
+		}
+		return $this->serveBytes($bytes, $stat ? (int) $stat['mtime'] : 0, $opened_path, $realPath);
+	}
+
+	/**
 	 * Forget every remembered stat. Called at the end of each request and on
 	 * every change made through the wrapper.
 	 * @method forgetStats
@@ -2432,14 +2568,47 @@ class Q_WebServer_CompatFileWrapper
 			self::forgetStats();
 		}
 
+		// Includes: one real stat per path per request, then the bytes from
+		// memory while that stat says the file has not changed.
+		$include = ($options & self::OPEN_FOR_INCLUDE) and ($mode === 'r' or $mode === 'rb');
+		$stat = false;
+		if ($include) {
+			$stat = self::realStat($realPath);
+			if ($stat === false) {
+				return false;
+			}
+			$mtime = (int) $stat['mtime'];
+			self::noteServed($realPath, $mtime);
+			$kept = isset(self::$contentCache[$realPath]) ? self::$contentCache[$realPath] : null;
+			if ($kept and $kept[0] === $mtime and $kept[1] === (int) $stat['size']) {
+				return $this->serveBytes($kept[2], $mtime, $opened_path, $realPath);
+			}
+		}
+
 		if ($shouldTransform) {
 			// Check in-memory cache — covers both transforms and sentinels.
 			$cached = Q_WebServer_Compat::getCachedTransform($realPath);
+			// A transform of an older version of the file is not the file.
+			// The cache used to be trusted without looking, so an edited
+			// file that needs the transform kept its old code until restart.
+			if (is_string($cached) and $stat
+				and Q_WebServer_Compat::cachedMtime($realPath) !== (int) $stat['mtime']) {
+				// Dropped, not just skipped: transformSource() below looks in
+				// the same cache first and would hand the old transform back.
+				Q_WebServer_Compat::forgetTransform($realPath);
+				$cached = null;
+			}
 			if ($cached !== null) {
 				if ($cached === false) {
 					// Sentinel: this file doesn't need transforms.
-					// Open it normally — no tokenization, no transform.
+					// Open it normally — no tokenization, no transform --
+					// or, for an include, read it once and keep its bytes.
 					self::unwrap();
+					if ($include) {
+						$ok = $this->readAndServe($realPath, $stat, $opened_path);
+						self::rewrap();
+						return $ok;
+					}
 					$this->handle = fopen($realPath, $mode);
 					self::rewrap();
 					return $this->handle !== false;
@@ -2502,6 +2671,11 @@ class Q_WebServer_CompatFileWrapper
 		}
 
 		// Pass through — non-PHP, write mode, or no transforms needed
+		if ($include) {
+			$ok = $this->readAndServe($realPath, $stat, $opened_path);
+			self::rewrap();
+			return $ok;
+		}
 		$this->handle = fopen($realPath, $mode);
 		self::rewrap();
 		return $this->handle !== false;
@@ -2656,17 +2830,7 @@ class Q_WebServer_CompatFileWrapper
 		// application code do not come here at all -- the source transform
 		// sends file_exists(), is_dir() and is_file() to Compat, which asks
 		// the operating system directly.
-		if (isset(self::$statMemo[$realPath])) {
-			return self::$statMemo[$realPath];
-		}
-		self::unwrap();
-		$stat = @stat($realPath);
-		self::rewrap();
-		if (!$stat) return false;
-		if (count(self::$statMemo) >= self::STAT_MEMO_MAX) {
-			self::$statMemo = array();
-		}
-		return self::$statMemo[$realPath] = $stat;
+		return self::realStat($realPath);
 	}
 
 	/**

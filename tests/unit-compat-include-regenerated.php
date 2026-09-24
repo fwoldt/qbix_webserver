@@ -22,17 +22,28 @@
  *   php tests/unit-compat-include-regenerated.php
  */
 
-if (getenv('QBIX_INCLUDE_REGEN_CHILD') !== '1') {
-	$cmd = escapeshellarg(PHP_BINARY) . ' -d opcache.enable=1 -d opcache.enable_cli=1'
-		. ' -d opcache.revalidate_freq=0 ' . escapeshellarg(__FILE__);
-	$out = array();
-	exec('QBIX_INCLUDE_REGEN_CHILD=1 ' . $cmd . ' 2>&1', $out, $code);
-	echo implode("\n", $out), "\n";
-	exit($code);
+// Run twice: once with the cache revalidating on every include, once with
+// it never revalidating -- which is what a persistent worker gets, since the
+// cache reads its clock only at request startup.
+if (getenv('QBIX_INCLUDE_REGEN_CHILD') === false) {
+	$worst = 0;
+	foreach (array('0' => 'revalidating', '600' => 'never revalidating') as $freq => $label) {
+		$cmd = escapeshellarg(PHP_BINARY) . ' -d opcache.enable=1 -d opcache.enable_cli=1'
+			. ' -d opcache.revalidate_freq=' . $freq . ' ' . escapeshellarg(__FILE__);
+		$out = array();
+		exec('QBIX_INCLUDE_REGEN_CHILD=' . $freq . ' ' . $cmd . ' 2>&1', $out, $code);
+		echo "  [opcache $label]\n", implode("\n", $out), "\n";
+		$worst = max($worst, $code);
+	}
+	exit($worst);
 }
 
 if (!defined('DS')) define('DS', DIRECTORY_SEPARATOR);
 require __DIR__ . '/../src/Q/WebServer/Compat.php';
+// Switch the transform on without the server around it.
+$en = new ReflectionProperty('Q_WebServer_Compat', 'enabled');
+$en->setAccessible(true);
+$en->setValue(null, true);
 
 $pass = 0;
 $fail = 0;
@@ -105,7 +116,57 @@ if (is_link($link)) {
 	chdir($cwd);
 }
 
+// Another process regenerates a compiled template: written with the wrapper
+// out of the way, so this process hears nothing of it. After a request
+// boundary the include must run the new contents, even with a cache that
+// never revalidates on its own.
+$boundary = function () { Q_WebServer_CompatFileWrapper::forgetStats(); clearstatcache(); };
+$other = function ($file, $code, $age) {
+	stream_wrapper_restore('file');
+	file_put_contents($file, $code);
+	touch($file, time() - $age);
+	stream_wrapper_unregister('file');
+	stream_wrapper_register('file', 'Q_WebServer_CompatFileWrapper');
+};
+$t = $dir . DS . 'tpl.php';
+$other($t, '<?php return "v1";', 90);
+$boundary();
+check('a compiled template runs', include $t, 'v1');
+$other($t, '<?php return "v2, from another worker";', 30);
+$boundary();
+check('after another process regenerates it, the next request runs the new one',
+	include $t, 'v2, from another worker');
+
+// The same for a file that needs the transform.
+$x = $dir . DS . 'transformed.php';
+$other($x, '<?php putenv("QBIX_REGEN=1"); return "t1";', 90);
+$boundary();
+check('a transformed script runs', include $x, 't1');
+check('...and really was transformed',
+	strpos((string) Q_WebServer_Compat::getCachedTransform($x), '_putenv') !== false, true);
+$other($x, '<?php putenv("QBIX_REGEN=2"); return "t2";', 30);
+$boundary();
+check('after an edit, the next request runs the edited transformed script', include $x, 't2');
+
+// Resources: one registration at most per path per request, however many
+// times it is included.
+$factories = function () {
+	$n = 0;
+	foreach (get_resources() as $r) if (get_resource_type($r) === 'stream factory') ++$n;
+	return $n;
+};
+$before = $factories();
+$sum = 0;
+for ($req = 0; $req < 50; ++$req) {
+	$boundary();
+	for ($i = 0; $i < 4; ++$i) $sum += strlen(include $t);
+}
+check('200 includes over 50 requests all ran', $sum, 200 * strlen('v2, from another worker'));
+check('...leaving at most one wrapper registration per request',
+	$factories() - $before <= 50, true);
+
 stream_wrapper_restore('file');
+@unlink($t); @unlink($x);
 @unlink($dir . DS . 'linked.php'); @unlink($link);
 @unlink($f); @unlink($g); @rmdir($dir);
 
