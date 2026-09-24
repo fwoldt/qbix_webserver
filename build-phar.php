@@ -87,8 +87,15 @@ if ($sha === '') $sha = 'unknown';
 if ($dirty !== '') $sha .= '-dirty';
 $buildDate = gmdate('Y-m-d H:i:s') . ' UTC';
 // Our shipped version -- the fork's release line (v0.0.*), not upstream's.
-// The nearest release tag reachable from this commit; empty if none.
-$shipVer = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
+// The nearest release tag reachable from this commit; empty if none. A
+// release commit is built before its tag exists, so describe would name the
+// previous release: QBIX_SHIP_VERSION=vX.Y.Z.N names the one being cut.
+$shipVer = (string) getenv('QBIX_SHIP_VERSION');
+if ($shipVer !== '' and !preg_match('/^v0\.0\.\d+(\.\d+)*$/', $shipVer)) {
+	fwrite(STDERR, "QBIX_SHIP_VERSION must look like v0.0.4.27, got '$shipVer'\n");
+	exit(1);
+}
+if ($shipVer === '') $shipVer = @trim((string) @shell_exec('git -C ' . escapeshellarg(__DIR__)
 	. " describe --tags --abbrev=0 --match 'v0.0.*' 2>/dev/null"));
 $buildPhp = "<?php\n"
 	. "if (!defined('QBIX_SERVER_BUILD')) define('QBIX_SERVER_BUILD', " . var_export($sha, true) . ");\n"
