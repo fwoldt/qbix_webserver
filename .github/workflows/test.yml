@@ -17,11 +17,6 @@ jobs:
           php-version: '8.3'
           extensions: pcntl, posix, gd, zip, mbstring, sockets
           coverage: none
-          # PHP's own JIT mode. setup-php otherwise turns on opcache.jit=1235,
-          # under which PHP 8.3 misreads a file served by a user stream wrapper
-          # right after it changed (unit-compat-include-regenerated: "unexpected
-          # token <"); tracing, function and no JIT all read it correctly.
-          ini-values: opcache.jit=tracing, opcache.jit_buffer_size=64M
 
       - name: Syntax check every source file
         run: |
@@ -85,11 +80,6 @@ jobs:
           php-version: '8.3'
           extensions: pcntl, posix, mbstring, sockets
           coverage: none
-          # PHP's own JIT mode. setup-php otherwise turns on opcache.jit=1235,
-          # under which PHP 8.3 misreads a file served by a user stream wrapper
-          # right after it changed (unit-compat-include-regenerated: "unexpected
-          # token <"); tracing, function and no JIT all read it correctly.
-          ini-values: opcache.jit=tracing, opcache.jit_buffer_size=64M
 
       - name: Install php-cgi
         run: sudo apt-get update -qq && sudo apt-get install -y -qq php8.3-cgi
@@ -109,11 +99,6 @@ jobs:
           php-version: '8.3'
           extensions: pcntl, posix, gd, zip, mbstring, sockets
           coverage: none
-          # PHP's own JIT mode. setup-php otherwise turns on opcache.jit=1235,
-          # under which PHP 8.3 misreads a file served by a user stream wrapper
-          # right after it changed (unit-compat-include-regenerated: "unexpected
-          # token <"); tracing, function and no JIT all read it correctly.
-          ini-values: opcache.jit=tracing, opcache.jit_buffer_size=64M
 
       - name: Check out the Qbix Platform
         uses: actions/checkout@v4

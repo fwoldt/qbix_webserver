@@ -435,8 +435,15 @@ class Q_WebServer_Compat
 		$out = '';
 		$changed = false;
 
-		for ($i = 0; $i < $count; $i++) {
-			$token = $tokens[$i];
+		// foreach, not for ($i = 0; ...; $i++): PHP 8.2 and 8.3's function JIT
+		// (opcache.jit=1235, which setup-php and some hosts turn on) restarted
+		// this loop from the first token -- keeping what it had written -- when
+		// it compiled the function mid-call, once the loop turned hot. The
+		// result was every token so far written twice, a parse error in the
+		// script being loaded. Seen once per process, on about the fourth
+		// call; PHP 8.4's JIT, tracing mode and no JIT were never affected.
+		// $i is only read in the body, so the two loops are the same.
+		foreach ($tokens as $i => $token) {
 
 			if (!is_array($token)) {
 				$out .= $token;
