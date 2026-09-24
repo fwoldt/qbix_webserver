@@ -124,7 +124,8 @@ qbixctl ext:build --variant=standard --php=8.4 --spc=./spc
 
 It runs static-php-cli (`--spc`, else `spc` on the PATH, else `./spc`) to download the
 sources and build PHP (CLI and micro) with the variant's extensions and libraries,
-rebuilds the phar, and combines the two into one file:
+rebuilds the phar (in a full checkout; the source kit uses the phar it ships), and
+combines the two into one file:
 `dist/qbixserver-<platform>-php<version>-<variant>` (`.exe` on Windows; `--out` to
 change the directory). static-php-cli builds for the machine it runs on, so build
 each platform on that platform.

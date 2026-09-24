@@ -208,7 +208,14 @@ class Q_WebServer_ExtensionsCtl
 		if ($short) return $cmds;
 		$root = dirname(__DIR__, 3);
 		$out = self::artifactPath($r, $o);
-		$cmds[] = (PHP_OS_FAMILY === 'Windows' ? '' : 'mkdir -p ' . $q(dirname($out)) . ' && ') . $q(PHP_BINARY) . ' -d phar.readonly=0 ' . $q($root . '/build-phar.php');
+		$mkdir = PHP_OS_FAMILY === 'Windows' ? 'mkdir ' . $q(dirname($out)) . ' 2>NUL & ' : 'mkdir -p ' . $q(dirname($out)) . ' && ';
+		// A full checkout rebuilds the phar from its sources first; the source
+		// kit has no designs/ or web/ to rebuild from, and ships the phar.
+		if (is_dir($root . '/designs') && is_file($root . '/build-phar.php')) {
+			$cmds[] = $mkdir . $q(PHP_BINARY) . ' -d phar.readonly=0 ' . $q($root . '/build-phar.php');
+		} else {
+			$cmds[] = rtrim($mkdir, ' &');
+		}
 		$cmds[] = $q($spc) . ' micro:combine ' . $q($root . '/bin/qbixserver.phar') . ' -O ' . $q($out);
 		return $cmds;
 	}
@@ -224,7 +231,7 @@ class Q_WebServer_ExtensionsCtl
 		$out = rtrim((string) ($o['out'] ?? 'dist'), '/\\');
 		$name = 'qbixserver-source-kit';
 		$files = array('bin/qbixserver.phar', 'build/extensions.json', 'build/extensions.schema.json',
-			'qbixconsole.php', 'qbixctl.php', 'build-phar.php', 'docs/requirements.md', 'docs/extensions.md', 'LICENSE');
+			'qbixconsole.php', 'qbixctl.php', 'docs/requirements.md', 'docs/extensions.md', 'LICENSE');
 		$m = Q_WebServer_Extensions::manifest();
 		$recipe = "# Building the server from this kit\n\n"
 			. "Requires PHP " . $m['php']['minimum'] . "+ and static-php-cli " . ($m['spc']['version'] ?? '') . " (https://static-php.dev).\n"
