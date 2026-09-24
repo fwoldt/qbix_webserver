@@ -421,12 +421,10 @@ class Q_WebServer_Http2_Hpack
 	 */
 	function resize($max)
 	{
-		// RFC 7541 6.3: an update above the limit this side advertised is a
-		// decoding error. It was honoured, letting a peer grow our table
-		// without bound.
-		if ($max > $this->advertisedMaxSize) {
-			throw new Exception("HPACK table size update $max above the advertised {$this->advertisedMaxSize}");
-		}
+		// No limit here: this is also how the ENCODER learns the peer's
+		// SETTINGS_HEADER_TABLE_SIZE, which may be anything (browsers send
+		// 65536). The advertised-size check applies only to a size update
+		// arriving inside a header block; see decode().
 		$this->maxSize = $max;
 		while ($this->size > $this->maxSize and count($this->dynamic)) {
 			$last = array_pop($this->dynamic);
@@ -490,8 +488,14 @@ class Q_WebServer_Http2_Hpack
 			}
 
 			if (($byte & 0xe0) === 0x20) {
-				// Dynamic table size update.
-				$this->resize(self::decodeInt($block, $pos, 5));
+				// Dynamic table size update. RFC 7541 6.3: above the limit
+				// this side advertised, it is a decoding error. It was
+				// honoured, letting a peer grow our table without bound.
+				$max = self::decodeInt($block, $pos, 5);
+				if ($max > $this->advertisedMaxSize) {
+					throw new Exception("HPACK table size update $max above the advertised {$this->advertisedMaxSize}");
+				}
+				$this->resize($max);
 				continue;
 			}
 

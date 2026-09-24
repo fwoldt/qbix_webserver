@@ -114,6 +114,14 @@ $threw = false;
 try { $h->decode("\x3f\xe2\x1f"); } catch (Exception $ex) { $threw = true; }   // size update to 4097
 check('a table resize above the advertised size is refused', $threw, true);
 
+// ...but only inside a header block. The encoder learns the PEER's table
+// size from its SETTINGS through resize(), and browsers send 65536: refusing
+// that there killed every browser's HTTP/2 connection (curl sends none).
+$h = new Q_WebServer_Http2_Hpack();
+$threw = false;
+try { $h->resize(65536); } catch (Exception $ex) { $threw = true; }
+check("a peer's SETTINGS_HEADER_TABLE_SIZE of 65536 is accepted for the encoder", $threw, false);
+
 $h = new Q_WebServer_Http2_Hpack();
 $ok = $h->decode("\x82\x86\x84\x41\x0f" . 'www.example.com');   // RFC 7541 C.3.1
 check('an ordinary header block still decodes', count($ok), 4);
