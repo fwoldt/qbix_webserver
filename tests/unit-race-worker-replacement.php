@@ -50,6 +50,12 @@ $a = isset($_GET["a"]) ? $_GET["a"] : "";
 if ($a === "retire" or ($a === "mix" and hexdec(substr(md5($t), 0, 2)) % 2)) {
 	Q_WebServer_Pool::retireAfterResponse("race test " . $t);
 }
+if ($a === "heavy") {
+	// Keep 2 MB for the life of the worker, so it is over a 1 MB ceiling
+	// whatever the server itself weighs (a fresh worker can be under 1 MB).
+	if (!class_exists("Held", false)) { class Held { static $d; } }
+	Held::$d = str_repeat("h", 2097152);
+}
 // A body whose size depends on the token, bigger than one 64 KB read, with
 // the token at both ends and in the middle.
 $n = 4000 + hexdec(substr(md5($t), 0, 3));
@@ -143,7 +149,7 @@ function assertPoolHealthy($name, $workers)
 // ── 1. ceiling=1: every worker replaced after every request ─────
 
 $port = rh_start('ceiling', array('Q' => array('webserver' => array('workerMemoryCeiling' => 1))), 3);
-list($pids, $secs) = runLoad('ceiling', $port, 'plain', 200, 20);
+list($pids, $secs) = runLoad('ceiling', $port, 'heavy', 200, 20);
 check('ceiling: requests were served by many distinct workers (replacement really happened)',
 	count($pids) > 150, true);
 $log = rh_log('ceiling');

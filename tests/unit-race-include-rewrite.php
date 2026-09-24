@@ -284,7 +284,12 @@ rh_bug("D3: a different-size rewrite of a transformed file within the same secon
 $plain = rh_start('plain', array('Q' => array('compat' => array('skipSourceCodeTransform' => true))), 1);
 list($a, $b) = sameSecond($plain, 'ctrlsame', versionSource(777777), versionSource(888888));
 check('control (compat off): the same-size same-second rewrite is served', array($a, $b), array(777777, 888888));
-list($a, $b) = sameSecond($plain, 'ctrlxform', versionSource(123123, true), versionSource(321321, true, true) . "\n//pad\n");
+// Without the compat layer header() is PHP's own, which cannot send once the
+// server has written to stdout: it warns, and where display_errors is on (a
+// stock php.ini-less build) the warning lands in the body. Silence it -- this
+// control is about which version is included, not about headers.
+$plainHeader = function ($src) { return str_replace("header(", "@header(", $src); };
+list($a, $b) = sameSecond($plain, 'ctrlxform', $plainHeader(versionSource(123123, true)), $plainHeader(versionSource(321321, true, true)) . "\n//pad\n");
 check('control (compat off): the different-size same-second rewrite is served', array($a, $b), array(123123, 321321));
 
 rh_finish();

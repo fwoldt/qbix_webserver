@@ -48,6 +48,15 @@ if ($a === "probe") {
 		"mem" => memory_get_usage()));
 	return;
 }
+if ($a === "hold") {
+	// Keep 2 MB for the life of the worker, so it is over a 1 MB ceiling
+	// whatever the server itself weighs: a fresh worker is under 1 MB on
+	// a lean build, and more than that with the compat layer loaded.
+	if (!class_exists("Held", false)) { class Held { static $d; } }
+	Held::$d = str_repeat("h", 2097152);
+	echo json_encode(array("pid" => getmypid(), "mem" => memory_get_usage()));
+	return;
+}
 if ($a === "open") { ob_start(); echo "OPEN"; return; }
 if ($a === "handler") {
 	// What Exponential does: install a method of a per-request object that
@@ -239,7 +248,7 @@ $cport = startServer('ceiling', array('Q' => array(
 $pids = array();
 $codes = array();
 for ($i = 0; $i < 4; ++$i) {
-	list($st, $b) = fetch('/index.php?a=probe', $cport);
+	list($st, $b) = fetch('/index.php?a=hold', $cport);
 	$codes[] = $st;
 	$j = json_decode($b, true);
 	if ($j) $pids[] = $j['pid'];

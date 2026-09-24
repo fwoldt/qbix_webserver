@@ -45,6 +45,9 @@ $a = $_GET["a"] ?? "";
 $t = preg_replace("/[^a-z0-9]/", "", $_GET["t"] ?? "");
 if ($a === "body") { $in = file_get_contents("php://input"); echo $t, " ", strlen($in), " ", md5($in); return; }
 if ($a === "big")  { mt_srand(42); $s = ""; for ($i = 0; $i < 3 * 1024; ++$i) $s .= md5((string) mt_rand()) . str_repeat("=", 992); echo $s; return; }
+// hold=1 keeps 2 MB for the life of the worker, so D is over its 1 MB ceiling
+// whatever the server itself weighs (a fresh worker can be under 1 MB).
+if (isset($_GET["hold"])) { if (!class_exists("Held", false)) { class Held { static $d; } } Held::$d = str_repeat("h", 2097152); }
 echo "OK ", $t;
 ');
 
@@ -120,8 +123,8 @@ $ok = 0; $wrong = array();
 for ($n = 0; $n < 10; ++$n) {
 	$s = stream_socket_client("tcp://127.0.0.1:$cport", $en, $es, 5);
 	stream_set_timeout($s, 1);
-	fwrite($s, "GET /index.php?t=pa$n HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"
-		. "GET /index.php?t=pb$n HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+	fwrite($s, "GET /index.php?hold=1&t=pa$n HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"
+		. "GET /index.php?hold=1&t=pb$n HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
 	$raw = ''; $until = microtime(true) + 4;
 	while (!feof($s) and microtime(true) < $until) {
 		$c = fread($s, 65536);
