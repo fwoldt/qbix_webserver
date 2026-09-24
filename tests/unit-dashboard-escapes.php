@@ -90,7 +90,13 @@ check('escapes inside <script> are left alone, where they are correct',
 // And the entities that replaced them are actually present, so a future
 // "tidy-up" that deletes them is caught rather than silently blanking the page.
 $dash = file_get_contents(__DIR__ . '/../src/Q/WebServer/Dashboard.php');
-check('the status line separates its counts', substr_count($dash, '&#183;') >= 3, true);
+// The cards that listed several counts on one dotted line now list them one
+// per row, so fewer separators remain; the ones that do must still be the
+// entity, on the lines that keep them.
+check('the connections line separates its counts with the entity',
+	strpos($dash, 'conn &#183; <span') !== false, true);
+check('...and so does the footer\'s documentation line',
+	strpos($dash, 'Documentation</a> &#183; Powered') !== false, true);
 check('the cards have a placeholder value', substr_count($dash, '&#8212;') >= 4, true);
 
 if ($fail) {
