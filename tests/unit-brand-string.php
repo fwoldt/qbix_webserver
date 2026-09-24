@@ -46,8 +46,11 @@ check('...and its default is the upstream name, not a fork\'s',
 
 check('the dashboard heading is not a literal any more',
 	strpos($dash, '>Qbix Server</h1>'), false);
+// The heading links to the dashboard itself, so it carries $brandHeader --
+// the brand wrapped in that link -- rather than the bare name.
 check('the dashboard heading interpolates the brand',
-	strpos($dash, '$brandName</h1>') !== false, true);
+	strpos($dash, '$brandHeader</h1>') !== false
+	and (bool) preg_match('/\$brandHeader = .*\$brand\b/', $dash), true);
 check('the dashboard <title> is not a literal',
 	strpos($dash, '<title>Qbix Server Dashboard'), false);
 check('the docs viewer calls brand()',
