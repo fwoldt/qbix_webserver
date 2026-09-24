@@ -749,7 +749,11 @@ class Q_WebServer_Pool
 		$_SERVER['QUERY_STRING'] = $req['query'] ?? '';
 		$_SERVER['SCRIPT_FILENAME'] = $req['scriptFilename'];
 		$_SERVER['SCRIPT_NAME'] = $req['scriptName'] ?? '/index.php';
-		$_SERVER['PHP_SELF'] = $req['scriptName'] ?? '/index.php';
+		$_pathInfo = (string) ($req['pathInfo'] ?? '');
+		$_SERVER['PHP_SELF'] = ($req['scriptName'] ?? '/index.php') . $_pathInfo;
+		$_SERVER['PATH_INFO'] = $_pathInfo;
+		$_SERVER['PATH_TRANSLATED'] = $_pathInfo !== ''
+			? rtrim((string) ($req['documentRoot'] ?? ''), '/') . $_pathInfo : $req['scriptFilename'];
 		$_SERVER['DOCUMENT_ROOT'] = $req['documentRoot'] ?? '';
 		// SERVER_NAME is the host, without the port. SERVER_PORT is the port.
 		//
@@ -1139,7 +1143,9 @@ class Q_WebServer_Pool
 		// Kept so a request can be sent again if its worker dies first.
 		$this->workerScripts[$index] = $scriptPath;
 		$this->workerBuffers[$index] = '';
-		$this->workerRequestHeaders[$index] = $parsed['headers'];
+		// With the method, which the response writer needs: a HEAD answered by a
+		// worker was sent its body, because the writer was never told it was HEAD.
+		$this->workerRequestHeaders[$index] = $parsed['headers'] + array('_method' => $parsed['method']);
 		// The reverse proxy cache needs the whole parsed request, not just
 		// the headers: it keys on host, path and query, and checks the
 		// method and the bypass cookies.
@@ -1171,6 +1177,11 @@ class Q_WebServer_Pool
 			'body'           => $parsed['body'],
 			'scriptFilename' => $scriptPath,
 			'scriptName'     => self::scriptName($scriptPath),
+			// script.php/extra/path: the part after the script, which
+			// splitPathInfo() found. It was never passed on, so a pooled script
+			// saw no PATH_INFO and PHP_SELF without it, and every framework URL
+			// of that shape (action.php/Module/action) dispatched as the bare script.
+			'pathInfo'       => isset($parsed['_pathInfo']) ? (string) $parsed['_pathInfo'] : '',
 			'documentRoot'   => rtrim(Q_WebServer::$rootDir ?? '', '/\\'),
 			// The port this request arrived on. It was read from the parent's
 			// own $_SERVER, which a command-line process does not fill in, so
@@ -1812,6 +1823,14 @@ class Q_WebServer_Pool
 	 * Get per-worker stats: PID, busy status, RSS memory.
 	 * Linux: /proc/$pid/statm. macOS: ps -o rss. Windows: tasklist.
 	 */
+	/** The live workers' pids, from memory. */
+	function pids()
+	{
+		$pids = array();
+		foreach ($this->workers as $w) $pids[] = $w['pid'];
+		return $pids;
+	}
+
 	function getWorkerStats()
 	{
 		$count = count($this->workers);
@@ -1849,6 +1868,9 @@ class Q_WebServer_Pool
 			// Per-worker detail is deliberately omitted: the UI does not use it and
 			// a list of hundreds would be built and sent on every tick.
 			'workers' => array(),
+			// The pids alone are free -- already in memory, no /proc read -- and
+			// tell a monitor (or a test) whether workers were replaced.
+			'pids' => $pids,
 			'count' => $count,
 			'target' => $this->targetSize,
 			'idle' => $this->idleCount(),

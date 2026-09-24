@@ -64,7 +64,10 @@ echo "\n═══ headers ═══\n";
 row('dup Host rejected',  st(raw($port,'GET','/hello.php',"Host: evil.com\r\n")), 400);
 row('bad header name',    st(raw($port,'GET','/hello.php',"Bad Header: x\r\n")), 400);
 row('dup Accept combined', st(raw($port,'GET','/hello.php',"Accept: text/html\r\nAccept: application/json\r\n")), 200);
-row('obs-fold continuation', st(raw($port,'GET','/hello.php',"X-Multi: a\r\n\tb\r\n")), 200);
+// Refused: RFC 9112 5.2 lets a server reject obsolete line folding, and it is
+// refused because a proxy that unfolds and a server that does not disagree
+// about where a header ends (see docs/security.md).
+row('obs-fold continuation', st(raw($port,'GET','/hello.php',"X-Multi: a\r\n\tb\r\n")), 400);
 $r = raw($port,'GET','/headers.php');
 row('custom header',      hdr($r,'X-Custom-Header') ?: 'MISSING', 'hello');
 row('Cache-Control kept', hdr($r,'Cache-Control') ?: 'MISSING', 'public, max-age=300');

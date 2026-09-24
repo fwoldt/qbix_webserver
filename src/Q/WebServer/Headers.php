@@ -105,9 +105,10 @@ class Q_WebServer_Headers
 		// any .php returned the whole page. Content-Length is left as-is --
 		// the spec requires it to describe what GET *would* have returned.
 		$reqMethod = strtoupper($response['_method'] ?? $requestHeaders['_method'] ?? '');
-		if ($reqMethod === 'HEAD') {
-			$body = '';
-		}
+		// The body is dropped only when the response is written, so
+		// Content-Length (computed from it) still says what GET returns.
+		$isHead = $reqMethod === 'HEAD';
+		if ($isHead) $requestHeaders['_method'] = 'HEAD';
 
 		// ── X-Accel-Redirect ─────────────────────────────
 		// PHP script says "serve this internal file instead"
@@ -233,7 +234,7 @@ class Q_WebServer_Headers
 			if (preg_match('/[\r\n]/', (string) $ch)) continue;
 			$out .= "Set-Cookie: $ch\r\n";
 		}
-		self::writeAll($client, $out . "\r\n" . $body);
+		self::writeAll($client, $out . "\r\n" . ($isHead ? '' : $body));
 		return true;
 	}
 
@@ -247,6 +248,7 @@ class Q_WebServer_Headers
 	 */
 	static function serveAccelFile($client, $fsPath, $phpHeaders, $requestHeaders)
 	{
+		$isHead = strtoupper($requestHeaders['_method'] ?? '') === 'HEAD';
 		clearstatcache(true, $fsPath);
 		$size = filesize($fsPath);
 		$mtime = filemtime($fsPath);
@@ -278,6 +280,7 @@ class Q_WebServer_Headers
 			$out .= Q_WebServer::headerLines($headers);
 			self::writeAll($client, $out . "\r\n");
 
+			if ($isHead) return;
 			$fp = fopen($compressed['path'], 'rb');
 			while (!feof($fp)) {
 				$data = fread($fp, 65536);
@@ -302,7 +305,7 @@ class Q_WebServer_Headers
 
 			$out = "HTTP/1.1 200 OK\r\n";
 			$out .= Q_WebServer::headerLines($headers);
-			self::writeAll($client, $out . "\r\n" . $body);
+			self::writeAll($client, $out . "\r\n" . ($isHead ? '' : $body));
 			return;
 		}
 
@@ -314,6 +317,7 @@ class Q_WebServer_Headers
 		$out .= Q_WebServer::headerLines($headers);
 		self::writeAll($client, $out . "\r\n");
 
+		if ($isHead) return;
 		$fp = fopen($fsPath, 'rb');
 		while (!feof($fp)) {
 			$data = fread($fp, 65536);

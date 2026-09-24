@@ -64,8 +64,8 @@ code() { curl -s -o /dev/null -w '%{http_code}' --max-time 12 "http://127.0.0.1:
 pids() {
     curl -s --max-time 8 "http://127.0.0.1:$PORT/Q/health" 2>/dev/null \
       | "$PHP" -r '$d=json_decode(stream_get_contents(STDIN),true);
-          $w=$d["workerStats"]["workers"]??[];
-          echo implode(",", array_map(fn($x)=>$x["pid"], $w));' 2>/dev/null
+          $p=$d["workerStats"]["pids"]??array_map(fn($x)=>$x["pid"], $d["workerStats"]["workers"]??[]);
+          sort($p); echo implode(",", $p);' 2>/dev/null
 }
 
 c=$(code)

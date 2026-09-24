@@ -305,8 +305,9 @@ class Q_WebServer_Dashboard
 	{
 		$now = time();
 		if (self::$cachedWs && ($now - self::$cachedWsTime) < 15) {
-			// Update idle count (cheap) even on cache hit
+			// Update the idle count and the pids (both cheap) even on a cache hit
 			self::$cachedWs['idle'] = $pool->idleCount();
+			if (method_exists($pool, 'pids')) self::$cachedWs['pids'] = $pool->pids();
 			return self::$cachedWs;
 		}
 		self::$cachedWs = $pool->getWorkerStats();
