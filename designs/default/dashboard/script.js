@@ -83,6 +83,13 @@ if(mo.length)d+='<div class="sev-warn">recommended: '+esc(mo.join(', '))+'</div>
 if(!mr.length&&!mo.length)d+='<div class="sev-ok">nothing missing</div>';
 if(x.hints&&x.hints.length)d+='<div title="'+esc(x.hints.join('\n'))+'"><code>'+esc(x.hints[0]).split(' ').map(function(t){return '<span class="nw">'+t+'</span>'}).join(' ')+'</code></div>';
 el('extd',d)})()}
+// Q shell: sessions and jobs now, and the latest commands; OS commands in amber.
+if(s.shell&&s.shell.enabled){(function(){var x=s.shell,c=document.getElementById('shellcard');if(c)c.hidden=false;
+el('shv',x.commands+'<span style="font-size:12px;font-weight:400"> cmds</span>');
+var d='<div>'+x.sessions+' session'+(x.sessions==1?'':'s')+' &#183; '+x.running+' running &#183; OS '+(x.allowSystem?'<span class="sev-warn">on</span>':'off')+(x.system?' ('+x.system+')':'')+'</div>';
+(x.recent||[]).forEach(function(r){d+='<div class="'+(r.system?'sev-warn':(r.exit?'sev-crit':''))+'" title="'+esc(r.time+' '+r.ip+' exit '+r.exit+' '+r.ms+'ms')+'"><code>'+esc(r.line)+'</code></div>'});
+if(!(x.recent||[]).length)d+='<div>no commands yet</div>';
+el('shd',d)})()}
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
 el('srps',(s.rps)+' avg req/s');
 // Requests served, not workers: "5 PHP / 7 static" was read as a worker count.
