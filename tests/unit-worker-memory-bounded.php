@@ -61,6 +61,11 @@ if ($a === "handler") {
 	echo "H";
 	return;
 }
+if ($a === "retire") {
+	Q_WebServer_Pool::retireAfterResponse("declares request constants");
+	echo "RETIRING";
+	return;
+}
 if ($a === "endall") { echo "lost"; while (@ob_end_clean()); echo "kept"; return; }
 echo str_repeat("<p>content</p>", 5000);
 if (isset($_GET["i"]) and $_GET["i"] % 3 == 0) { ob_start(); echo "tail"; }
@@ -183,6 +188,24 @@ check('...by the same worker', $afterH['pid'] ?? null, $before['pid'] ?? 'x');
 $grewH = (($afterH['mem'] ?? 0) - ($before['mem'] ?? 0)) / 1048576;
 check(sprintf('handlers holding 2 MB each were released (%.1f MB over 120 requests)', $grewH),
 	$grewH < 5.0, true);
+
+// ── The application can ask for its worker to be replaced ───────
+
+list(, $b) = fetch('/index.php?a=probe', $port);
+$p1 = json_decode($b, true);
+list($st, $body) = fetch('/index.php?a=retire', $port);
+check('a request that asks to retire its worker is answered', $st . ' ' . $body, '200 RETIRING');
+usleep(400000);
+list(, $b) = fetch('/index.php?a=probe', $port);
+$p2 = json_decode($b, true);
+check('...and the next request is served by a fresh worker', ($p2['pid'] ?? 0) !== ($p1['pid'] ?? 0)
+	and !empty($p2['pid']), true);
+list(, $b) = fetch('/index.php?a=probe', $port);
+$p3 = json_decode($b, true);
+check('...which is not itself retired', $p3['pid'] ?? null, $p2['pid'] ?? 'x');
+check('...and the reason is logged',
+	(bool) preg_match('/replaced after \d+ requests: asked by the application: declares request constants/',
+		(string) @file_get_contents("$base/steady.log")), true);
 
 // ── A worker past its ceiling is replaced ───────────────────────
 

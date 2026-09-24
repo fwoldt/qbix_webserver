@@ -698,7 +698,10 @@ class Q_WebServer_Pool
 		// parent -- which also logs why, so a leak is named the first time it
 		// happens instead of being found as a machine out of memory.
 		$recycle = '';
-		if (!Q_WebServer_Capture::balanced()) {
+		if (self::$retireReason !== '') {
+			$recycle = 'asked by the application: ' . self::$retireReason;
+			self::$retireReason = '';
+		} elseif (!Q_WebServer_Capture::balanced()) {
 			$recycle = 'output buffers did not return to the capture buffer'
 				. ' (level ' . ob_get_level() . ')';
 		} else {
@@ -720,6 +723,34 @@ class Q_WebServer_Pool
 			$cookies = (array) Q_WebServer_State::cookieHeaders();
 		}
 		return compact('status', 'body', 'headers', 'cookies', 'recycle');
+	}
+
+	/** Why the application asked for this worker to be replaced, or ''. */
+	protected static $retireReason = '';
+
+	/**
+	 * Ask for the worker serving this request to be replaced after it
+	 * answers.
+	 *
+	 * For code that cannot run twice in one process: an application that
+	 * declares constants from the request, or declares functions that depend
+	 * on it, can be served correctly exactly once per worker. The request is
+	 * answered normally; the parent then retires the worker before giving it
+	 * another request, forks a fresh one, and logs the reason. Outside a
+	 * pool worker -- a CLI script, the in-process server -- it does nothing.
+	 *
+	 *     if (class_exists('Q_WebServer_Pool', false)) {
+	 *         Q_WebServer_Pool::retireAfterResponse('declares request constants');
+	 *     }
+	 *
+	 * @method retireAfterResponse
+	 * @static
+	 * @param {string} $reason for the log
+	 */
+	static function retireAfterResponse($reason)
+	{
+		$reason = trim(preg_replace('/\s+/', ' ', (string) $reason));
+		self::$retireReason = $reason !== '' ? substr($reason, 0, 200) : 'no reason given';
 	}
 
 	/**

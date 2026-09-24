@@ -125,6 +125,20 @@ end, as PHP does at the end of a request. Its own statics are exempt from the
 snapshot restore -- restored to the parent's "no buffer yet", every request
 would open another and the leak would be back.
 
+## Code that can run only once per process
+
+Some application code cannot run twice in one process -- it defines
+constants from the request, or declares functions that depend on it. It can
+ask for its worker to be replaced after it answers:
+
+    if (class_exists('Q_WebServer_Pool', false)) {
+        Q_WebServer_Pool::retireAfterResponse('defines request constants');
+    }
+
+The request is answered normally; the parent retires the worker before its
+next request, forks a clean one, and logs
+`worker N replaced after M requests: asked by the application: ...`.
+
 ## A worker that grows is replaced
 
 Memory that grows per request is not something to find by watching a graph. So
