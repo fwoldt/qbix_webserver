@@ -380,13 +380,20 @@ class Q_WebServer_Http2_Connection
 			// immediately resets, over and over, extracts work at a rate no
 			// concurrency limit notices, because nothing is ever concurrent.
 			//
-			// Counted rather than rate-limited: a legitimate client resets
-			// streams occasionally -- a navigation away, an aborted fetch --
-			// and the shape that matters is thousands of them on one
-			// connection, not their timing.
+			// The shape that matters is the RATIO: an attack cancels nearly
+			// every stream it opens; a browser cancels a fraction -- whatever
+			// was still in flight when the visitor reloaded or navigated
+			// away. This counted resets alone, over the connection's whole
+			// life, so a browser reusing one connection across a few reloads
+			// of a page with a hundred assets passed 256, got GOAWAY, and
+			// every image and script still loading was aborted: an admin
+			// page without its header or sub-items in Firefox, a page or two
+			// after every sign-in. Refused now only past the count AND when
+			// most streams opened here were reset.
 			if (isset($this->streams[$stream])) {
 				++$this->streamsReset;
-				if ($this->streamsReset > $this->limits['resetStreams']) {
+				if ($this->streamsReset > $this->limits['resetStreams']
+					and $this->streamsReset * 2 > $this->streamsOpened) {
 					$this->goaway($F::ENHANCE_YOUR_CALM);
 					return false;
 				}
@@ -941,6 +948,15 @@ class Q_WebServer_Http2_Connection
 	function goaway($error = 0)
 	{
 		if ($this->closed) return;
+
+		// Said in the log whenever a connection is ended for cause. A
+		// protective GOAWAY looks, from the browser, like images and scripts
+		// failing at random; without this line nothing on the server side
+		// showed that it had happened at all.
+		if ($error !== 0) {
+			fwrite(STDERR, sprintf("  http2: GOAWAY error %d after %d streams (%d reset by the peer), %d still open\n",
+				$error, $this->streamsOpened, $this->streamsReset, count($this->streams)));
+		}
 
 		// Tell whoever is waiting. GOAWAY is for the other implementation, not
 		// for the person watching an empty window, so any stream still open

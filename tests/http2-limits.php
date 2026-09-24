@@ -104,6 +104,20 @@ for ($i = 1; $i <= 200 and $alive; $i += 2) {
 }
 check('opening and cancelling streams is bounded', $alive, false);
 
+// ...but a browser that cancels a fraction of what it opens -- what was still
+// loading when the visitor reloaded -- is not an attack, however many reloads
+// one connection sees. Counting resets alone ended such a connection after a
+// few reloads of a page with a hundred assets.
+$conn = connection($out, array('resetStreams' => 16, 'concurrentStreams' => 1024));
+$alive = true;
+for ($i = 1, $n = 0; $n < 300 and $alive; $i += 2, ++$n) {
+	$alive = $conn->feed($F::build($F::HEADERS, $F::FLAG_END_HEADERS, $i, headerBlock()));
+	if ($alive and $n % 4 === 0) {
+		$alive = $conn->feed($F::build($F::RST_STREAM, 0, $i, $F::uint32(8)));
+	}
+}
+check('a browser cancelling a quarter of its streams over many reloads keeps its connection', $alive, true);
+
 // ── 6. Frames that oblige an answer ──────────────────────────────────────
 $conn = connection($out, array('reflexFrames' => 32));
 $alive = true;
