@@ -60,6 +60,8 @@ argument only when that does not start with a dash, so `--open` (whose value is
 optional) and `--root --debug` mean what they always did: give an optional value with
 `=`, as in `--open=/admin`.
 
+Every option and command of the three is listed in [console.md](console.md).
+
 ## 🔨 Building
 
 ### Build the PHAR

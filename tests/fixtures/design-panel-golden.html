@@ -161,9 +161,16 @@ input:focus,select:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3p
   .top{padding-top:calc(16px + env(safe-area-inset-top))}
   body{padding-bottom:env(safe-area-inset-bottom)}
 }
+.top{flex-wrap:wrap;gap:8px 16px}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;font-size:11px;min-width:0}
+.qnav a{color:var(--dim);text-decoration:none;padding:2px 9px;border:1px solid rgba(255,255,255,.08);border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:#fff;border-color:var(--ac2)}
+.qnav a[aria-current=page]{color:var(--ac2);background:var(--glow)}
+@media(max-width:768px){.top .qnav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}
 </style></head><body>
 <div class="top">
   <h1><img src="/Q/logo.png" alt="" style="width:24px;height:auto;vertical-align:middle;margin-right:6px">Qbix Server</h1>
+  <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel" aria-current="page">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
   <div class="status"><span class="pulse"></span> Running</div>
 </div>
 <div class="tabs">

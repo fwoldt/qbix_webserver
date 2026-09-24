@@ -156,3 +156,9 @@ input:focus,select:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3p
   .top{padding-top:calc(16px + env(safe-area-inset-top))}
   body{padding-bottom:env(safe-area-inset-bottom)}
 }
+.top{flex-wrap:wrap;gap:8px 16px}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;font-size:11px;min-width:0}
+.qnav a{color:var(--dim);text-decoration:none;padding:2px 9px;border:1px solid rgba(255,255,255,.08);border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:#fff;border-color:var(--ac2)}
+.qnav a[aria-current=page]{color:var(--ac2);background:var(--glow)}
+@media(max-width:768px){.top .qnav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}

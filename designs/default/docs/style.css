@@ -25,3 +25,8 @@ main li{margin:4px 0}
 main hr{border:none;border-top:1px solid #30363d;margin:24px 0}
 .back{display:inline-block;margin-bottom:16px;font-size:13px;color:#8b949e}
 @media(max-width:700px){nav{display:none}main{padding:20px 16px}}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:20px;font-size:12px;line-height:1.5}
+.qnav a{color:#8b949e;padding:2px 10px;border:1px solid #30363d;border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:#c9d1d9;border-color:#58a6ff;text-decoration:none}
+.qnav a[aria-current=page]{color:#58a6ff;background:#161b22}
+main{min-width:0;overflow-wrap:anywhere}

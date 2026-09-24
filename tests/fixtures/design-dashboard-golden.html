@@ -58,7 +58,12 @@ transition:background .1s}
 .room{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
 .room .n{font-family:'SF Mono',monospace;color:var(--pur)}
 .log-wrap{max-height:50vh;overflow-y:auto;overflow-anchor:none}.le.lh{font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;font-size:10px;border-bottom:1px solid rgba(128,128,128,.22);position:sticky;top:0;background:var(--bg,#111);z-index:1}.le.lh span{color:inherit}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;font-size:11px}
+.qnav a{color:var(--dim);text-decoration:none;padding:2px 9px;border:1px solid var(--bdr);border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:var(--txt);border-color:var(--ac)}
+.qnav a[aria-current=page]{color:var(--ac);background:var(--sfc)}
 </style></head><body>
+<div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard" aria-current="page">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
 <h1><span class="dot"></span><i>brandHeader</i> {{not a placeholder}} \ $x</h1>
 <div class="sub" id="sub"></div>
 

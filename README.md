@@ -56,16 +56,21 @@ You can also package your entire app — code, assets, SQLite database — into 
 | 🏎️ | [Why Not php-fpm?](docs/why.md) | COW memory model, comparison with Swoole and FrankenPHP |
 | 🔐 | [HTTPS & Certificates](docs/https.md) | Your own certificates (files, archives, .p12), Let's Encrypt built in, self-signed fallback, live renewal |
 | 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Cache-Tree, X-Accel-Redirect, ETag |
+| 🗃️ | [Response Cache](docs/cache.md) | What is kept and for how long, the generation marker, every setting |
 | 🛡️ | [Security](docs/security.md) | What is refused and why: document-root containment, request framing, HTTP/2 frame validation, header injection |
 | 🌐 | [HTTP](docs/http.md) | Fork-per-request mode, request lifecycle |
 | 🔌 | [WebSocket & Rooms](docs/websocket.md) | Process per connection, rooms, Socket.IO, SSE, chat example |
 | 🛤️ | [Routing](docs/routing.md) | Clean URLs, .htaccess, DirectoryIndex |
 | 📂 | [PHP Framework](docs/framework.md) | The micro-framework: handlers, events, Q classes |
 | ⚙️ | [Configuration](docs/configuration.md) | JSON config, CLI options, presets |
+| 🗂️ | [Configuration Layout](docs/layout.md) | `/etc/qbix` laid out like `/etc/apache2`, load order, overlays, distributions |
+| ⌨️ | [Console & Command Line](docs/console.md) | `qbixserver.php` options, `qbixconsole` commands, `qbixctl`, option styles |
 | 📦 | [Running & Building](docs/running.md) | Source, phar, binary. Building static binaries. Requirements |
 | 📀 | [Binaries & Signing](docs/binaries.md) | Pack apps, manage like zip, ECDSA M-of-N signing, Rekor, platform signing |
 | 🏗️ | [Architecture](docs/architecture.md) | Persistent workers, COW, execution model, mental model, benchmarks |
+| 🏭 | [Workers & Pool](docs/workers.md) | Pool size, static and dynamic pools, when a worker is replaced, reload |
 | 📊 | [Dashboard & Panel](docs/dashboard.md) | Live stats, control panel tabs |
+| 🎨 | [Designs](docs/designs.md) | Restyle the dashboard, panel, docs, listing and error pages from `designs/` |
 | 🚀 | [Deploy & Federation](docs/deploy.md) | Rsync deploy, cluster replication, inter-server trust |
 | 🔍 | [API Discovery](docs/api-discovery.md) | OpenAPI, MCP, qbix.json, HTTP/2 |
 | 🧩 | [Compatibility](docs/compatibility.md) | SAPI emulation, 28 shimmed functions, class ownership, tests |

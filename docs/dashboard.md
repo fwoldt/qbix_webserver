@@ -19,6 +19,19 @@ Open `http://localhost/Q/dashboard` in your browser for a real-time server dashb
 | `/Q/dashboard` | HTML | Browser — the visual dashboard |
 | `/Q/health` | JSON | Load balancers, uptime monitors (lightweight) |
 | `/Q/stats` | JSON | Monitoring systems — full stats payload |
+| `/Q/metrics` | Text | Prometheus scrapers — request, latency, worker and memory figures |
+| `/Q/phpinfo` | HTML | PHP's own report: version, extensions, ini settings |
+
+The dashboard, the control panel and the documentation each carry a toolbar near
+the top — Dashboard, Control Panel, Documentation, PHP Info, Health and Metrics —
+with the current view marked, so each view is a click from the others.
+
+The dashboard, `/Q/stats`, `/Q/metrics` and `/Q/phpinfo` are for an admin: they
+answer requests from this machine, and from elsewhere only with the dashboard token
+or a control panel session (or when `Q.dashboard.remote` is set). `/Q/phpinfo`
+shows the server process's environment, so from elsewhere it always needs the
+credential. `/Q/health` answers anyone with
+`{"status":"ok"}` and gives the figures to an admin only.
 
 The `/Q/stats` JSON includes everything the dashboard shows, plus `sparkline` (60 data points), `topPaths`, `activeRooms`, `statusCodes` breakdown, and `cache` stats. Feed it to Grafana, Datadog, or your own monitoring.
 

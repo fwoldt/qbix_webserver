@@ -35,17 +35,18 @@ main li{margin:4px 0}
 main hr{border:none;border-top:1px solid #30363d;margin:24px 0}
 .back{display:inline-block;margin-bottom:16px;font-size:13px;color:#8b949e}
 @media(max-width:700px){nav{display:none}main{padding:20px 16px}}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:20px;font-size:12px;line-height:1.5}
+.qnav a{color:#8b949e;padding:2px 10px;border:1px solid #30363d;border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:#c9d1d9;border-color:#58a6ff;text-decoration:none}
+.qnav a[aria-current=page]{color:#58a6ff;background:#161b22}
+main{min-width:0;overflow-wrap:anywhere}
 </style></head><body>
 <nav>
 <a class="logo" href="/Q/docs">⚡ <i>brand</i> {{x}} \ $y &amp;</a>
 <div id="nav-links"></div>
-<div style="margin-top:24px;padding-top:16px;border-top:1px solid #30363d">
-<a href="/Q/dashboard">Dashboard</a>
-<a href="/Q/panel">Control Panel</a>
-<a href="/Q/health">Health</a>
-</div>
 </nav>
-<main id="content"><p>Loading...</p></main>
+<main><div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs" aria-current="page">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+<div id="content"><p>Loading...</p></div></main>
 <script>
 var docTitles = {
   "README.md": "Overview",
@@ -56,7 +57,18 @@ var docTitles = {
   "routing.md": "Routing",
   "framework.md": "PHP Framework",
   "configuration.md": "Configuration",
+  "layout.md": "Configuration Layout",
+  "console.md": "Console & Command Line",
   "running.md": "Running & Building",
+  "https.md": "HTTPS & Certificates",
+  "security.md": "Security",
+  "cache.md": "Response Cache",
+  "workers.md": "Workers & Pool",
+  "designs.md": "Designs",
+  "binaries.md": "Binaries & Signing",
+  "migrate-nginx.md": "Migrate from nginx",
+  "migrate-apache.md": "Migrate from Apache",
+  "migrate-caddy.md": "Migrate from Caddy",
   "architecture.md": "Architecture",
   "dashboard.md": "Dashboard & Panel",
   "deploy.md": "Deploy & Federation",
@@ -75,10 +87,16 @@ async function init() {
   var nav = document.getElementById("nav-links");
   var html = "";
   if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
-  var sections = {"Getting Started":["why.md","running.md","configuration.md"],
-    "Features":["headers.md","http.md","websocket.md","routing.md","framework.md"],
-    "Operations":["architecture.md","dashboard.md","deploy.md","api-discovery.md"],
+  var sections = {"Getting Started":["why.md","running.md","configuration.md","layout.md","console.md"],
+    "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
+    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","deploy.md","binaries.md","api-discovery.md"],
+    "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
     "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};
+  // A page in docs/ that no section names is listed under "More", so a new
+  // page is reachable before anyone files it.
+  var listed = [].concat.apply([], Object.keys(sections).map(function(k){return sections[k]}));
+  var more = r.files.filter(function(f){return listed.indexOf(f) === -1}).sort();
+  if (more.length) sections["More"] = more;
   for (var sec in sections) {
     html += "<h2>"+sec+"</h2>";
     sections[sec].forEach(function(f) {
@@ -98,6 +116,8 @@ async function load(file) {
   // Fix relative links: [text](docs/foo.md) -> onclick load
   md = md.replace(/\]\(docs\/([^)]+\.md)\)/g, "](#$1)");
   md = md.replace(/\]\(\.\.\/README\.md\)/g, "](#README.md)");
+  // ...and a page's links to its siblings: [text](reset.md#section) -> the page
+  md = md.replace(/\]\(([A-Za-z0-9._-]+\.md)(#[^)]*)?\)/g, "](#$1)");
   document.getElementById("content").innerHTML = marked.parse(md);
   // Fix anchor clicks
   document.querySelectorAll("#content a").forEach(function(a) {

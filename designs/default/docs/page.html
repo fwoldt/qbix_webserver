@@ -12,11 +12,7 @@ s=s.replace(/\n{2,}/g,"</p><p>");return "<p>"+s+"</p>"}}}</script>
 <nav>
 <a class="logo" href="/Q/docs">⚡ {{brand}}</a>
 <div id="nav-links"></div>
-<div style="margin-top:24px;padding-top:16px;border-top:1px solid #30363d">
-<a href="/Q/dashboard">Dashboard</a>
-<a href="/Q/panel">Control Panel</a>
-<a href="/Q/health">Health</a>
-</div>
 </nav>
-<main id="content"><p>Loading...</p></main>
+<main><div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs" aria-current="page">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+<div id="content"><p>Loading...</p></div></main>
 <script>{{@script.js}}</script></body></html>
