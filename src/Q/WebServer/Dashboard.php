@@ -640,7 +640,7 @@ transition:background .1s}
 .wd{width:6px;height:6px;border-radius:50%;background:var(--red)}.wd.on{background:var(--grn)}
 .room{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
 .room .n{font-family:'SF Mono',monospace;color:var(--pur)}
-.log-wrap{max-height:50vh;overflow-y:auto;display:flex;flex-direction:column-reverse}.le.lh{font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;font-size:10px;border-bottom:1px solid rgba(128,128,128,.22);position:sticky;top:0;background:var(--bg,#111);z-index:1}.le.lh span{color:inherit}
+.log-wrap{max-height:50vh;overflow-y:auto;overflow-anchor:none}.le.lh{font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;font-size:10px;border-bottom:1px solid rgba(128,128,128,.22);position:sticky;top:0;background:var(--bg,#111);z-index:1}.le.lh span{color:inherit}
 </style></head><body>
 <h1><span class="dot"></span>$brandHeader</h1>
 <div class="sub" id="sub"></div>
@@ -807,6 +807,20 @@ if(b<1024)return b+' B';
 if(b<1048576)return(b/1024).toFixed(1)+' KB';
 return(b/1048576).toFixed(1)+' MB';
 }
+// A request's memory: the pool worker's heap peak while it ran the script.
+// Static files and cache hits ran no PHP, so they have none to show.
+function rowMem(e){var b=+e.mem||0;return(e.kind==='php'&&b>0)?fmtMem(b):'\u2014'}
+
+// Put a row at the top of the list; the newest entry is always first.
+// Never scrolls by itself: at the top the reader sees the new row; scrolled
+// down to older rows, scrollTop grows by the inserted height so what they are
+// reading stays where it was. The oldest rows are dropped past the cap.
+function insertRow(list,wrap,row,max){
+var top=wrap?wrap.scrollTop:0;
+list.insertBefore(row,list.firstChild);
+if(wrap&&top>0)wrap.scrollTop=top+(row.offsetHeight||0);
+while(list.children.length>max)list.removeChild(list.lastChild);
+}
 
 var K={php:'\u{1F418}',html:'\u{1F310}',css:'\u{1F3A8}',js:'\u26A1',img:'\u{1F5BC}',
 font:'\u{1F524}',json:'\u{1F4CB}',xml:'\u{1F4C4}',doc:'\u{1F4D1}',media:'\u{1F3AC}',file:'\u{1F4E6}'};
@@ -825,8 +839,7 @@ if(!vis)d.style.display='none';
 d.setAttribute('data-sid',e.sid||'');
 d.setAttribute('data-sc',e.status);
 d.innerHTML=mkRow(e);
-L.insertBefore(d,L.firstChild);
-while(L.children.length>MAX_LOG)L.removeChild(L.lastChild);
+insertRow(L,LW,d,MAX_LOG);
 // Track session
 if(e.sid&&!knownSids[e.sid]){knownSids[e.sid]=1;addSidOption(e.sid)}
 // Track status code
@@ -841,7 +854,7 @@ var uri=esc(e.uri);
 if(e.method==='GET'){uri='<a href="'+BASE+esc(e.uri)+'" target="_blank">'+uri+'</a>'}
 return '<span class="lk">'+k+'</span><span class="lt">'+e.time+'</span><span class="ls '+c+'">'+e.status+
 '</span><span class="lm">'+e.method+'</span><span class="lu">'+uri+
-'</span><span class="ld">'+(e.ms==null?'':(+e.ms).toFixed(1))+'ms</span><span class="lmem">'+fmtMem(e.mem)+'</span>';
+'</span><span class="ld">'+(e.ms==null?'':(+e.ms).toFixed(1))+'ms</span><span class="lmem">'+rowMem(e)+'</span>';
 }
 
 function togglePause(){
@@ -896,7 +909,10 @@ r.style.display=vis?'':'none';
 }
 }
 
-U(S);R.forEach(A);
+// R arrives newest-first; insert oldest first so the newest ends on top.
+function renderRecent(list){for(var i=list.length-1;i>=0;i--)A(list[i])}
+
+U(S);renderRecent(R);
 
 // 1-second tickers for uptime + sparkline
 setInterval(function(){tickUp();tickSpark()},1000);

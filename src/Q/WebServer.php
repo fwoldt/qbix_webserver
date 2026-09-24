@@ -1485,7 +1485,7 @@ class Q_WebServer
 			// in parseRequest(), defaulting to 127.0.0.1
 			$ip = '127.0.0.1';
 		} else {
-			$ip = $peer ? explode(':', $peer)[0] : '0.0.0.0';
+			$ip = self::peerIp($client);
 		}
 		self::$clientInfo[$key] = array(
 			'ip' => $ip,
@@ -1793,8 +1793,11 @@ class Q_WebServer
 			return;
 		}
 
-		// Resolve proxy headers for real client IP
-		$directIp = self::$clientInfo[$key]['ip'] ?? '0.0.0.0';
+		// Resolve proxy headers for real client IP. A TLS connection is
+		// accepted by a path that never fills clientInfo, so every HTTPS
+		// visitor was 0.0.0.0 -- in the access log, in REMOTE_ADDR and to
+		// the admin surface's local/remote check. Asked of the socket then.
+		$directIp = self::$clientInfo[$key]['ip'] ?? self::peerIp($client);
 		$parsed['clientIp'] = Q_WebServer_Proxy::clientIp($directIp, $parsed['headers']);
 		$parsed['_remoteAddr'] = $parsed['clientIp'];
 		$peer = stream_socket_get_name($client, true);
@@ -1812,7 +1815,6 @@ class Q_WebServer
 
 		try {
 			$savedRoot = self::$rootDir;
-			$memBefore = memory_get_usage();
 			$keepOpen = self::handleRequest($client, $parsed);
 		} catch (\Throwable $e) {
 			// Never let a request crash the event loop
@@ -1850,7 +1852,11 @@ class Q_WebServer
 		// Skip if request was delegated to a forked child (-1)
 		// The child's exit status is recorded in the SIGCHLD handler
 		if (self::$lastStatus !== -1) {
-			$memUsed = max(0, memory_get_usage() - $memBefore);
+			// No memory figure here. What was measured was the parent's own
+			// heap moving while it served a static file, a cache hit or the
+			// answer from a PHP subprocess -- not memory any script used.
+			// Pooled PHP reports the worker's peak through recordCompleted().
+			$memUsed = 0;
 			$bytes = self::$lastBytes; // the reset below precedes the log line
 			Q_WebServer_Dashboard::recordRequest(
 				$parsed['method'], $parsed['uri'], self::$lastStatus, $ms, $bytes,
@@ -5308,14 +5314,15 @@ HTML;
 	 * @param {integer} $bytes Body bytes handed to the client
 	 * @param {float} $ms
 	 * @param {boolean} [$isPhp=true]
+	 * @param {integer} [$memUsed=0] The worker's heap peak for the request, in bytes; 0 when unknown
 	 */
-	static function recordCompleted($parsed, $status, $bytes, $ms, $isPhp = true)
+	static function recordCompleted($parsed, $status, $bytes, $ms, $isPhp = true, $memUsed = 0)
 	{
 		$status = (int) $status;
 		$bytes = (int) $bytes;
 		Q_WebServer_Dashboard::recordRequest(
 			$parsed['method'] ?? 'GET', $parsed['uri'] ?? '/', $status, $ms, $bytes,
-			$isPhp, '', 0, $parsed['cookies'] ?? array()
+			$isPhp, '', (int) $memUsed, $parsed['cookies'] ?? array()
 		);
 		if (class_exists('Q_WebServer_Metrics', false)) {
 			Q_WebServer_Metrics::recordRequest(
@@ -5609,6 +5616,32 @@ HTML;
 	 * @return {string}
 	 */
 	static $brand = null;
+
+	/**
+	 * The address at the far end of a connection, without the port.
+	 *
+	 * "203.0.113.9:51000" and "[2001:db8::1]:51000" alike. It used to be
+	 * explode(':')[0], which turned any IPv6 peer into "[".
+	 *
+	 * @method peerIp
+	 * @static
+	 * @param {resource} $client
+	 * @return {string} '0.0.0.0' when the socket cannot say
+	 */
+	static function peerIp($client)
+	{
+		$peer = is_resource($client) ? @stream_socket_get_name($client, true) : false;
+		if (!is_string($peer) or $peer === '') return '0.0.0.0';
+		if ($peer[0] === '[') {
+			$end = strpos($peer, ']');
+			return $end === false ? '0.0.0.0' : substr($peer, 1, $end - 1);
+		}
+		$colons = substr_count($peer, ':');
+		if ($colons === 0) return $peer;
+		if ($colons === 1) return substr($peer, 0, strpos($peer, ':'));
+		// Unbracketed IPv6 with a port: the port follows the last colon.
+		return substr($peer, 0, strrpos($peer, ':'));
+	}
 
 	/**
 	 * Whether a request comes from this machine.

@@ -543,11 +543,16 @@ class Q_WebServer_Pool
 				continue;
 			}
 
-			// Execute the PHP script
+			// Execute the PHP script. The heap peak is reset first so what
+			// is read afterwards is this request's own high-water mark, for
+			// the dashboard's live request list. Without the reset (PHP < 8.2)
+			// the peak would span the whole process, so nothing is reported.
+			$canPeak = function_exists('memory_reset_peak_usage');
+			if ($canPeak) memory_reset_peak_usage();
 			$resp = self::executeScript($req);
 			self::writeMsg($socket, $resp['status'], $resp['body'],
 				$resp['headers'], $resp['cookies'] ?? array(),
-				$resp['recycle'] ?? '');
+				$resp['recycle'] ?? '', $canPeak ? memory_get_peak_usage() : 0);
 			$handled++;
 
 			if (!$octane) {
@@ -1299,6 +1304,13 @@ class Q_WebServer_Pool
 			unset($response['_cacheMessages']);
 		}
 
+		// The worker's heap peak is for the dashboard, not the client.
+		$mem = 0;
+		if ($response and isset($response['_mem'])) {
+			$mem = max(0, (int) $response['_mem']);
+			unset($response['_mem']);
+		}
+
 		// A worker's request to be replaced is for the pool, not the client.
 		$recycleReason = '';
 		if ($response and isset($response['_recycle'])) {
@@ -1311,7 +1323,7 @@ class Q_WebServer_Pool
 		if ($response && $client && is_resource($client)) {
 			$reqHeaders['_keepAlive'] = false;
 			$this->workerRequestHeaders[$index] = $reqHeaders;
-			$this->sendHttp($client, $response, $index);
+			$this->sendHttp($client, $response, $index, $mem);
 			Q_WebServer::closeClient((int) $client);
 		}
 
@@ -1458,7 +1470,7 @@ class Q_WebServer_Pool
 	 */
 	protected $workerStarted = array();
 
-	protected function sendHttp($client, $resp, $index)
+	protected function sendHttp($client, $resp, $index, $mem = 0)
 	{
 		$responder = $this->workerResponders[$index] ?? null;
 		if ($responder) {
@@ -1481,7 +1493,7 @@ class Q_WebServer_Pool
 				$resp['status'] ?? 200,
 				strlen($resp['body'] ?? ''),
 				(microtime(true) - $started) * 1000,
-				true
+				true, $mem
 			);
 		}
 		// Offer the response to the cache. Every other dispatch path does
@@ -1898,7 +1910,7 @@ class Q_WebServer_Pool
 	}
 
 	protected static function writeMsg($sock, $status, $body, $headers,
-		$cookies = array(), $recycle = '')
+		$cookies = array(), $recycle = '', $mem = 0)
 	{
 		// json_encode() returns false on bytes that are not valid UTF-8, and
 		// strlen(false) is 0, so a binary body used to go out as a length
@@ -1916,6 +1928,11 @@ class Q_WebServer_Pool
 		if ($recycle !== '') {
 			$_recycle = $recycle;
 			$fields[] = '_recycle';
+		}
+		// The request's heap peak, when the worker could measure it.
+		if ($mem > 0) {
+			$_mem = (int) $mem;
+			$fields[] = '_mem';
 		}
 		$j = json_encode(compact($fields));
 		if ($j === false) {
