@@ -1,0 +1,3 @@
+{"label": "Solarized dark", "background": "#002b36", "foreground": "#93a1a1", "dim": "#586e75", "accent": "#268bd2", "cursor": "#93a1a1", "selection": "rgba(38,139,210,.3)", "prompt": "#859900", "error": "#dc322f", "border": "rgba(147,161,161,.2)", "opacity": 0.95,
+ "black": "#073642", "red": "#dc322f", "green": "#859900", "yellow": "#b58900", "blue": "#268bd2", "magenta": "#d33682", "cyan": "#2aa198", "white": "#eee8d5",
+ "brightblack": "#586e75", "brightred": "#cb4b16", "brightgreen": "#93a1a1", "brightyellow": "#839496", "brightblue": "#657b83", "brightmagenta": "#6c71c4", "brightcyan": "#93a1a1", "brightwhite": "#fdf6e3"}

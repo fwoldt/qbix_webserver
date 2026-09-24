@@ -2184,6 +2184,10 @@ class Q_WebServer
 						'Cache-Control' => 'public, max-age=86400'));
 			}
 		}
+		// The shell's terminal files (public: they run nothing).
+		if (strpos($path, '/Q/shell/') === 0 && ($shellAsset = Q_WebServer_Shell::asset($path)) !== null) {
+			return $shellAsset;
+		}
 		if ($path === '/Q/docs' || $path === '/Q/docs/') {
 			return array('status' => 200,
 				'body' => self::renderDocsViewer(),
@@ -2230,7 +2234,7 @@ class Q_WebServer
 			if (!self::adminAllowed($parsed, true)) return self::adminForbidden();
 			ob_start();
 			phpinfo();
-			$html = self::phpinfoHtml(ob_get_clean());
+			$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
 			return array('status' => 200, 'body' => $html,
 				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
 		}
@@ -2772,6 +2776,19 @@ class Q_WebServer
 
 		// 3. Dashboard + Panel + WebSocket + Health (/Q/*)
 		if (strpos($path, '/Q/') === 0) {
+			// The shell's terminal: its own socket, its own checks (Origin, a
+			// signed-in panel session; see Q_WebServer_Shell_Api::upgrade()).
+			if ($path === '/Q/ws/shell') {
+				$r = Q_WebServer_Shell_Api::upgrade($client, $parsed);
+				if ($r === true) return true;
+				self::sendResponse($client, $r[0], $r[1], 'text/plain; charset=utf-8');
+				return false;
+			}
+			if (strpos($path, '/Q/shell/') === 0 && ($shellAsset = Q_WebServer_Shell::asset($path)) !== null) {
+				self::sendResponse($client, $shellAsset['status'], $shellAsset['body'],
+					$shellAsset['headers']['Content-Type'] ?? 'text/plain', $shellAsset['headers']);
+				return false;
+			}
 			if ($path === '/Q/ws') {
 				if (Q_Config::get('Q', 'dashboard', null) === false) {
 					self::sendResponse($client, 404, 'Not found');
@@ -2810,7 +2827,7 @@ class Q_WebServer
 				}
 				ob_start();
 				phpinfo();
-				$html = self::phpinfoHtml(ob_get_clean());
+				$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
 				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8');
 				return false;
 			}
@@ -5684,7 +5701,9 @@ WORKER;
 			'msg'   => $msg,
 			'brand' => htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8'),
 		));
-		return $page !== null ? $page : "<!DOCTYPE html><html><body><h1>{$code} {$title}</h1><p>{$msg}</p></body></html>";
+		$page = $page !== null ? $page : "<!DOCTYPE html><html><body><h1>{$code} {$title}</h1><p>{$msg}</p></body></html>";
+		// The server's own pages (under /Q/) carry the shell; a site's error pages do not.
+		return strpos((string) $path, '/Q/') === 0 ? Q_WebServer_Shell::decorate($page) : $page;
 	}
 
 	private static function render404($path)
@@ -5706,7 +5725,7 @@ WORKER;
 			'brand'     => htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8'),
 			'brandHead' => Q_WebServer_Brand::headTags(self::brand() . ' — Documentation', '/Q/docs'),
 		));
-		return $page !== null ? $page
+		return $page !== null ? Q_WebServer_Shell::decorate($page)
 			: '<!DOCTYPE html><html><body><p>The documentation design is missing (designs/default/docs).</p></body></html>';
 	}
 

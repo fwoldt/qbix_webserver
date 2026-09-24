@@ -115,6 +115,12 @@ class Q_WebServer_Panel
 			'ip' => (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '')));
 		if ($veto) return $json($veto['status'], $veto['body']);
 
+		// The shell's HTTP door: the same session, and more checks of its own.
+		if (strpos($route, 'shell/') === 0) {
+			list($status, $data) = Q_WebServer_Shell_Api::handle($route, $parsed, $auth['token']);
+			return $json($status, $data);
+		}
+
 		if ($route === 'auth/password') {
 			list($status, $data) = Q_WebServer_Panel_Auth::change($parsed, $body);
 			return $json($status, $data);
@@ -2797,7 +2803,7 @@ class Q_WebServer_Panel
 			'brand'     => htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'),
 			'message'   => $messageHtml,
 		), 'refused.html');
-		return $page !== null ? $page : Q_WebServer::renderErrorPage(403, '/Q/panel', $messageHtml);
+		return $page !== null ? Q_WebServer_Shell::decorate($page) : Q_WebServer::renderErrorPage(403, '/Q/panel', $messageHtml);
 	}
 
 	static function panelHtml($host, $wsUrl)
@@ -2813,7 +2819,7 @@ class Q_WebServer_Panel
 			'brandHead' => Q_WebServer_Brand::headTags($brand . ' Control Panel', '/Q/panel'),
 			'brand'     => htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'),
 		));
-		return $page !== null ? $page
+		return $page !== null ? Q_WebServer_Shell::decorate($page)
 			: '<!DOCTYPE html><html><body><p>The panel design is missing (designs/default/panel).</p></body></html>';
 	}
 }

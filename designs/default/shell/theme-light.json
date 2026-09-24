@@ -1,0 +1,3 @@
+{"label": "Light", "background": "#fafbfc", "foreground": "#24292f", "dim": "#6e7781", "accent": "#6639ba", "cursor": "#6639ba", "selection": "rgba(102,57,186,.2)", "prompt": "#1a7f37", "error": "#cf222e", "border": "rgba(0,0,0,.14)", "opacity": 0.97,
+ "black": "#24292f", "red": "#cf222e", "green": "#116329", "yellow": "#7d4e00", "blue": "#0969da", "magenta": "#8250df", "cyan": "#1b7c83", "white": "#6e7781",
+ "brightblack": "#57606a", "brightred": "#a40e26", "brightgreen": "#1a7f37", "brightyellow": "#633c01", "brightblue": "#218bff", "brightmagenta": "#a475f9", "brightcyan": "#3192aa", "brightwhite": "#8c959f"}

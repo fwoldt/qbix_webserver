@@ -1,0 +1,3 @@
+{"label": "Quake (amber on brown)", "background": "#1a120b", "foreground": "#e8c38a", "dim": "#9c7d56", "accent": "#d97706", "cursor": "#fbbf24", "selection": "rgba(217,119,6,.35)", "prompt": "#fbbf24", "error": "#f87171", "border": "rgba(232,195,138,.2)", "opacity": 0.9,
+ "black": "#2a1d12", "red": "#e05d44", "green": "#a8b65a", "yellow": "#e8a33d", "blue": "#7ea6c9", "magenta": "#c98bb1", "cyan": "#86b8a6", "white": "#e8c38a",
+ "brightblack": "#6b5139", "brightred": "#ff7a5c", "brightgreen": "#c3d173", "brightyellow": "#ffc35a", "brightblue": "#9cc4e6", "brightmagenta": "#e3a6cc", "brightcyan": "#a3d4c2", "brightwhite": "#fff1d6"}

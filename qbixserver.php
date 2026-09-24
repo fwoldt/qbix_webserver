@@ -1075,6 +1075,16 @@ $opts['https-port'] = $httpsPort;
 
 // Store HTTP port in config too (for anything that reads it)
 Q_Config::set('Q', 'webserver', 'port', $httpPort);
+// How this server was started, for commands it runs on its own behalf (the
+// shell's console commands act on this server, not on a default one).
+Q_Config::set('Q', 'webserver', 'startOptions', array(
+	'config' => $opts['config'] ? (string) $opts['config'] : null,
+	'confDir' => isset($confDirs) && $confDirs ? (string) end($confDirs) : null,
+	'root' => isset($webDir) ? (string) $webDir : null,
+	'pid' => $opts['pid'] ? (string) $opts['pid'] : null,
+	'distribution' => $opts['distribution'] ? (string) $opts['distribution'] : null,
+	'server' => __FILE__,
+));
 if ($opts['keep-globals'] !== null) {
 	Q_Config::set('Q', 'webserver', 'keepGlobals', $opts['keep-globals']);
 }

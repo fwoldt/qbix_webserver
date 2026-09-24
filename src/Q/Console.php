@@ -50,6 +50,23 @@ class Q_Console
 		);
 	}
 
+
+	/**
+	 * Every registered command, without its handler: name => description,
+	 * options, aliases, usage. For tools that list or complete commands.
+	 * @method all
+	 * @static
+	 * @return {array}
+	 */
+	static function all()
+	{
+		$out = array();
+		foreach (self::$commands as $name => $c) {
+			unset($c['handler']);
+			$out[$name] = $c;
+		}
+		return $out;
+	}
 	/** Whether a command is registered under this exact name. */
 	static function has($name)
 	{
@@ -274,7 +291,8 @@ class Q_Console
 	static function style($text, $kind, $stream = null)
 	{
 		$stream = $stream ?: STDOUT;
-		if (getenv('NO_COLOR') !== false or !function_exists('stream_isatty') or !@stream_isatty($stream)) return $text;
+		$forced = getenv('QBIX_FORCE_COLOR') === '1';
+		if (getenv('NO_COLOR') !== false or (!$forced and (!function_exists('stream_isatty') or !@stream_isatty($stream)))) return $text;
 		$codes = array('title' => '1', 'head' => '33', 'name' => '32', 'error' => '37;41', 'ok' => '32', 'warn' => '33');
 		return "\033[" . ($codes[$kind] ?? '0') . 'm' . $text . "\033[0m";
 	}

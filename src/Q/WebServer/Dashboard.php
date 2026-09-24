@@ -249,6 +249,8 @@ class Q_WebServer_Dashboard
 			// The running PHP against the standard set of extensions: what is
 			// missing per tier, with the install commands. Computed once per process.
 			'extensions' => self::extensionsSummary(),
+			// Q shell activity; only when the shell has been loaded in this process.
+			'shell' => class_exists('Q_WebServer_Shell_Server', false) ? Q_WebServer_Shell_Server::summary() : null,
 			'php' => PHP_VERSION,
 			'os' => PHP_OS,
 			'sessions' => self::getSessionList(),
@@ -605,7 +607,7 @@ class Q_WebServer_Dashboard
 			'topPathsHtml', 'stats', 'recent', 'tokenParam', 'brandName',
 			'verLabel', 'maintainedBy'
 		));
-		return $page !== null ? $page
+		return $page !== null ? Q_WebServer_Shell::decorate($page)
 			: '<!DOCTYPE html><html><body><p>The dashboard design is missing (designs/default/dashboard).</p></body></html>';
 	}
 }
