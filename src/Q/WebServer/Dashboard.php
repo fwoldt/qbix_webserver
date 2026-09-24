@@ -544,7 +544,11 @@ transition:background .1s}
 <div class="card"><div class="l">Current RPS</div><div class="v" id="crps" style="color:var(--cyn)">0</div><div class="s">last 5 sec</div></div>
 <div class="card"><div class="l">Avg response</div><div class="v" id="avg">0<span style="font-size:12px;font-weight:400">ms</span></div><div class="s">slowest: <span id="slow">0ms</span></div></div>
 <div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">&#8212;</div><div class="s">peak <span id="smp">&#8212;</span></div></div>
-<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s" id="phpn">reqs: 0 PHP &#183; 0 static</div></div>
+<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s vl">
+<div><span>idle</span><b id="swi">&#8212;</b></div>
+<div><span>busy</span><b id="swb">&#8212;</b></div>
+<div><span>PHP requests served</span><b id="phpn">0</b></div>
+<div><span>static files served</span><b id="stn">0</b></div></div></div>
 <div class="card"><div class="l">System RAM</div><div class="v" id="sysram">&#8212;</div><div class="s" id="sysram-detail">&#8212;</div></div>
 <div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s vl" id="cow-detail">&#8212;</div></div>
 <div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
@@ -621,7 +625,11 @@ el('crps',s.currentRps);
 el('avg',s.avgMs+'<span style="font-size:12px;font-weight:400">ms</span>');
 el('slow',s.slowest+'ms');
 el('sm',s.memory+' MB');el('smp',s.memoryPeak+' MB');
-el('sw',s.workers+(s.forkMode?' <span style="font-size:10px;color:var(--yel)">(fork mode)</span>':''));el('wsc',s.wsConnections);el('wsr',s.wsRooms);
+// s.workers is "idle/total". Shown as the total, with idle and busy on their
+// own labelled rows: "590/590" read as a count of something unexplained.
+(function(){var w=String(s.workers).split('/');
+if(w.length===2){var idle=+w[0],total=+w[1];el('sw',total+'');el('swi',idle+'');el('swb',(total-idle)+'')}
+else{el('sw',s.workers+(s.forkMode?' <span style="font-size:10px;color:var(--yel)">(fork mode)</span>':''));el('swi','\u2014');el('swb','\u2014')}})();el('wsc',s.wsConnections);el('wsr',s.wsRooms);
 // System RAM
 if(s.systemRam){
   el('sysram',s.systemRam.percent+'%');
@@ -654,7 +662,8 @@ if(s.workerStats){
 el('s2',s.status2xx);el('s3',s.status3xx);el('s4',s.status4xx);el('s5',s.status5xx);
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
 el('srps',(s.rps)+' avg req/s');
-el('phpn','reqs: '+s.phpRequests+' PHP \u00B7 '+s.staticRequests+' static');
+// Requests served, not workers: "5 PHP / 7 static" was read as a worker count.
+el('phpn',s.phpRequests.toLocaleString());el('stn',s.staticRequests.toLocaleString());
 // Offer every status code the server has recorded, not just the live ones.
 if(s.statusCodes){for(var _sc in s.statusCodes){if(!knownCodes[_sc]){knownCodes[_sc]=1;addScOption(_sc)}}}
 el('reqc',s.requests.toLocaleString()+' total');

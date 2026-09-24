@@ -106,6 +106,22 @@ check('the status dot still turns green when live',
 check('the narrow-screen breakpoint is kept',
 	strpos($dash, '@media(max-width:700px)') !== false, true);
 
+// ── Workers card ─────────────────────────────────────────────────
+// "590/590 · reqs: 5 PHP / 7 static" was read as "only 5 PHP workers": the
+// value was idle/total with nothing saying so, and the counts under it were
+// requests served. Now: the total, then labelled rows.
+check('the workers card lists idle workers on a labelled row',
+	strpos($dash, '<span>idle</span><b id="swi">') !== false, true);
+check('...busy workers on another',
+	strpos($dash, '<span>busy</span><b id="swb">') !== false, true);
+check('...and says the PHP and static counts are requests served',
+	strpos($dash, '<span>PHP requests served</span><b id="phpn">') !== false
+	and strpos($dash, '<span>static files served</span><b id="stn">') !== false, true);
+check('the ambiguous "reqs: N PHP / N static" line is gone',
+	strpos($dash, "'reqs: '"), false);
+check('the value is split into idle and busy rather than shown as "idle/total"',
+	(bool) preg_match("/split\\('\\/'\\)/", $dash), true);
+
 if ($fail) {
 	printf("\n  FAIL - %d of %d case(s)\n", $fail, $pass + $fail);
 	exit(1);

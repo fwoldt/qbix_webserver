@@ -191,6 +191,11 @@ registrations left -- bounded in any case by the worker memory ceiling below.
   CLI SAPI. The server now warns at startup when `preload` is set with the
   transform on.
 - Column headings on the live request log (Time, Sts, Verb, Path, ms, Mem).
+- The dashboard's Workers card says what its numbers are. It showed
+  "590/590" (idle of total, unlabelled) over "reqs: 5 PHP / 7 static", which
+  counts requests served and was read as "only 5 PHP workers". It now shows
+  the worker count, then idle and busy workers, then PHP requests and static
+  files served, each on its own labelled row.
 - The dashboard reads at a glance: the status-code and worker-memory cards
   list one item per line, the header reads "Linux · PHP x · Live · Up 15s",
   and "Documentation · Powered by the Qbix engine" has its own centred line
