@@ -320,6 +320,17 @@ class Q_WebServer_Pool
 			};
 			try {
 				$__run($warmup);
+				// The warm-up is a request as far as the file wrapper is
+				// concerned: it remembered the stat of every file it included,
+				// and those memos are good for that request only. Nothing ended
+				// it, so every worker inherited them and compared a file
+				// rewritten after start against the warm-up's mtime -- found
+				// it unchanged, and ran the old code. In fork-per-request mode
+				// that was every request until a restart: a template edit
+				// reached Apache at once and this server not at all.
+				if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
+					Q_WebServer_CompatFileWrapper::forgetStats();
+				}
 				$grew = (memory_get_usage(true) - $before) / 1048576;
 				fwrite(STDERR, sprintf(
 					"  warm-up %s warmed %.1f MB in the parent (shared by every worker)\n",
@@ -470,6 +481,15 @@ class Q_WebServer_Pool
 			// another visitor's socket. Closing by kind rather than by list
 			// cannot miss one that some future path forgets to register.
 			self::closeInheritedSockets($pair[1]);
+
+			// Whatever the parent had remembered about files -- from the
+			// warm-up, or anything it included since -- describes the moment
+			// of the fork, not this worker's first request. Stats are looked
+			// up again; kept bytes and transforms are then checked against
+			// them, so an entry for a file changed since is not used.
+			if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
+				Q_WebServer_CompatFileWrapper::forgetStats();
+			}
 
 			self::childRun($pair[1], $this->octane, $this->maxRequests);
 			exit(0);
