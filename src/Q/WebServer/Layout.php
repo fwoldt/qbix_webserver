@@ -79,6 +79,35 @@ class Q_WebServer_Layout
 	}
 
 	/**
+	 * Load a distribution of the engine: the one named by $name, else
+	 * QBIX_DISTRIBUTION, else the DISTRIBUTION file in the source tree. Its
+	 * class Q_WebServer_Distribution_<Name> (src/Q/WebServer/Distribution/)
+	 * is asked to register() what it adds -- an overlay tree, for one. With
+	 * no distribution, "none", or no such class, nothing changes.
+	 *
+	 * @method loadDistribution
+	 * @static
+	 * @param {string|null} $name --distribution
+	 * @param {string} $sourceDir the engine's source tree
+	 * @return {string|null} the distribution loaded
+	 */
+	static function loadDistribution($name, $sourceDir)
+	{
+		$name = $name ?? (getenv('QBIX_DISTRIBUTION') ?: null);
+		if ($name === null and is_file($sourceDir . '/DISTRIBUTION')) {
+			$name = trim((string) file_get_contents($sourceDir . '/DISTRIBUTION'));
+		}
+		if (!is_string($name) or !preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $name)) return null;
+		$class = 'Q_WebServer_Distribution_' . ucfirst(strtolower($name));
+		$file = $sourceDir . '/src/Q/WebServer/Distribution/' . ucfirst(strtolower($name)) . '.php';
+		if (!class_exists($class, false) and is_file($file)) require_once $file;
+		if (!class_exists($class, false) or !method_exists($class, 'register')) return null;
+		$class::register();
+		if (class_exists('Q_Config', false)) Q_Config::set('Q', 'webserver', 'distribution', strtolower($name));
+		return strtolower($name);
+	}
+
+	/**
 	 * The configuration directory to use, or null for none.
 	 *
 	 * @method resolve

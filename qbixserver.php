@@ -626,19 +626,7 @@ require_once __DIR__ . '/src/Q/WebServer/Layout.php';
 // tree, its class Q_WebServer_Distribution_<Name> is asked to register what
 // it adds -- another configuration tree stacked on /etc/qbix, for one. With
 // no distribution, or no such class, nothing changes.
-$distribution = $opts['distribution'] ?? (getenv('QBIX_DISTRIBUTION') ?: null);
-if ($distribution === null and is_file(__DIR__ . '/DISTRIBUTION')) {
-	$distribution = trim((string) file_get_contents(__DIR__ . '/DISTRIBUTION'));
-}
-if (is_string($distribution) and preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $distribution)) {
-	$distClass = 'Q_WebServer_Distribution_' . ucfirst(strtolower($distribution));
-	$distFile = __DIR__ . '/src/Q/WebServer/Distribution/' . ucfirst(strtolower($distribution)) . '.php';
-	if (!class_exists($distClass, false) and is_file($distFile)) require_once $distFile;
-	if (class_exists($distClass, false) and method_exists($distClass, 'register')) {
-		$distClass::register();
-		Q_Config::set('Q', 'webserver', 'distribution', strtolower($distribution));
-	}
-}
+Q_WebServer_Layout::loadDistribution($opts['distribution'], __DIR__);
 // The base tree first, any overlays on top (Q_WebServer_Layout::stack()).
 $confDir = Q_WebServer_Layout::resolve($opts['conf-dir'], $opts['config']);
 $confDirs = Q_WebServer_Layout::stack($confDir);
