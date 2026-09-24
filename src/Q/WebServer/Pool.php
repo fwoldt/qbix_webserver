@@ -36,6 +36,159 @@
 class Q_WebServer_Pool
 {
 	public $targetSize;
+
+	/**
+	 * Spare workers to keep when the pool is dynamic; 0 for a static pool
+	 * that forks all $targetSize workers at start (the default).
+	 *
+	 * Every worker costs its own memory from the moment it is forked -- on an
+	 * Exponential install ~10 MB of real RAM each, idle or not, because the
+	 * kernel copies that much of the warmed parent at fork. A pool of 590
+	 * workers that serves a few dozen requests at a time was paying for 550
+	 * that did nothing. A dynamic pool forks $spareWorkers at start, forks
+	 * more on demand up to $targetSize, and retires the ones above the spare
+	 * count once they have been idle for $idleTimeout seconds.
+	 *
+	 * @property $spareWorkers
+	 * @type integer
+	 */
+	public $spareWorkers = 0;
+
+	/** Seconds an extra worker may sit idle before it is retired (dynamic pool). */
+	public $idleTimeout = 60;
+
+	/**
+	 * Workers that were told to go but had not exited yet when asked, by pid.
+	 * A worker is reaped without waiting (WNOHANG) so the event loop never
+	 * blocks on it; one that is still on its way out would otherwise stay a
+	 * zombie for the life of the server. A timer retries these.
+	 */
+	protected $unreaped = array();
+
+	/**
+	 * Reap a worker that has been told to exit, now if it already has,
+	 * otherwise later.
+	 */
+	protected function reap($pid)
+	{
+		if ($pid <= 0) return;
+		$r = Q_WebServer_Fork::waitpid($pid, $st, 1);
+		if ($r === 0) $this->unreaped[$pid] = true;
+	}
+
+	/**
+	 * Retry the workers that had not exited when first reaped.
+	 * @method reapPending
+	 * @return {integer} how many are still outstanding
+	 */
+	function reapPending()
+	{
+		foreach (array_keys($this->unreaped) as $pid) {
+			$r = Q_WebServer_Fork::waitpid($pid, $st, 1);
+			if ($r !== 0) unset($this->unreaped[$pid]);   // reaped, or not ours any more
+		}
+		return count($this->unreaped);
+	}
+
+	/**
+	 * Whether a worker process is gone, without waiting. Reaps it if not yet.
+	 *
+	 * "Gone" is anything but "still running" (0). The server's SIGCHLD
+	 * handler reaps every child with waitpid(-1) -- pool workers included --
+	 * so by the time the pool asks about a dead worker the answer is usually
+	 * -1 (no such child), not its pid. Testing for the pid alone therefore
+	 * called a dead worker alive, and a request was sent to it.
+	 *
+	 * @method hasExited
+	 * @static
+	 * @param {integer} $pid
+	 * @return {boolean}
+	 */
+	static function hasExited($pid)
+	{
+		if ($pid <= 0) return true;
+		return Q_WebServer_Fork::waitpid($pid, $st, 1) !== 0;
+	}
+
+	/**
+	 * In a freshly forked worker: close every socket stream except $keep.
+	 *
+	 * Only sockets. Files the parent has open (logs, a warm-up's handles)
+	 * are harmless to share and may be in use; STDIN/STDOUT/STDERR are
+	 * files or pipes and are kept regardless.
+	 *
+	 * @method closeInheritedSockets
+	 * @static
+	 * @param {resource} $keep the worker's end of its pair
+	 * @return {integer} how many were closed
+	 */
+	static function closeInheritedSockets($keep)
+	{
+		if (!function_exists('get_resources')) return 0;
+		$keepId = (int) $keep;
+		$std = array();
+		foreach (array('STDIN', 'STDOUT', 'STDERR') as $c) {
+			if (defined($c)) $std[(int) constant($c)] = true;
+		}
+		$closed = 0;
+		foreach (get_resources('stream') as $id => $res) {
+			if ($id === $keepId or isset($std[$id])) continue;
+			$meta = @stream_get_meta_data($res);
+			$type = strtolower((string) ($meta['stream_type'] ?? ''));
+			if (strpos($type, 'socket') === false) continue;
+			// Never fclose() a TLS stream here: that writes close_notify onto
+			// the parent's live connection. See Q_WebServer::releaseInherited().
+			if (method_exists('Q_WebServer', 'releaseInherited')) {
+				if (Q_WebServer::releaseInherited($res)) ++$closed;
+				continue;
+			}
+			$meta2 = @stream_get_meta_data($res);
+			if (!empty($meta2['crypto'])) continue;
+			@fclose($res);
+			++$closed;
+		}
+		return $closed;
+	}
+
+	/** Times a request may go back on the queue because its worker was dead. */
+	const MAX_REQUEUES = 3;
+
+	/** Script path each busy worker was sent, so its request can be re-sent. */
+	protected $workerScripts = array();
+
+	/**
+	 * Whether a request whose worker died without answering may be run again
+	 * on another worker: only methods that change nothing, and only once.
+	 *
+	 * @method mayRetry
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function mayRetry($parsed)
+	{
+		$method = strtoupper((string) ($parsed['method'] ?? ''));
+		return in_array($method, array('GET', 'HEAD', 'OPTIONS'), true)
+			and (int) ($parsed['poolRetries'] ?? 0) < 1;
+	}
+
+	/**
+	 * Forget everything held for a worker. One place, so no per-worker array
+	 * is missed: the parent lives as long as the server, and an entry left
+	 * behind for each worker ever replaced is memory it never gets back.
+	 */
+	protected function forgetWorker($index)
+	{
+		if (isset($this->watchers[$index])) {
+			Q_Evented::cancel($this->watchers[$index]);
+		}
+		unset($this->workers[$index], $this->workerClients[$index],
+			$this->workerBuffers[$index], $this->workerRequestHeaders[$index],
+			$this->workerRequests[$index], $this->workerResponders[$index],
+			$this->workerStarted[$index], $this->workerScripts[$index],
+			$this->watchers[$index]);
+	}
+
 	protected $workers = array();       // index => [pid, socket, busy]
 	protected $workerClients = array(); // index => HTTP client socket
 	protected $workerBuffers = array(); // index => partial response data
@@ -92,6 +245,9 @@ class Q_WebServer_Pool
 		$this->targetSize = $size ?: (int) Q_Config::get(
 			'Q', 'webserver', 'workers', 4
 		);
+		$this->spareWorkers = max(0, min($this->targetSize,
+			(int) Q_Config::get('Q', 'webserver', 'spareWorkers', 0)));
+		$this->idleTimeout = max(1, (int) Q_Config::get('Q', 'webserver', 'idleWorkerTimeout', 60));
 		$this->octane = !Q_Config::get(
 			'Q', 'webserver', 'forkPerRequest', false
 		);
@@ -190,9 +346,66 @@ class Q_WebServer_Pool
 		if (function_exists('pcntl_signal')) {
 			pcntl_signal(SIGCHLD, SIG_DFL);
 		}
-		for ($i = 0; $i < $this->targetSize; $i++) {
+		$initial = $this->spareWorkers > 0 ? $this->spareWorkers : $this->targetSize;
+		for ($i = 0; $i < $initial; $i++) {
 			$this->forkWorker();
 		}
+		$pool = $this;
+		Q_Evented::repeat(2.0, function () use ($pool) {
+			$pool->reapPending();
+			$pool->sweepDeadIdle();
+		});
+		if ($this->spareWorkers > 0) {
+			Q_Evented::repeat(min(10.0, max(1.0, $this->idleTimeout / 4)), function () use ($pool) {
+				$pool->retireIdleExtras();
+			});
+		}
+	}
+
+	/**
+	 * Dynamic pool: retire workers above the spare count that have been idle
+	 * for longer than the idle timeout. Longest-idle first. Never touches a
+	 * busy worker, and never goes below the spare count.
+	 *
+	 * @method retireIdleExtras
+	 * @return {integer} how many were retired
+	 */
+	function retireIdleExtras()
+	{
+		if ($this->spareWorkers <= 0) return 0;
+		$now = microtime(true);
+		$idle = array();
+		foreach ($this->workers as $i => $w) {
+			if (empty($w['busy'])) $idle[$i] = $w['idleSince'] ?? $now;
+		}
+		asort($idle);
+		$retired = 0;
+		foreach ($idle as $i => $since) {
+			if (count($this->workers) <= $this->spareWorkers) break;
+			if ($now - $since < $this->idleTimeout) break;
+			$this->retire($i);
+			$retired++;
+		}
+		return $retired;
+	}
+
+	/**
+	 * Take an idle worker out of the pool without forking a replacement.
+	 */
+	protected function retire($index)
+	{
+		if (isset($this->watchers[$index])) {
+			Q_Evented::cancel($this->watchers[$index]);
+			unset($this->watchers[$index]);
+		}
+		if (isset($this->workers[$index])) {
+			$sock = $this->workers[$index]['socket'];
+			// Closing its socket ends the worker: its blocking read returns
+			// and childRun() leaves the loop.
+			if (is_resource($sock)) @fclose($sock);
+			$this->reap((int) $this->workers[$index]['pid']);
+		}
+		$this->forgetWorker($index);
 	}
 
 	/**
@@ -247,6 +460,17 @@ class Q_WebServer_Pool
 				Q_WebServer::closeInheritedDescriptors();
 			}
 
+			// And every other socket, whoever held it. The lists above are
+			// the ones the server tracks; a worker forked while a request is
+			// in flight -- a replacement, or a dynamic pool growing -- also
+			// inherited that request's client, the clients of other busy
+			// workers and of queued requests, none of which are on them. The
+			// visitor then never saw the connection close (the worker held
+			// it open, idle, indefinitely), and a worker could write to
+			// another visitor's socket. Closing by kind rather than by list
+			// cannot miss one that some future path forgets to register.
+			self::closeInheritedSockets($pair[1]);
+
 			self::childRun($pair[1], $this->octane, $this->maxRequests);
 			exit(0);
 		}
@@ -258,7 +482,8 @@ class Q_WebServer_Pool
 
 		$index = $this->nextIndex++;
 		$this->workers[$index] = array(
-			'pid' => $pid, 'socket' => $sock, 'busy' => false
+			'pid' => $pid, 'socket' => $sock, 'busy' => false,
+			'idleSince' => microtime(true)
 		);
 
 		$pool = $this;
@@ -459,6 +684,17 @@ class Q_WebServer_Pool
 	 */
 	protected static function executeScript($req)
 	{
+		// The per-request state holder, loaded before anything asks whether
+		// it exists. Clearing it and collecting from it below are both
+		// guarded by class_exists(..., false), and setcookie() records into
+		// Q_Response without ever loading it -- so on a worker's first
+		// request both were skipped and every cookie that request set was
+		// dropped. A login answered by a freshly forked worker lost its
+		// session cookie.
+		if (!class_exists('Q_WebServer_State', false) and is_file(__DIR__ . '/State.php')) {
+			require_once __DIR__ . '/State.php';
+		}
+
 		// ── Reset ALL superglobals to prevent cross-request leaks ──
 		// $_SERVER: strip all HTTP_* headers and app-injected keys from
 		// the previous request, then repopulate from this request only.
@@ -839,6 +1075,12 @@ class Q_WebServer_Pool
 	function dispatch($client, $parsed, $scriptPath, $responder = null)
 	{
 		$idle = $this->findIdle();
+		if ($idle === null and $this->spareWorkers > 0
+			and count($this->workers) < $this->targetSize) {
+			// Dynamic pool: every worker busy and room to grow -- fork one
+			// for this request rather than make it wait.
+			$idle = $this->forkWorker();
+		}
 		if ($idle === null) {
 			$this->pending[] = array($client, $parsed, $scriptPath, $responder);
 			return;
@@ -856,6 +1098,8 @@ class Q_WebServer_Pool
 		// came from, so it supplies a callback and takes the response array
 		// instead.
 		$this->workerResponders[$index] = $responder;
+		// Kept so a request can be sent again if its worker dies first.
+		$this->workerScripts[$index] = $scriptPath;
 		$this->workerBuffers[$index] = '';
 		$this->workerRequestHeaders[$index] = $parsed['headers'];
 		// The reverse proxy cache needs the whole parsed request, not just
@@ -950,10 +1194,27 @@ class Q_WebServer_Pool
 		$packet = pack('N', strlen($msg)) . $msg;
 		if (!Q_WebServer::writeFully($this->workers[$index]['socket'], $packet)) {
 			// Worker died before receiving the request — recycle and re-queue.
-			// The responder goes back on the queue too: without it a request
-			// that arrived over HTTP/2 would be answered as HTTP/1.1, written
-			// straight into an open h2 connection, which corrupts it.
-			$this->pending[] = array($client, $parsed, $scriptPath, $responder);
+			// Safe for any method: the worker never had it. The responder goes
+			// back on the queue too: without it a request that arrived over
+			// HTTP/2 would be answered as HTTP/1.1, written straight into an
+			// open h2 connection, which corrupts it. At the front, so it is
+			// not overtaken by requests that arrived after it; and a bounded
+			// number of times, so a pool that can only produce dead workers
+			// answers 502 rather than spinning.
+			$parsed['poolRequeues'] = ($parsed['poolRequeues'] ?? 0) + 1;
+			// Not the worker's client any more either way: recycle() must
+			// neither answer nor close it.
+			unset($this->workerClients[$index], $this->workerResponders[$index]);
+			if ($parsed['poolRequeues'] <= self::MAX_REQUEUES) {
+				array_unshift($this->pending, array($client, $parsed, $scriptPath, $responder));
+			} elseif ($responder) {
+				call_user_func($responder, array('status' => 502,
+					'headers' => array('Content-Type' => 'text/plain; charset=utf-8'),
+					'body' => 'No worker could take the request'));
+			} elseif (is_resource($client)) {
+				Q_WebServer::sendResponse($client, 502, 'No worker could take the request');
+				if (is_resource($client)) @fclose($client);
+			}
 			$this->recycle($index, true);
 		}
 	}
@@ -970,10 +1231,17 @@ class Q_WebServer_Pool
 			// requests: an empty read means the socket has no new data,
 			// NOT that the worker exited. Only recycle if the worker process
 			// is actually gone.
-			if ($this->octane) {
-				$pid = $this->workers[$index]['pid'] ?? 0;
-				$alive = $pid && posix_kill($pid, 0);
-				if ($alive) return; // worker is idle, not dead
+			//
+			// "Gone" is the socket at EOF -- the worker's end is closed, which
+			// only happens when it exits -- or the process already reaped.
+			// posix_kill($pid, 0) alone said a dead worker was alive: it
+			// succeeds on a zombie, so the parent returned, the watcher kept
+			// firing on the dead socket, and the client waited for an answer
+			// that could never come.
+			if ($this->octane and !feof($sock)) {
+				$pid = (int) ($this->workers[$index]['pid'] ?? 0);
+				$exited = self::hasExited($pid);
+				if (!$exited) return; // no data yet; the worker is alive
 			}
 			$this->recycle($index, true);
 			return;
@@ -1025,6 +1293,7 @@ class Q_WebServer_Pool
 		// child exited after one request).
 		if ($this->octane) {
 			$this->workers[$index]['busy'] = false;
+			$this->workers[$index]['idleSince'] = microtime(true);
 			$this->workers[$index]['requests'] = ($this->workers[$index]['requests'] ?? 0) + 1;
 			$this->workerBuffers[$index] = '';
 			unset($this->workerClients[$index]);
@@ -1071,12 +1340,33 @@ class Q_WebServer_Pool
 			unset($this->watchers[$index]);
 		}
 
-		// EOF with no response → 502
+		// EOF with no response. The worker died holding this request without
+		// writing a byte of the answer.
 		if ($isEof && isset($this->workerClients[$index])
 			&& empty($this->workerBuffers[$index])
 		) {
 			$c = $this->workerClients[$index];
-			if (is_resource($c)) {
+			$parsed = $this->workerRequests[$index] ?? null;
+			$responder = $this->workerResponders[$index] ?? null;
+			if ($parsed !== null and self::mayRetry($parsed)) {
+				// A request that changes nothing can be run again, and the
+				// visitor never learns a worker was lost: the usual cause is a
+				// worker that was killed, ran out of memory or died idle a
+				// moment before this request reached it. Once only, so a
+				// request that itself kills its worker cannot take the pool
+				// down with it.
+				$parsed['poolRetries'] = ($parsed['poolRetries'] ?? 0) + 1;
+				fwrite(STDERR, sprintf("  worker %d died before answering %s %s; retried on another worker\n",
+					(int) ($this->workers[$index]['pid'] ?? 0), $parsed['method'] ?? '?', $parsed['uri'] ?? '?'));
+				array_unshift($this->pending, array($c, $parsed,
+					$this->workerScripts[$index] ?? '', $responder));
+			} elseif ($responder) {
+				// HTTP/2: the answer belongs on its stream, never as HTTP/1.1
+				// bytes written into the shared connection.
+				call_user_func($responder, array('status' => 502,
+					'headers' => array('Content-Type' => 'text/plain; charset=utf-8'),
+					'body' => 'Worker died'));
+			} elseif (is_resource($c)) {
 				Q_WebServer::sendResponse($c, 502, 'Worker died');
 				if (is_resource($c)) @fclose($c);
 			}
@@ -1088,12 +1378,17 @@ class Q_WebServer_Pool
 		if (isset($this->workers[$index])) {
 			$sock = $this->workers[$index]['socket'];
 			if (is_resource($sock)) @fclose($sock);
-			Q_WebServer_Fork::waitpid($this->workers[$index]["pid"], $st, 1);
+			$this->reap((int) $this->workers[$index]["pid"]);
 		}
-		unset($this->workers[$index], $this->workerClients[$index],
-			$this->workerBuffers[$index], $this->workerRequestHeaders[$index]);
+		$this->forgetWorker($index);
 
-		// Immediately fork replacement
+		// Replace it. A dynamic pool replaces only what keeps it at its spare
+		// count or serves a request that is waiting; above that, demand forks
+		// workers as it needs them.
+		if ($this->spareWorkers > 0 and empty($this->pending)
+			and count($this->workers) >= $this->spareWorkers) {
+			return;
+		}
 		$newIdx = $this->forkWorker();
 
 		// Drain pending queue
@@ -1187,10 +1482,80 @@ class Q_WebServer_Pool
 
 	protected function findIdle()
 	{
-		foreach ($this->workers as $i => $w) {
-			if (!$w['busy']) return $i;
+		// Rescanned after a dead worker is replaced: foreach walks a copy of
+		// the list taken before the loop, so the replacement is not in it.
+		// Without the rescan, a request arriving when every idle worker had
+		// died went on the queue -- with fresh workers idle and nothing left
+		// to drain it.
+		for ($pass = 0; $pass < 2; ++$pass) {
+			$discarded = false;
+			foreach ($this->workers as $i => $w) {
+				if ($w['busy']) continue;
+				// An idle worker's socket is not watched, so one that died
+				// while idle (killed, OOM) is not noticed until a request is
+				// sent to it -- and that request was lost. Ask first: a
+				// non-blocking waitpid is one system call and also reaps it.
+				if (!empty($w['pid']) and self::hasExited((int) $w['pid'])) {
+					$this->discardDead($i);
+					$discarded = true;
+					continue;
+				}
+				return $i;
+			}
+			if (!$discarded) break;
 		}
 		return null;
+	}
+
+	/**
+	 * Find idle workers that have exited and replace them, before a request
+	 * is sent to one. Idle sockets are deliberately not in the event loop --
+	 * hundreds of them would take stream_select past its descriptor limit --
+	 * so this is how a death while idle is noticed ahead of time. findIdle()
+	 * checks again at dispatch, and a request whose worker still dies first
+	 * is retried (see recycle()); this keeps that path rare.
+	 *
+	 * @method sweepDeadIdle
+	 * @return {integer} how many were found dead
+	 */
+	function sweepDeadIdle()
+	{
+		$dead = 0;
+		foreach ($this->workers as $i => $w) {
+			if (!empty($w['busy']) or empty($w['pid'])) continue;
+			if (self::hasExited((int) $w['pid'])) {
+				$this->discardDead($i);
+				++$dead;
+			}
+		}
+		// Anything queued can go to the replacements now, rather than wait
+		// for a busy worker to finish.
+		while ($this->pending and ($idle = $this->findIdle()) !== null) {
+			$next = array_shift($this->pending);
+			$this->sendTo($idle, $next[0], $next[1], $next[2], $next[3] ?? null);
+		}
+		return $dead;
+	}
+
+	/**
+	 * Drop a worker that has already exited (and been reaped), replacing it
+	 * when the pool needs it: always for a fixed pool, below the spare count
+	 * for a dynamic one.
+	 */
+	protected function discardDead($index)
+	{
+		fwrite(STDERR, sprintf("  worker %d exited while idle; removed\n",
+			(int) ($this->workers[$index]['pid'] ?? 0)));
+		if (isset($this->watchers[$index])) {
+			Q_Evented::cancel($this->watchers[$index]);
+			unset($this->watchers[$index]);
+		}
+		$sock = $this->workers[$index]['socket'] ?? null;
+		if (is_resource($sock)) @fclose($sock);
+		$this->forgetWorker($index);
+		if ($this->spareWorkers <= 0 or count($this->workers) < $this->spareWorkers) {
+			$this->forkWorker();
+		}
 	}
 
 	/**
@@ -1307,6 +1672,15 @@ class Q_WebServer_Pool
 		$n = 0;
 		foreach ($this->workers as $w) if (!$w['busy']) $n++;
 		return $n;
+	}
+
+	/**
+	 * Workers running now. Equal to targetSize for a fixed pool; between
+	 * spareWorkers and targetSize for a dynamic one.
+	 */
+	function liveCount()
+	{
+		return count($this->workers);
 	}
 
 	/**

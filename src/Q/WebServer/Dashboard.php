@@ -214,7 +214,11 @@ class Q_WebServer_Dashboard
 			'bytesFormatted' => self::fmtBytes(self::$stats['bytesOut']),
 			'memory' => round(memory_get_usage(true)/1048576, 1),
 			'memoryPeak' => round(memory_get_peak_usage(true)/1048576, 1),
-			'workers' => $pool ? $pool->idleCount().'/'.$pool->targetSize : 'fork',
+			// "idle/live". A dynamic pool runs fewer workers than its maximum while
+			// quiet, so the maximum is sent on its own.
+			'workers' => $pool ? $pool->idleCount().'/'.$pool->liveCount() : 'fork',
+			'workersMax' => $pool ? $pool->targetSize : 0,
+			'workersSpare' => $pool ? $pool->spareWorkers : 0,
 			'workerStats' => $pool ? self::cachedWorkerStats($pool) : null,
 			'systemRam' => self::cachedSystemRam(),
 			'parentPid' => getmypid(),
@@ -625,10 +629,11 @@ el('crps',s.currentRps);
 el('avg',s.avgMs+'<span style="font-size:12px;font-weight:400">ms</span>');
 el('slow',s.slowest+'ms');
 el('sm',s.memory+' MB');el('smp',s.memoryPeak+' MB');
-// s.workers is "idle/total". Shown as the total, with idle and busy on their
-// own labelled rows: "590/590" read as a count of something unexplained.
+// s.workers is "idle/live". Shown as the live count, with idle and busy on their
+// own labelled rows: "590/590" read as a count of something unexplained. A
+// dynamic pool (workersSpare > 0) also shows the most it will grow to.
 (function(){var w=String(s.workers).split('/');
-if(w.length===2){var idle=+w[0],total=+w[1];el('sw',total+'');el('swi',idle+'');el('swb',(total-idle)+'')}
+if(w.length===2){var idle=+w[0],total=+w[1];el('sw',total+(s.workersSpare>0&&s.workersMax>total?' <span style="font-size:10px;color:var(--dim)">of '+s.workersMax+'</span>':''));el('swi',idle+'');el('swb',(total-idle)+'')}
 else{el('sw',s.workers+(s.forkMode?' <span style="font-size:10px;color:var(--yel)">(fork mode)</span>':''));el('swi','\u2014');el('swb','\u2014')}})();el('wsc',s.wsConnections);el('wsr',s.wsRooms);
 // System RAM
 if(s.systemRam){
