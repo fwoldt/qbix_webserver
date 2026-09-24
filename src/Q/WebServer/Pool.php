@@ -928,6 +928,18 @@ class Q_WebServer_Pool
 			$status = 500;
 			Q_WebServer_Capture::discard();
 			echo $e->getMessage();
+			// Where it came from, for whoever reads the log. The response
+			// carried only the message, so a 500 said "array_unique(): ...
+			// string given" and nothing about which of thousands of files.
+			$trace = array();
+			foreach (array_slice($e->getTrace(), 0, 8) as $f) {
+				$trace[] = ($f['file'] ?? '?') . ':' . ($f['line'] ?? '?') . ' '
+					. (isset($f['class']) ? $f['class'] . ($f['type'] ?? '::') : '') . ($f['function'] ?? '');
+			}
+			fwrite(STDERR, sprintf("  worker %d: uncaught %s at %s:%d: %s\n    %s\n",
+				getmypid(), get_class($e), $e->getFile(), $e->getLine(),
+				str_replace(array("\r", "\n"), ' ', $e->getMessage()),
+				implode("\n    ", $trace)));
 		}
 		// Back to where the worker started, so the next request is not
 		// affected by where this one went.
