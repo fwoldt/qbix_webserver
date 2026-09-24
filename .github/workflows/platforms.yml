@@ -105,15 +105,16 @@ jobs:
               # directory will not do it for you, it will only break.
               export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/10.0_2026Q2/All/"
               echo "PKG_PATH=$PKG_PATH"
-              # libxml2 first and by name. php83 asks for a newer one than
-              # pkg_add resolves on its own, and stops on the dependency
-              # rather than fetching it.
-              # -u, not a plain install: the image already carries an older
-              # libxml2, and pkg_add refuses to replace an installed package
-              # ("A different version ... is already installed") unless told
-              # to upgrade -- so php83 was never installed at all.
-              sudo -E /usr/sbin/pkg_add -u libxml2 || true
-              sudo -E /usr/sbin/pkg_add php83 curl || true
+              # -uu, not a plain install: the image already carries an older
+              # libxml2 than php83 needs, and pkg_add refuses to replace an
+              # installed package ("A different version ... is already
+              # installed") unless told to upgrade it -- -uu upgrades the
+              # dependencies too. Retried, because the CDN has answered "no pkg
+              # found" once for a package that is there.
+              for try in 1 2 3; do
+                sudo -E /usr/sbin/pkg_add -uu php83 curl && break
+                echo "pkg_add failed, retry $try of 3"; sleep 15
+              done
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo -E /usr/sbin/pkg_add php83-$e || true
               done
@@ -178,7 +179,7 @@ jobs:
             php:8.3-cli \
             sh -c 'apt-get update -qq >/dev/null 2>&1; \
                    apt-get install -y -qq curl >/dev/null 2>&1; \
-                   docker-php-ext-install pcntl >/dev/null 2>&1; \
+                   docker-php-ext-install pcntl sockets >/dev/null 2>&1; \
                    [ "$(uname -m)" = riscv64 ] \
                      && echo pcre.jit=0 > /usr/local/etc/php/conf.d/99-no-pcre-jit.ini; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
@@ -210,8 +211,8 @@ jobs:
           docker run --rm --platform ${{ matrix.platform }} \
             -v "$PWD":/src -w /src \
             php:8.3-cli-alpine \
-            sh -c 'apk add --no-cache curl >/dev/null 2>&1; \
-                   docker-php-ext-install pcntl >/dev/null 2>&1; \
+            sh -c 'apk add --no-cache curl linux-headers >/dev/null 2>&1; \
+                   docker-php-ext-install pcntl sockets >/dev/null 2>&1; \
                    sh tests/phar-serves.sh bin/qbixserver.phar'
 
   # ── The other Unixes ───────────────────────────────────────
