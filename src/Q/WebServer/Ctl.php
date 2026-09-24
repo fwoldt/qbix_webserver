@@ -273,6 +273,57 @@ class Q_WebServer_Ctl
 
 	// ── Commands ─────────────────────────────────────────────────────────
 
+
+	/**
+	 * The panel's settings file for these options, where the server keeps it:
+	 * the directory above --root (default ./web), or the --app directory,
+	 * then local/panel.json. Null when that directory does not exist.
+	 * @method panelPasswordFile
+	 * @static
+	 * @param {array} $opts
+	 * @return {string|null}
+	 */
+	static function panelPasswordFile(array $opts)
+	{
+		if (isset($opts['app']) and is_string($opts['app'])) {
+			$appDir = realpath($opts['app']);
+		} else {
+			$root = (isset($opts['root']) and is_string($opts['root'])) ? $opts['root'] : getcwd() . '/web';
+			$root = realpath($root);
+			$appDir = $root === false ? false : dirname($root);
+		}
+		if ($appDir === false or !is_dir($appDir)) return null;
+		return rtrim($appDir, '/') . '/local/panel.json';
+	}
+
+	/**
+	 * A password from --password, else asked for twice on a terminal (not
+	 * echoed), else the first line of standard input. Null, with the reason
+	 * printed, when there is none or the two entries differ.
+	 */
+	static function readPassword(array $opts)
+	{
+		if (isset($opts['password']) and is_string($opts['password'])) return $opts['password'];
+		$tty = function_exists('stream_isatty') && @stream_isatty(STDIN);
+		if (!$tty) {
+			$line = fgets(STDIN);
+			$line = $line === false ? '' : rtrim($line, "\r\n");
+			if ($line === '') { Q_Console::err('no password given (use --password, or pipe it on standard input)'); return null; }
+			return $line;
+		}
+		$ask = function ($prompt) {
+			fwrite(STDERR, $prompt);
+			@shell_exec('stty -echo 2>/dev/null');
+			$line = fgets(STDIN);
+			@shell_exec('stty echo 2>/dev/null');
+			fwrite(STDERR, "\n");
+			return $line === false ? '' : rtrim($line, "\r\n");
+		};
+		$first = $ask('New panel password: ');
+		if ($first === '') { Q_Console::err('no password given'); return null; }
+		if ($ask('Again: ') !== $first) { Q_Console::err('the two passwords differ; nothing changed'); return null; }
+		return $first;
+	}
 	/**
 	 * Register the control commands with Q_Console.
 	 * @method register
@@ -446,6 +497,25 @@ class Q_WebServer_Ctl
 			Q_Console::out('  issued: ' . $r['cert'] . ' (expires ' . date('Y-m-d', $r['expires']) . '); a running server swaps it in within a minute');
 			return 0;
 		}, $ctxOpts + array('staging' => array('Use Let\'s Encrypt\'s staging server (for trying things out)', false)), array(), '[domain...]');
+		$C::add('panel:password', 'Set or change the control panel password', function ($a, $o) {
+			$file = self::panelPasswordFile($o);
+			if ($file === null) {
+				Q_Console::err('no such directory: ' . ($o['app'] ?? $o['root'] ?? getcwd() . '/web'));
+				return 1;
+			}
+			$password = self::readPassword($o);
+			if ($password === null) return 1;
+			if (!class_exists('Q_WebServer_Panel')) require_once self::$sourceDir . '/src/Q/WebServer/Panel.php';
+			// A changed password ends the sessions signed in with the old one.
+			$r = Q_WebServer_Panel::storePassword($password, $file, true);
+			if (!$r['ok']) { Q_Console::err($r['error']); return 1; }
+			Q_Console::out('panel password set in ' . $r['path'] . '; sign in at /Q/panel');
+			return 0;
+		}, array(
+			'root' => 'The document root the server runs with (default: ./web)',
+			'app' => 'The application directory, for a server run with --app',
+			'password' => 'The password (default: asked for, or read from standard input)',
+		));
 		$C::add('cache:clear', 'Invalidate every page in the response cache', function ($a, $o) use ($say) {
 			self::context($o);
 			$dir = isset($o['cache-dir']) ? (string) $o['cache-dir'] : Q_Config::get('Q', 'web', 'cache', 'dir', null);
