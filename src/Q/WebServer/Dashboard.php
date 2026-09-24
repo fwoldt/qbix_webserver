@@ -542,15 +542,17 @@ class Q_WebServer_Dashboard
 			$maintainedBy = '<div class="foot-by">' . $inner . '</div>';
 		}
 		$statsArr = self::getStats();
-		$stats = json_encode($statsArr);
+		// Into a <script>: < > & ' " as \u escapes, so no value -- a request
+		// path in the recent list, say -- can close the script element.
+		$jsonFlags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+		$stats = json_encode($statsArr, $jsonFlags);
 		// Cards rendered here as well as by U(), from the same helpers the
 		// script mirrors, so the first paint already reads correctly.
 		$topPathsHtml = self::topPathsHtml($statsArr['topPaths'] ?? array());
 		$ramSrv = $statsArr['systemRam'] ?? null;
 		$sysramHtml = $ramSrv ? self::ramPercentHtml($ramSrv) : '&#8212;';
 		$sysramDetailHtml = $ramSrv ? self::ramDetailHtml($ramSrv) : '&#8212;';
-		$recent = json_encode(array_reverse(array_slice(self::$recentRequests, -50)));
-		$host = $parsed['headers']['host'] ?? 'localhost';
+		$recent = json_encode(array_reverse(array_slice(self::$recentRequests, -50)), $jsonFlags);
 
 		// Get auth token for WebSocket connection
 		$wsToken = '';
@@ -563,14 +565,19 @@ class Q_WebServer_Dashboard
 			if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
 			$wsToken = $qp['token'] ?? '';
 		}
-		if (!$wsToken) {
-			$wsToken = Q_Config::get('Q', 'dashboard', 'token', '');
-		}
-
-		$tokenParam = $wsToken ? "?token=$wsToken" : '';
+		// Only a token the caller brought is passed on. The configured
+		// Q.dashboard.token used to be written into the page when none was
+		// given, handing the secret to anyone the page was shown to; the
+		// WebSocket is now allowed by the same rule as this page.
+		//
+		// URL-encoded: it goes inside a JavaScript string, and a ?token=
+		// containing a quote was script injected into the dashboard by a link.
+		$tokenParam = (is_string($wsToken) and $wsToken !== '') ? '?token=' . rawurlencode($wsToken) : '';
 		// Scheme and host are chosen in the browser from location, below --
-		// a hardcoded ws:// is blocked as mixed content on an https page.
-		$baseUrl = "http://$host";
+		// a hardcoded ws:// is blocked as mixed content on an https page. The
+		// request links (BASE) likewise use location.origin: they were built
+		// from the Host header, unescaped inside a JavaScript string, and
+		// always http:// even on an https dashboard.
 		// Icons, manifest and link-preview tags (Q_WebServer_Brand).
 		$brandHead = Q_WebServer_Brand::headTags(Q_WebServer::brand() . ' Dashboard', '/Q/dashboard');
 		return <<<HTML
@@ -681,7 +688,7 @@ transition:background .1s}
 <div class="le lh"><span class="lk"></span><span class="lt">Time</span><span class="ls">Sts</span><span class="lm">Verb</span><span class="lu">Path</span><span class="ld">ms</span><span class="lmem">Mem</span></div><div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
 
 <script>
-var S=$stats,R=$recent,BASE='$baseUrl',
+var S=$stats,R=$recent,BASE=location.origin,
     L=document.getElementById('log'),SP=document.getElementById('spark'),
     LW=document.getElementById('log-wrap'),paused=false,MAX_LOG=300,
     sidFilter='',scFilter='',knownSids={},knownCodes={};

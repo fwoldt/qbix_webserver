@@ -139,11 +139,22 @@ class Q_WebServer_Proxy
 	 */
 	static function ipInCidr($ip, $cidr)
 	{
-		list($subnet, $bits) = explode('/', $cidr);
-		$ip = ip2long($ip);
-		$subnet = ip2long($subnet);
-		if ($ip === false || $subnet === false) return false;
-		$mask = -1 << (32 - (int) $bits);
-		return ($ip & $mask) === ($subnet & $mask);
+		// IPv4 and IPv6 alike, compared as packed bytes. This was ip2long()
+		// only, so an IPv6 range in the trusted list (a CDN's, or fc00::/7
+		// for a private network) matched nothing, and "/0" built a wrong
+		// mask on 64-bit PHP.
+		$parts = explode('/', $cidr, 2);
+		if (count($parts) !== 2 or !ctype_digit($parts[1])) return false;
+		$a = @inet_pton(trim((string) $ip, '[]'));
+		$b = @inet_pton(trim($parts[0], '[]'));
+		if ($a === false || $b === false || strlen($a) !== strlen($b)) return false;
+		$bits = (int) $parts[1];
+		if ($bits > strlen($a) * 8) return false;
+		$whole = intdiv($bits, 8);
+		if (strncmp($a, $b, $whole) !== 0) return false;
+		$rest = $bits % 8;
+		if ($rest === 0) return true;
+		$mask = (0xff << (8 - $rest)) & 0xff;
+		return (ord($a[$whole]) & $mask) === (ord($b[$whole]) & $mask);
 	}
 }

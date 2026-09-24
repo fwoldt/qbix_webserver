@@ -162,6 +162,24 @@ class Q_WebServer_Http2_Hpack
 	/** @var int the peer's declared limit on the dynamic table, in octets */
 	public $maxSize = 4096;
 
+	/**
+	 * @var int the most a peer may resize our decoding table to: the
+	 * SETTINGS_HEADER_TABLE_SIZE this side advertises (the default, 4096).
+	 */
+	public $advertisedMaxSize = 4096;
+
+	/**
+	 * @var int decoded header list limit, by RFC 7541's size (name + value
+	 * + 32 per field). The connection caps the COMPRESSED block at 64 KB,
+	 * but a block that indexes one large entry and then refers to it byte
+	 * by byte expands many times over: without this, 64 KB on the wire
+	 * became hundreds of megabytes of header array, per stream.
+	 */
+	public $maxListSize = 65536;
+
+	/** @var int decoded header field count limit, for the same reason */
+	public $maxFields = 256;
+
 	/** @var int the size currently accounted for, by the RFC's formula */
 	public $size = 0;
 
@@ -403,6 +421,12 @@ class Q_WebServer_Http2_Hpack
 	 */
 	function resize($max)
 	{
+		// RFC 7541 6.3: an update above the limit this side advertised is a
+		// decoding error. It was honoured, letting a peer grow our table
+		// without bound.
+		if ($max > $this->advertisedMaxSize) {
+			throw new Exception("HPACK table size update $max above the advertised {$this->advertisedMaxSize}");
+		}
 		$this->maxSize = $max;
 		while ($this->size > $this->maxSize and count($this->dynamic)) {
 			$last = array_pop($this->dynamic);
@@ -426,8 +450,18 @@ class Q_WebServer_Http2_Hpack
 		$out = array();
 		$pos = 0;
 		$len = strlen($block);
+		$listSize = 0;
+		$counted = 0;
 
 		while ($pos < $len) {
+			// What has been decoded so far, checked before the next field:
+			// the compressed size says nothing about the decoded one.
+			for (; $counted < count($out); ++$counted) {
+				$listSize += strlen($out[$counted][0]) + strlen($out[$counted][1]) + 32;
+			}
+			if ($listSize > $this->maxListSize or $counted > $this->maxFields) {
+				throw new Exception("HPACK header list over the limit ($listSize octets, $counted fields)");
+			}
 			$byte = ord($block[$pos]);
 
 			if ($byte & 0x80) {
@@ -476,6 +510,12 @@ class Q_WebServer_Http2_Hpack
 			$out[] = array($name, $value);
 		}
 
+		for (; $counted < count($out); ++$counted) {
+			$listSize += strlen($out[$counted][0]) + strlen($out[$counted][1]) + 32;
+		}
+		if ($listSize > $this->maxListSize or $counted > $this->maxFields) {
+			throw new Exception("HPACK header list over the limit ($listSize octets, $counted fields)");
+		}
 		return $out;
 	}
 

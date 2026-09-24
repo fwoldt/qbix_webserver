@@ -288,6 +288,36 @@ class Q_WebServer_Log
 		return preg_replace_callback(
 			'/%(?:\{([^}]*)\}([ioTt])|>?([a-zA-Z%]))/',
 			function ($m) use ($f, $size, $ms, $path, $query, $proto, $request, $headers) {
+				// Every value escaped as Apache does: a client-supplied header
+				// or path with a line break in it otherwise wrote a line of
+				// its own into the log, and a quote closed the field early.
+				return Q_WebServer_Log::logSafe(Q_WebServer_Log::formatField($m, $f, $size, $ms,
+					$path, $query, $proto, $request, $headers));
+			},
+			$format
+		);
+	}
+
+	/**
+	 * A value made safe for one field of a log line: control characters as
+	 * \xhh, and " and \ backslash-escaped, as Apache's mod_log_config does.
+	 * @method logSafe
+	 * @static
+	 * @param {string} $v
+	 * @return {string}
+	 */
+	static function logSafe($v)
+	{
+		$v = (string) $v;
+		if (!preg_match('/[\x00-\x1f\x7f"\\\\]/', $v)) return $v;
+		return preg_replace_callback('/[\x00-\x1f\x7f"\\\\]/', function ($c) {
+			return ($c[0] === '"' || $c[0] === '\\') ? '\\' . $c[0] : sprintf('\\x%02x', ord($c[0]));
+		}, $v);
+	}
+
+	/** One format directive's value, unescaped; see formatAccess(). */
+	static function formatField($m, $f, $size, $ms, $path, $query, $proto, $request, $headers)
+	{
 				if ($m[1] !== '' or ($m[2] ?? '') !== '') {
 					$arg = $m[1];
 					switch ($m[2]) {
@@ -322,9 +352,6 @@ class Q_WebServer_Log
 					case '%': return '%';
 				}
 				return $m[0];
-			},
-			$format
-		);
 	}
 
 	static function access($ip, $method, $uri, $status, $size, $referer, $ua, $ms, $extra = array())

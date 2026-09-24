@@ -259,8 +259,9 @@ class Q_WebServer_Cache
 		if (!self::$enabled) return null;
 		if ($parsed['method'] !== 'GET') return null;
 
-		// Skip cache if request has bypass cookies
+		// Skip cache if request has bypass cookies, or credentials of its own
 		if (self::hasSkipCookie($parsed['headers'])) return null;
+		if (!empty($parsed['headers']['authorization'])) return null;
 
 		// A refresh request reads past the stored copy so that the response is
 		// rendered and put() stores it again.
@@ -404,7 +405,8 @@ class Q_WebServer_Cache
 			&& self::$negativeTtl > 0;
 
 		if ((!$negative and $status !== 200)
-		or self::hasSkipCookie($parsed['headers'])) {
+		or self::hasSkipCookie($parsed['headers'])
+		or self::isPersonal($parsed, $response)) {
 			self::releaseRevalidation(self::cacheKey($parsed));
 			return $response;
 		}
@@ -1191,6 +1193,35 @@ class Q_WebServer_Cache
 		// Written by an earlier version, with the body inside the JSON.
 		$entry = json_decode($raw, true);
 		return is_array($entry) ? $entry : null;
+	}
+
+	/**
+	 * Whether a response belongs to one visitor and must not be stored.
+	 *
+	 * The skip cookies catch a signed-in visitor's request. They could not
+	 * catch a response that SETS a cookie -- a session started, a login
+	 * answered -- which was stored with its Set-Cookie and handed, cookie
+	 * and all, to every visitor after it until it expired: one visitor's
+	 * session given to the next. Nor a request that brought credentials of
+	 * its own in an Authorization header, whose page may be made for that
+	 * caller alone. Neither is stored.
+	 *
+	 * @method isPersonal
+	 * @static
+	 * @param {array} $parsed
+	 * @param {array} $response
+	 * @return {boolean}
+	 */
+	static function isPersonal($parsed, $response)
+	{
+		if (!empty($parsed['headers']['authorization'])) return true;
+		if (!empty($response['cookies'])) return true;
+		foreach ((array) ($response['headers'] ?? array()) as $name => $value) {
+			if (strcasecmp((string) $name, 'Set-Cookie') === 0 and $value !== '' and $value !== array()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	static function cacheKey($parsed)

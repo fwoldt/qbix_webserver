@@ -1611,8 +1611,22 @@ class Q_WebServer
 				return 'Content-Length is not a number';
 			}
 		}
-		if (strpos($head, "\r\n") === false and strpos($head, "\n") !== false) {
+		// Any LF not preceded by CR, anywhere in the head -- not only a head
+		// written wholly in bare LF, which was all this used to catch. A
+		// CRLF-framed request with a bare LF inside a header value passed,
+		// the LF stayed in the value, and the access log wrote it as a real
+		// line break: anyone could forge log lines, and a proxy in front that
+		// treats bare LF as a line end would read different headers than this
+		// server does. A bare CR is the same fault the other way round.
+		if (preg_match('/(?<!\r)\n|\r(?!\n)/', $head)) {
 			return 'bare LF line endings';
+		}
+		// Obsolete line folding: a header line starting with a space or tab
+		// continues the previous one. RFC 9112 lets a server refuse it, and
+		// accepting it is another way for two parsers to disagree about
+		// where one header ends.
+		if (preg_match('/\r\n[ \t]/', $head)) {
+			return 'obsolete line folding';
 		}
 		return null;
 	}
