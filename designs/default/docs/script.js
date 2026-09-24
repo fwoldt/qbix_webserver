@@ -15,6 +15,8 @@ var docTitles = {
   "security.md": "Security",
   "cache.md": "Response Cache",
   "workers.md": "Workers & Pool",
+  "lessons.md": "Lessons",
+  "time-consuming-lessons.md": "Time-Consuming Lessons",
   "designs.md": "Designs",
   "binaries.md": "Binaries & Signing",
   "migrate-nginx.md": "Migrate from nginx",
@@ -42,6 +44,7 @@ async function init() {
     "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
     "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","deploy.md","binaries.md","api-discovery.md"],
     "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
+    "Lessons":["lessons.md","time-consuming-lessons.md"],
     "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};
   // A page in docs/ that no section names is listed under "More", so a new
   // page is reachable before anyone files it.

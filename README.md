@@ -69,6 +69,8 @@ You can also package your entire app — code, assets, SQLite database — into 
 | 📀 | [Binaries & Signing](docs/binaries.md) | Pack apps, manage like zip, ECDSA M-of-N signing, Rekor, platform signing |
 | 🏗️ | [Architecture](docs/architecture.md) | Persistent workers, COW, execution model, mental model, benchmarks |
 | 🏭 | [Workers & Pool](docs/workers.md) | Pool size, static and dynamic pools, when a worker is replaced, reload |
+| 🧭 | [Lessons](docs/lessons.md) | What persists between requests, what workers inherit, memory, opcache, TLS in a forked child |
+| ⏳ | [Time-Consuming Lessons](docs/time-consuming-lessons.md) | The problems that took longest to diagnose: symptom, cause, how to recognise it, fix |
 | 📊 | [Dashboard & Panel](docs/dashboard.md) | Live stats, control panel tabs |
 | 🎨 | [Designs](docs/designs.md) | Restyle the dashboard, panel, docs, listing and error pages from `designs/` |
 | 🚀 | [Deploy & Federation](docs/deploy.md) | Rsync deploy, cluster replication, inter-server trust |

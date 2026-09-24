@@ -139,5 +139,7 @@ The pool size itself is given with `--workers`.
 | `/Q/panel`, Workers tab | Every worker with its pid, state and requests served, and the queue length. |
 | The console log | One line for each worker replaced, retried or found dead, with the reason. |
 
+What carries over between requests and what a forked worker inherits: [lessons.md](lessons.md); problems that took longest to diagnose: [time-consuming-lessons.md](time-consuming-lessons.md).
+
 ---
 [← Back to README](../README.md)

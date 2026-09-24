@@ -171,5 +171,7 @@ Every setting, with its default. All are under `Q.web.cache`.
 `/Q/health` reports hits, misses and the hit rate under `cache`. See [headers.md](headers.md) for
 what your PHP can send to steer caching.
 
+The opcode cache, caches written during a fault, and other lessons: [lessons.md](lessons.md), [time-consuming-lessons.md](time-consuming-lessons.md).
+
 ---
 [← Back to README](../README.md)
