@@ -1704,7 +1704,7 @@ function pwChecks(pw, rules) {
     ['no more than ' + (rules.maxBytes || 72) + ' bytes', new TextEncoder().encode(pw).length <= (rules.maxBytes || 72)],
     ['an uppercase letter', up], ['a lowercase letter', lo], ['a digit', dg], ['a symbol', sy],
     [minDistinct + ' or more different characters', new Set(chars).size >= minDistinct],
-    ['no character three times in a row', !/(.)\1\1/u.test(pw)],
+    ['no letter three times in a row (aaa); digits, symbols and separators may repeat', !/(\p{L})\1\1/u.test(pw)],
     ['no run of four in order (abcd, 4321, qwer)', !run],
     ['none of: panel, qbix, password, admin, the server or host name', words.length === 0],
     ['at least ' + minBits + ' bits of estimated strength', bits >= minBits],

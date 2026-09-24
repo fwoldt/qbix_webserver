@@ -79,8 +79,10 @@ class Q_WebServer_Panel_PasswordPolicy
 		if ($distinct < $minDistinct) {
 			$failed[] = sprintf('At least %d different characters (this has %d).', $minDistinct, $distinct);
 		}
-		if (preg_match('/(.)\1\1/u', $pw)) {
-			$failed[] = 'No character three or more times in a row (like "aaa").';
+		// Letters only: a year (2999), a symbol cluster (***) or a separator run
+		// (---) is how people really write strong keys, and says nothing weak.
+		if (preg_match('/(\p{L})\1\1/u', $pw)) {
+			$failed[] = 'No letter three or more times in a row (like "aaa"); digits, symbols and separators may repeat.';
 		}
 		if (($run = self::sequenceIn($lower)) !== null) {
 			$failed[] = sprintf('No run of four or more in order, forwards or backwards (found "%s").', $run);
@@ -92,8 +94,6 @@ class Q_WebServer_Panel_PasswordPolicy
 		if (!empty($context['host']) and is_string($context['host'])) {
 			$host = strtolower(preg_replace('/:\d+$/', '', trim($context['host'], '[] ')));
 			$words[] = $host;
-			$first = explode('.', $host)[0];
-			if (strlen($first) >= 4) $words[] = $first;
 		}
 		foreach (array_unique($words) as $w) {
 			$w = function_exists('mb_strtolower') ? mb_strtolower(trim($w), 'UTF-8') : strtolower(trim($w));

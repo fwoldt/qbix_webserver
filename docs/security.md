@@ -171,7 +171,7 @@ loop fails the suite rather than quietly reopening the hole.
 ## The control panel's password
 
 The panel is the page that changes the server, so its password is held to strict
-rules (16+ characters, four character classes, no runs, repeats, common passwords or
+rules (16+ characters, four character classes, no runs or repeated letters, common passwords or
 the server's own names, 80+ bits), stored with bcrypt, rehashed when the cost
 changes, and guarded by a lockout that doubles up to an hour. A server with no
 password yet signs in only with the default key, and only to change it. Everything

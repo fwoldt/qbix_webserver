@@ -57,7 +57,12 @@ check('digit: none fails', failsOnly('Vxh#qLmz!Rtj@Kwp', 'digit', $ctx), true);
 check('symbol: none fails', failsOnly('Vx7kqLm2cRt9dKw4', 'symbol', $ctx), true);
 check('a non-ASCII letter counts as its case', $P::check('Éx7#qLm2!Rt9@Kw4', $ctx), array());
 check('distinct: fewer than 10 fails', failsOnly('Ab1!Ab1!Ab1!Ab1!Ab1!Cd', 'different characters', $ctx), true);
-check('repeats: three in a row fails', failsOnly('Vx7#qLm2!Rt9@Kwww4', 'three or more times', $ctx), true);
+check('repeats: a letter three times in a row fails', failsOnly('Vx7#qLm2!Rt9@Kwww4', 'No letter three or more times', $ctx), true);
+check('repeats: digits, symbols and separators may repeat', $P::check('Vx7#qL-m2!Rt999@K***w4___', $ctx), array());
+// An operator's real key: a year, a symbol cluster, separators, and a host
+// label (alpha) that is not the whole host name.
+check('an operator key with a year, symbols and a host label passes',
+	$P::check('app-cp-alpha-demo-2999-VC-7X-$0*#(&0);[0]', array('default' => 'panel', 'brand' => 'Qbix Server', 'host' => 'alpha.example.com')), array());
 check('runs: abcd fails', failsOnly('Vx7#abcdL2!Rt9@K', 'run of four', $ctx), true);
 check('runs: 4321 fails', failsOnly('Vx#qL4321m!Rt@Kw', 'run of four', $ctx), true);
 check('runs: a keyboard row (qwer) fails', failsOnly('Vx7#QwerL2!t9@K4', 'run of four', $ctx), true);
@@ -65,7 +70,8 @@ check('words: the default key fails', failsOnly('Vx7#PaNeL2!Rt9@K', '"panel"', $
 check('words: "qbix" fails', failsOnly('Vx7#QbiX2!Rt9@Kw', '"qbix"', $ctx), true);
 check('words: "admin" fails', failsOnly('Vx7#AdMiN2!Rt9@K', '"admin"', $ctx), true);
 check('words: the brand fails', failsOnly('Vx7#qbix server2!R9@K', '"qbix', array('brand' => 'Qbix Server') + $ctx) !== array(), true);
-check('words: the host name fails', failsOnly('Vx7#Example2!R9@K', '"example"', $ctx), true);
+check('words: the whole host name fails', failsOnly('Vx7#Example.org2!R9@K', '"example.org"', $ctx), true);
+check('words: only part of the host name is fine', $P::check('Vx7#Example2!R9@Kq', $ctx), array());
 check('common: a common password with digits and symbols added fails',
 	count(array_filter($P::check('Sunshine!!2024##', $ctx), function ($r) { return strpos($r, 'common') !== false; })), 1);
 check('strength: under 80 bits fails', failsOnly('Kw7!', 'bits', array('default' => null)) === true

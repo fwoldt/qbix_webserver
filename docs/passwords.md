@@ -50,9 +50,9 @@ password breaks.
 | A digit | `Vx7#qLm2!Rt9@Kw4` | `Vxh#qLmz!Rtj@Kwp` |
 | A symbol | `Vx7#qLm2!Rt9@Kw4` | `Vx7kqLm2cRt9dKw4` |
 | At least 10 different characters | `Vx7#qLm2!Rt9@Kw4` | `Ab1!Ab1!Ab1!Ab1!Ab1!Cd` |
-| No character three times in a row | `Vx7#qLm2!Rt9@Kw4` | `Vx7#qLm2!Rt9@Kwww4` |
+| No letter three times in a row (digits, symbols and separators may repeat) | `app-cp-alpha-demo-2999-VC-7X-$0*#(&0);[0]` | `Vx7#qLm2!Rt9@Kwww4` |
 | No run of four in order, either way | `Vx7#qLm2!Rt9@Kw4` | `Vx7#abcdL2!Rt9@K`, `Vx#qL4321m!Rt@Kw`, `Vx7#QwerL2!t9@K4` |
-| None of: the default key, `qbix`, `password`, `admin`, the server's name, the host name | `Vx7#qLm2!Rt9@Kw4` | `Vx7#PaNeL2!Rt9@K`, `Vx7#AdMiN2!Rt9@K` |
+| None of: the default key, `qbix`, `password`, `admin`, the server's name, the full host name | `Vx7#qLm2!Rt9@Kw4` | `Vx7#PaNeL2!Rt9@K`, `Vx7#AdMiN2!Rt9@K` |
 | Not a common password | `Vx7#qLm2!Rt9@Kw4` | `Sunshine!!2024##` |
 | At least 80 bits of estimated strength | `Vx7#qLm2!Rt9@Kw4` (about 105) | anything short or drawn from one or two kinds of character |
 | Different from the current password | a new one | the one already set |
@@ -64,8 +64,9 @@ How they are read:
 - **Runs** are along the alphabet, the digits and the keyboard rows (`qwertyuiop`,
   `asdfghjkl`, `zxcvbnm`), forwards or backwards, whatever the case.
 - **Words** are matched anywhere in the password, whatever the case. The host name
-  is the one the page was opened with, and its first part when that is four letters
-  or more; the command line does not know it, so it is checked in the page only.
+  is the whole name the page was opened with (a word that only matches part of it,
+  such as `alpha` in `alpha.example.com`, is fine); the command line does not know
+  it, so it is checked in the page only.
 - **Common passwords** are a list of about a thousand, shipped with the server
   (`src/Q/WebServer/Panel/common-passwords.txt`). A password is refused when it is
   one of them, or becomes one once digits and symbols at the start and end are taken
