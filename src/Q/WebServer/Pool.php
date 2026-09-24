@@ -1325,6 +1325,14 @@ class Q_WebServer_Pool
 			$this->workerRequestHeaders[$index] = $reqHeaders;
 			$this->sendHttp($client, $response, $index, $mem);
 			Q_WebServer::closeClient((int) $client);
+			// Answered, so the client is no longer this worker's. recycle()
+			// closes whatever is still listed here, and in fork-per-request
+			// mode every worker is recycled right after this -- for a request
+			// that came over HTTP/2 that was the connection itself, with
+			// every other stream on it: fclose() sent close_notify, and a
+			// signed-in page lost the stylesheets, header images and scripts
+			// still in flight on that connection.
+			unset($this->workerClients[$index]);
 		}
 
 		// In octane mode the worker is still alive — mark it idle so it
@@ -1411,7 +1419,17 @@ class Q_WebServer_Pool
 			}
 		} elseif (isset($this->workerClients[$index])) {
 			$c = $this->workerClients[$index];
-			if (is_resource($c)) @fclose($c);
+			$responder = $this->workerResponders[$index] ?? null;
+			if ($responder) {
+				// HTTP/2, and the worker died part-way through its answer.
+				// The stream gets the 502; the connection it shares with the
+				// rest of the page is not this request's to close.
+				call_user_func($responder, array('status' => 502,
+					'headers' => array('Content-Type' => 'text/plain; charset=utf-8'),
+					'body' => 'Worker died'));
+			} elseif (is_resource($c)) {
+				@fclose($c);
+			}
 		}
 
 		if (isset($this->workers[$index])) {
