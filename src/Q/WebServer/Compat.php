@@ -39,6 +39,9 @@ class Q_WebServer_Compat
 		'header_remove'        => 'Q_WebServer_Compat::_header_remove',
 		'session_start'        => 'Q_WebServer_Compat::_session_start',
 		'session_id'           => 'Q_WebServer_Compat::_session_id',
+		'session_name'         => 'Q_WebServer_Compat::_session_name',
+		'session_set_cookie_params' => 'Q_WebServer_Compat::_session_set_cookie_params',
+		'session_get_cookie_params' => 'Q_WebServer_Compat::_session_get_cookie_params',
 		'session_write_close'  => 'Q_WebServer_Compat::_session_write_close',
 		'session_regenerate_id'=> 'Q_WebServer_Compat::_session_regenerate_id',
 		'session_destroy'      => 'Q_WebServer_Compat::_session_destroy',
@@ -122,6 +125,22 @@ class Q_WebServer_Compat
 	 * @var string
 	 */
 	private static $sessionId = '';
+
+	/**
+	 * The session name and cookie parameters the application asked for.
+	 * Kept here for the same reason as the id: PHP's session_name() and
+	 * session_set_cookie_params() refuse once output has begun, which in a
+	 * worker it always has, so the application's choice was dropped with a
+	 * warning -- every session went out as PHPSESSID with a browser-session
+	 * lifetime, and an application that looks for its own cookie name to
+	 * decide whether a visitor is signed in never found it.
+	 * null = not set this request; PHP's configured value applies.
+	 * @var string|null
+	 */
+	private static $sessionName = null;
+
+	/** @var array|null Cookie parameters set this request, as session_get_cookie_params() returns them */
+	private static $sessionCookieParams = null;
 
 	/** @var string Current session file path */
 	private static $sessionFile = '';
@@ -352,6 +371,8 @@ class Q_WebServer_Compat
 		self::$sessionFile = '';
 		self::$sessionFp = null;
 		self::$sessionId = '';
+		self::$sessionName = null;
+		self::$sessionCookieParams = null;
 		self::$requestHeaders = array();
 
 		@stream_wrapper_restore('file');
@@ -715,6 +736,24 @@ class Q_WebServer_Compat
 	/** Resolved path of the persisted pre-warm file, or null. */
 	private static $persistPath = false;
 
+	/**
+	 * Identifies the transformer that produced a cached result: a hash of
+	 * this file, which holds every rule the transform applies.
+	 *
+	 * @method rulesHash
+	 * @static
+	 * @return {string}
+	 */
+	static function rulesHash()
+	{
+		static $hash = null;
+		if ($hash === null) {
+			$hash = (string) @sha1_file(__FILE__);
+			if ($hash === '') $hash = sha1(serialize(self::$replacements));
+		}
+		return $hash;
+	}
+
 	/** How many entries the last prewarm() took from disk instead of redoing. */
 	private static $prewarmReused = 0;
 
@@ -786,6 +825,12 @@ class Q_WebServer_Compat
 		// The transformer's output can depend on the running PHP, so a cache
 		// written by another one says nothing about this one.
 		if (($data['php'] ?? 0) !== PHP_VERSION_ID) return null;
+		// And by another transformer: the entries are this file's output, so
+		// a change to it -- a function added to $replacements -- makes every
+		// one of them wrong. Checked against the format number alone, a new
+		// replacement never reached a file already in the cache: session_name()
+		// stayed PHP's, and sessions kept the default cookie name.
+		if (($data['rules'] ?? '') !== self::rulesHash()) return null;
 		if (($data['root'] ?? '') !== $root) return null;
 		if (!isset($data['entries']) || !is_array($data['entries'])) return null;
 		return $data['entries'];
@@ -812,6 +857,7 @@ class Q_WebServer_Compat
 		$blob = @serialize(array(
 			'v' => self::PREWARM_FORMAT,
 			'php' => PHP_VERSION_ID,
+			'rules' => self::rulesHash(),
 			'root' => $root,
 			'entries' => $entries,
 		));
@@ -1202,6 +1248,99 @@ class Q_WebServer_Compat
 		return $previous;
 	}
 
+	/**
+	 * Replacement for session_name().
+	 *
+	 * Reports, and before the session starts sets, the name of the session
+	 * cookie. See $sessionName for why the native one cannot be used.
+	 *
+	 * @param {string} $name New name, or null to only read
+	 * @return {string|false} The previous name, or false if it could not be set
+	 */
+	static function _session_name($name = null)
+	{
+		$previous = self::$sessionName ?? (\session_name() ?: 'PHPSESSID');
+		if ($name !== null) {
+			if (self::$sessionActive) {
+				trigger_error(
+					'session_name(): Session name cannot be changed when a session is active',
+					E_USER_WARNING
+				);
+				return false;
+			}
+			self::$sessionName = (string) $name;
+		}
+		return $previous;
+	}
+
+	/**
+	 * Replacement for session_get_cookie_params().
+	 *
+	 * @return {array} lifetime, path, domain, secure, httponly, samesite
+	 */
+	static function _session_get_cookie_params()
+	{
+		if (self::$sessionCookieParams !== null) return self::$sessionCookieParams;
+		$native = \session_get_cookie_params();
+		return array(
+			'lifetime' => (int) ($native['lifetime'] ?? 0),
+			'path'     => (string) ($native['path'] ?? '/'),
+			'domain'   => (string) ($native['domain'] ?? ''),
+			'secure'   => (bool) ($native['secure'] ?? false),
+			'httponly' => (bool) ($native['httponly'] ?? false),
+			'samesite' => (string) ($native['samesite'] ?? ''),
+		);
+	}
+
+	/**
+	 * Replacement for session_set_cookie_params(), in both of its forms:
+	 * (lifetime, path, domain, secure, httponly) and (array $options).
+	 *
+	 * @return {boolean}
+	 */
+	static function _session_set_cookie_params(
+		$lifetime_or_options, $path = null, $domain = null, $secure = null, $httponly = null
+	) {
+		if (self::$sessionActive) {
+			trigger_error(
+				'session_set_cookie_params(): Session cookie parameters cannot be changed when a session is active',
+				E_USER_WARNING
+			);
+			return false;
+		}
+		$params = self::_session_get_cookie_params();
+		if (is_array($lifetime_or_options)) {
+			foreach (array('lifetime', 'path', 'domain', 'secure', 'httponly', 'samesite') as $k) {
+				if (array_key_exists($k, $lifetime_or_options)) $params[$k] = $lifetime_or_options[$k];
+			}
+		} else {
+			$params['lifetime'] = (int) $lifetime_or_options;
+			if ($path !== null) $params['path'] = (string) $path;
+			if ($domain !== null) $params['domain'] = (string) $domain;
+			if ($secure !== null) $params['secure'] = (bool) $secure;
+			if ($httponly !== null) $params['httponly'] = (bool) $httponly;
+		}
+		$params['lifetime'] = (int) $params['lifetime'];
+		self::$sessionCookieParams = $params;
+		return true;
+	}
+
+	/**
+	 * The session cookie, with the parameters the application set.
+	 */
+	private static function setSessionCookie($name, $id)
+	{
+		$p = self::_session_get_cookie_params();
+		self::_setcookie($name, $id, array(
+			'expires'  => $p['lifetime'] > 0 ? time() + $p['lifetime'] : 0,
+			'path'     => $p['path'] !== '' ? $p['path'] : '/',
+			'domain'   => $p['domain'],
+			'secure'   => $p['secure'],
+			'httponly' => $p['httponly'],
+			'samesite' => $p['samesite'],
+		));
+	}
+
 	static function _session_start($options = array())
 	{
 		if (self::$sessionActive) return true;
@@ -1210,7 +1349,7 @@ class Q_WebServer_Compat
 			?? self::_ini_get('session.save_path')
 			?: sys_get_temp_dir();
 		$name = $options['name']
-			?? session_name()
+			?? self::_session_name()
 			?: 'PHPSESSID';
 		$maxLifetime = (int) ($options['gc_maxlifetime']
 			?? self::_ini_get('session.gc_maxlifetime')
@@ -1225,7 +1364,7 @@ class Q_WebServer_Compat
 		// path.
 		if (!$id || !preg_match('/^[a-zA-Z0-9,-]{22,256}$/D', $id)) {
 			$id = bin2hex(random_bytes(16));
-			self::_setcookie($name, $id, 0, '/');
+			self::setSessionCookie($name, $id);
 		}
 
 		// Deliberately not session_id($id): this layer runs the session
@@ -1322,8 +1461,8 @@ class Q_WebServer_Compat
 		}
 
 		// Update cookie
-		$name = session_name() ?: 'PHPSESSID';
-		self::_setcookie($name, $newId, 0, '/');
+		$name = self::_session_name();
+		self::setSessionCookie($name, $newId);
 
 		return true;
 	}
