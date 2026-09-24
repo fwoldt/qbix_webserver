@@ -1395,6 +1395,14 @@ class Q_WebServer_Pool
 					(int) ($this->workers[$index]['requests'] ?? 0),
 					$recycleReason));
 			}
+			// Above the pool's size -- it was made smaller while this worker
+			// was busy -- a worker that falls idle leaves rather than waits.
+			if (count($this->workers) > $this->targetSize and empty($this->pending)
+				and empty($this->workers[$index]['recycleAfter'])) {
+				$this->retire($index);
+				return;
+			}
+
 			$shouldRecycle = !empty($this->workers[$index]['recycleAfter'])
 				|| ($this->maxRequests > 0 && $this->workers[$index]['requests'] >= $this->maxRequests);
 
@@ -1486,6 +1494,10 @@ class Q_WebServer_Pool
 			and count($this->workers) >= $this->spareWorkers) {
 			return;
 		}
+		// Nor above the pool's size, which resize() may have lowered.
+		if (empty($this->pending) and count($this->workers) >= $this->targetSize) {
+			return;
+		}
 		$newIdx = $this->forkWorker();
 
 		// Drain pending queue
@@ -1530,6 +1542,19 @@ class Q_WebServer_Pool
 
 	protected function sendHttp($client, $resp, $index, $mem = 0)
 	{
+		// Component cache headers: register the page's tree and dependencies,
+		// act on invalidations, and strip them -- they are for this server,
+		// not the client. Only the in-process path did this, so under a pool
+		// the headers went out to the browser and nothing was ever registered.
+		if (isset($this->workerRequests[$index])
+			and class_exists('Q_WebServer_Cache_Components', false)
+			and Q_WebServer_Cache_Components::enabled()
+			and isset($resp['headers']) and is_array($resp['headers'])) {
+			Q_WebServer_Cache_Components::processResponseHeaders(
+				Q_WebServer_Cache_Components::pageKey($this->workerRequests[$index]),
+				$resp['headers']);
+		}
+
 		$responder = $this->workerResponders[$index] ?? null;
 		if ($responder) {
 			$this->workerResponders[$index] = null;
@@ -1701,6 +1726,94 @@ class Q_WebServer_Pool
 		if ($this->spareWorkers <= 0 or count($this->workers) < $this->spareWorkers) {
 			$this->forkWorker();
 		}
+	}
+
+	/**
+	 * Change the pool's size while it runs -- the panel's workers/resize.
+	 *
+	 * A fixed pool forks up to $count at once, and above it retires idle
+	 * workers now and busy ones as each finishes its request. A dynamic pool
+	 * takes $count as its new ceiling; its spare count is kept, capped at the
+	 * new ceiling. Nothing a worker is doing is interrupted.
+	 * @method resize
+	 * @param {integer} $count
+	 * @return {array} target, workers running now, and extras still busy
+	 */
+	function resize($count)
+	{
+		$count = max(1, (int) $count);
+		$this->targetSize = $count;
+		if ($this->spareWorkers > $count) $this->spareWorkers = $count;
+		if ($this->spareWorkers <= 0) {
+			while (count($this->workers) < $count) $this->forkWorker();
+		}
+		if (count($this->workers) > $count) {
+			$idle = array();
+			foreach ($this->workers as $i => $w) {
+				if (empty($w['busy'])) $idle[$i] = $w['idleSince'] ?? 0;
+			}
+			asort($idle);
+			foreach ($idle as $i => $since) {
+				if (count($this->workers) <= $count) break;
+				$this->retire($i);
+			}
+		}
+		return array('target' => $this->targetSize, 'workers' => count($this->workers),
+			'retiring' => max(0, count($this->workers) - $count));
+	}
+
+	/**
+	 * Answer 504 for, and kill, every worker still on a request after
+	 * $timeout seconds -- Q.webserver.requestTimeout. The limit was enforced
+	 * only on fork-per-request children, so a pooled script caught in a loop
+	 * or waiting on a dead backend held its worker, and its visitor, for
+	 * ever. The client is answered and let go first, so the worker's death
+	 * is not taken for a lost request and run again on another worker, where
+	 * it would hang the same way. The socket then reaches EOF and recycle()
+	 * reaps and replaces the worker as for any other death.
+	 * @method killOverdue
+	 * @param {float} $timeout seconds; 0 or less does nothing
+	 * @return {integer} how many workers were killed
+	 */
+	function killOverdue($timeout)
+	{
+		if ($timeout <= 0) return 0;
+		$now = microtime(true);
+		$killed = 0;
+		foreach ($this->workers as $index => $w) {
+			if (empty($w['busy']) or !empty($w['dying'])) continue;
+			$started = $this->workerStarted[$index] ?? null;
+			if ($started === null or $now - $started <= $timeout) continue;
+			$parsed = $this->workerRequests[$index] ?? array();
+			$method = $parsed['method'] ?? 'GET';
+			$uri = $parsed['uri'] ?? '/';
+			$ms = round(($now - $started) * 1000, 1);
+			$body = 'Request timed out';
+			$client = $this->workerClients[$index] ?? null;
+			$responder = $this->workerResponders[$index] ?? null;
+			if ($responder) {
+				call_user_func($responder, array('status' => 504,
+					'headers' => array('Content-Type' => 'text/plain; charset=utf-8'),
+					'body' => $body));
+			} elseif ($client and is_resource($client)) {
+				Q_WebServer::sendResponse($client, 504, $body);
+				Q_WebServer::closeClient((int) $client);
+				if (is_resource($client)) @fclose($client);
+			}
+			unset($this->workerClients[$index], $this->workerResponders[$index]);
+			// Still busy, so nothing is dispatched to it while it dies.
+			$this->workers[$index]['dying'] = true;
+			$pid = (int) ($w['pid'] ?? 0);
+			if ($pid > 0) @posix_kill($pid, SIGKILL);
+			fwrite(STDERR, sprintf("  worker %d killed after %.1fs on %s %s (requestTimeout %ss)\n",
+				$pid, $now - $started, $method, $uri, $timeout));
+			Q_WebServer_Dashboard::recordRequest($method, $uri, 504, $ms, 0, true);
+			if (class_exists('Q_WebServer_Metrics', false)) {
+				Q_WebServer_Metrics::recordRequest(504, $ms, $method, $uri, '', '', 0);
+			}
+			++$killed;
+		}
+		return $killed;
 	}
 
 	/**

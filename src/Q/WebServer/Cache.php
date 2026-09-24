@@ -315,6 +315,25 @@ class Q_WebServer_Cache
 	}
 
 	/**
+	 * Whether a path belongs to the server itself -- /Q/ and /.well-known/ --
+	 * rather than to the application. Those are never stored or served from
+	 * this cache, whatever answered them: when /Q/panel reached the
+	 * application (over HTTP/2, before the server answered it there), the
+	 * application's 404 was stored under /Q/panel and then served in place of
+	 * the panel on both protocols, long after the route was fixed.
+	 * @method isServerPath
+	 * @static
+	 * @param {string} $path
+	 * @return {boolean}
+	 */
+	static function isServerPath($path)
+	{
+		$path = (string) $path;
+		return strncmp($path, '/Q/', 3) === 0 || $path === '/Q'
+			|| strncmp($path, '/.well-known/', 13) === 0;
+	}
+
+	/**
 	 * Try to serve from cache. Returns response array or null.
 	 *
 	 * Called in the parent event loop BEFORE dispatching to a
@@ -329,6 +348,7 @@ class Q_WebServer_Cache
 	{
 		if (!self::$enabled) return null;
 		if ($parsed['method'] !== 'GET') return null;
+		if (self::isServerPath($parsed['path'] ?? '')) return null;
 
 		// Skip cache if request has bypass cookies, or credentials of its own
 		if (self::hasSkipCookie($parsed['headers'])) return null;
@@ -465,6 +485,7 @@ class Q_WebServer_Cache
 		// nothing, so a caller can always assign the result without checking.
 		if (!self::$enabled) return $response;
 		if ($parsed['method'] !== 'GET') return $response;
+		if (self::isServerPath($parsed['path'] ?? '')) return $response;
 
 		// A request that claimed the re-render and then produced something
 		// uncacheable -- an error, a redirect, a no-store -- must still give

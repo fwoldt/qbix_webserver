@@ -36,55 +36,187 @@ class Q_WebServer_Panel
 	 */
 	static function handle($client, $parsed)
 	{
-		$path = $parsed['path'];
+		$r = self::respond($parsed);
+		if ($r === null) return false;
+		$headers = $r['headers'] ?? array();
+		$type = $headers['Content-Type'] ?? 'text/plain; charset=utf-8';
+		unset($headers['Content-Type']);
+		Q_WebServer::sendResponse($client, $r['status'] ?? 200, $r['body'] ?? '', $type, $headers);
+		return true;
+	}
 
-		// SECURITY: Panel is restricted to localhost by default.
-		// Set Q.panel.remote = true in config to allow remote access.
+	/**
+	 * The panel's answer to a request, as a response array, or null when the
+	 * path is not the panel's. handle() sends it on an HTTP/1.1 connection;
+	 * Q_WebServer::route() returns it to HTTP/2, which a browser speaks by
+	 * default -- and which, answered by nothing, handed /Q/panel to the
+	 * application and showed its 404. One function, so both protocols apply
+	 * the same address rule and the same authentication.
+	 * @method respond
+	 * @static
+	 * @param {array} $parsed with clientIp (or _remoteAddr) set
+	 * @return {array|null} status, headers, body
+	 */
+	static function respond($parsed)
+	{
+		$path = $parsed['path'];
+		$json = function ($status, $data) {
+			return array('status' => $status, 'body' => json_encode($data),
+				'headers' => array('Content-Type' => 'application/json'));
+		};
+
+		// Who may reach the panel at all: see allowed(). The same rule on
+		// both protocols, since both come through here.
 		if (strpos($path, '/Q/panel') === 0 || strpos($path, '/Q/api/') === 0) {
-			$allowRemote = Q_Config::get('Q', 'panel', 'remote', false);
-			if (!$allowRemote) {
-				$ip = $parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '';
-				if ($ip !== '127.0.0.1' && $ip !== '::1' && $ip !== '') {
-					Q_WebServer::sendResponse($client, 403,
-						'Panel is restricted to localhost. Set Q.panel.remote = true in config to allow remote access.',
-						'text/plain');
-					return true;
+			if (!self::allowed($parsed)) {
+				if (strpos($path, '/Q/api/') === 0) {
+					return $json(403, array('error' => self::REFUSED_TEXT));
 				}
+				return array('status' => 403,
+					'body' => self::refusedPage(self::REFUSED_HTML),
+					'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
 			}
 		}
 
 		if ($path === '/Q/panel' || $path === '/Q/panel/') {
-			Q_WebServer::sendResponse($client, 200,
-				self::renderPanel($parsed), 'text/html; charset=utf-8');
-			return true;
+			return array('status' => 200, 'body' => self::renderPanel($parsed),
+				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
 		}
 
 		// API endpoints — require authentication
 		if (strpos($path, '/Q/api/') === 0) {
 			// Password setup endpoint — no auth needed
 			$route = substr($path, 7);
+			// The first password is set from this machine, with the dashboard
+			// token, or where the panel is open remotely on purpose -- never
+			// by whoever happens to reach the page first.
+			if ($route === 'auth/setup' and !self::setupAllowed($parsed)) {
+				return $json(403, array('error' => self::SETUP_REFUSED_TEXT,
+					'needsSetup' => !self::hasPassword(), 'setupAllowed' => false));
+			}
 			if ($route === 'auth/setup' || $route === 'auth/login') {
 				$result = self::handleAuthApi($route, $parsed);
-				Q_WebServer::sendResponse($client, $result['status'] ?? 200,
-					json_encode($result), 'application/json');
-				return true;
+				if (!empty($result['needsSetup'])) $result += self::setupInfo($parsed);
+				return $json($result['status'] ?? 200, $result);
 			}
 
 			// All other API calls require a valid session token
 			$authResult = self::checkAuth($parsed);
+			if (!empty($authResult['needsSetup'])) $authResult += self::setupInfo($parsed);
 			if (!$authResult['ok']) {
-				Q_WebServer::sendResponse($client, 401,
-					json_encode($authResult), 'application/json');
-				return true;
+				return $json(401, $authResult);
 			}
 
 			$result = self::handleApi($path, $parsed);
-			Q_WebServer::sendResponse($client, $result['status'] ?? 200,
-				json_encode($result), 'application/json');
-			return true;
+			return $json($result['status'] ?? 200, $result);
 		}
 
-		return false;
+		return null;
+	}
+
+	/** Plain-text refusal, for the API. */
+	const REFUSED_TEXT = 'The control panel is available from this machine, with the dashboard token, or once a password is set -- then to anyone who signs in with it. Set one on the server with: qbixctl panel:password --root=<document root>. Or allow the panel remotely with Q.panel.remote.';
+
+	/** The same, for the server's 403 page. Written here, never request data. */
+	const REFUSED_HTML = 'The control panel is available from this machine, with the dashboard token, or once a password is set &mdash; then to anyone who signs in with it.<br><br>Set one on the server with <code>qbixctl panel:password --root=&lt;document root&gt;</code>, or allow the panel remotely with <code>Q.panel.remote</code>.';
+
+	/** Why a remote first-time setup was refused, and what to do instead. */
+	const SETUP_REFUSED_TEXT = 'The panel password can be set here only from the server itself. Set it on the server with: qbixctl panel:password --root=<document root> (the same --root the server runs with), then sign in here.';
+
+	/**
+	 * Whether this request's client is this machine. An empty address is a
+	 * Unix-socket client, which is local too.
+	 */
+	static function isLocal($parsed)
+	{
+		$ip = (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '');
+		return $ip === '' or Q_WebServer::isLocalRequest($parsed);
+	}
+
+	/**
+	 * Who may reach /Q/panel and /Q/api/: this machine; anyone where
+	 * Q.panel.remote is true; anyone once a panel password exists -- the page
+	 * then shows its login form, and every API call but auth/login still
+	 * needs a session token; and whoever Q_WebServer::adminAllowed() lets see
+	 * the dashboard (the dashboard token, a panel session, Q.dashboard.remote).
+	 * @method allowed
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function allowed($parsed)
+	{
+		return self::isLocal($parsed)
+			|| Q_Config::get('Q', 'panel', 'remote', false)
+			|| self::hasPassword()
+			|| Q_WebServer::adminAllowed($parsed);
+	}
+
+	/**
+	 * Whether this request may set the first password: from this machine,
+	 * with the dashboard token, or where Q.panel.remote is true. A remote
+	 * visitor who merely reached the page is not enough.
+	 * @method setupAllowed
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function setupAllowed($parsed)
+	{
+		return self::isLocal($parsed)
+			|| Q_Config::get('Q', 'panel', 'remote', false)
+			|| Q_WebServer::hasAdminCredential($parsed);
+	}
+
+	/** What the page needs to know when no password is set yet. */
+	static function setupInfo($parsed)
+	{
+		$ok = self::setupAllowed($parsed);
+		return $ok ? array('setupAllowed' => true)
+			: array('setupAllowed' => false, 'setupHelp' => self::SETUP_REFUSED_TEXT);
+	}
+
+	/**
+	 * The panel's settings file for an application directory -- where the
+	 * server keeps it: APP_DIR/local/panel.json, APP_DIR being the directory
+	 * above the document root (or the --app directory).
+	 * @method configPathFor
+	 * @static
+	 * @param {string} $appDir
+	 * @return {string}
+	 */
+	static function configPathFor($appDir)
+	{
+		return rtrim($appDir, '/\\') . '/local/panel.json';
+	}
+
+	/**
+	 * Set the panel password: the hash auth/setup stores, in the same file
+	 * and format. Used by auth/setup and by `qbixctl panel:password`.
+	 * @method storePassword
+	 * @static
+	 * @param {string} $password at least 6 characters
+	 * @param {string|null} $configPath default: panelConfigPath()
+	 * @param {boolean} $revokeSessions end every existing session (a changed password should)
+	 * @return {array} ok, and error or path
+	 */
+	static function storePassword($password, $configPath = null, $revokeSessions = false)
+	{
+		$password = (string) $password;
+		if (strlen($password) < 6) return array('ok' => false, 'error' => 'Password must be at least 6 characters');
+		$configPath = $configPath ?: self::panelConfigPath();
+		$config = is_file($configPath) ? (json_decode((string) file_get_contents($configPath), true) ?: array()) : array();
+		$config['passwordHash'] = password_hash($password, PASSWORD_DEFAULT);
+		if ($revokeSessions or !isset($config['sessions']) or !is_array($config['sessions'])) {
+			$config['sessions'] = array();
+		}
+		$dir = dirname($configPath);
+		if (!is_dir($dir)) @mkdir($dir, 0700, true);
+		if (@file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT)) === false) {
+			return array('ok' => false, 'error' => 'Failed to write config to ' . $configPath);
+		}
+		@chmod($configPath, 0600);
+		return array('ok' => true, 'path' => $configPath);
 	}
 
 	/**
@@ -117,20 +249,13 @@ class Q_WebServer_Panel
 				return array('error' => 'Password already set. Use auth/login.',
 					'needsSetup' => false);
 			}
-			$password = $body['password'] ?? '';
-			if (strlen($password) < 6) {
-				return array('error' => 'Password must be at least 6 characters');
-			}
-			$config['passwordHash'] = password_hash($password, PASSWORD_DEFAULT);
+			$stored = self::storePassword($body['password'] ?? '', $configPath);
+			if (!$stored['ok']) return array('error' => $stored['error']);
+			// Signed in straight away: a session for whoever just set it.
+			$config = json_decode((string) file_get_contents($configPath), true) ?: array();
 			$token = bin2hex(random_bytes(32));
 			$config['sessions'][$token] = time() + 86400 * 7; // 7 day expiry
-			$dir = dirname($configPath);
-			if (!is_dir($dir)) @mkdir($dir, 0700, true);
-			if (!is_dir(dirname($configPath))) @mkdir(dirname($configPath), 0700, true);
-			$written = @file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
-			if ($written === false) {
-				return array('error' => 'Failed to write config to ' . $configPath);
-			}
+			@file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
 			@chmod($configPath, 0600);
 			return array('ok' => true, 'token' => $token);
 		}
@@ -2595,8 +2720,7 @@ class Q_WebServer_Panel
 			return ['status' => 400, 'error' => 'No worker pool (in-process mode)'];
 		}
 		if (method_exists($pool, 'resize')) {
-			$pool->resize($count);
-			return ['resized' => $count];
+			return array('resized' => $count) + $pool->resize($count);
 		}
 		return ['status' => 501, 'error' => 'Pool does not support dynamic resize yet'];
 	}
@@ -2807,6 +2931,27 @@ class Q_WebServer_Panel
 		// The panel HTML is too large for inline — load from file
 		// or generate. For now, inline a functional SPA.
 		return self::panelHtml($host, $wsUrl);
+	}
+
+	/**
+	 * The panel's own page for a visitor it refuses: its toolbar and design,
+	 * with the reason where the login form would be. Sent with status 403.
+	 * Falls back to the server's error page when the design has no
+	 * refused.html (an older custom design).
+	 * @method refusedPage
+	 * @static
+	 * @param {string} $messageHtml written by the server, never request data
+	 * @return {string}
+	 */
+	static function refusedPage($messageHtml)
+	{
+		$brand = class_exists('Q_WebServer', false) ? Q_WebServer::brand() : 'Qbix';
+		$page = Q_WebServer_Design::render('panel', array(
+			'brandHead' => Q_WebServer_Brand::headTags($brand . ' Control Panel', '/Q/panel'),
+			'brand'     => htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'),
+			'message'   => $messageHtml,
+		), 'refused.html');
+		return $page !== null ? $page : Q_WebServer::renderErrorPage(403, '/Q/panel', $messageHtml);
 	}
 
 	static function panelHtml($host, $wsUrl)

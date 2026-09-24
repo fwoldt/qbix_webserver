@@ -105,6 +105,22 @@ class Q_WebServer_Cache_Components
 		return self::$enabled;
 	}
 
+	/**
+	 * The key a page is known by here: the URL the response cache files it
+	 * under (Q_WebServer_Cache::put(), 'url'), because invalidation purges by
+	 * that URL. It was path . '?' . query, which for a page with no query
+	 * string ended in a '?' no cache entry has, so nothing was ever purged.
+	 * @method pageKey
+	 * @static
+	 * @param {array} $parsed the parsed request
+	 * @return {string}
+	 */
+	static function pageKey($parsed)
+	{
+		$query = (string) ($parsed['query'] ?? '');
+		return $parsed['path'] . ($query !== '' ? '?' . $query : '');
+	}
+
 	// ── Process response headers from child ─────────────
 
 	/**

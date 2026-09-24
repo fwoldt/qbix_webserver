@@ -77,11 +77,13 @@ foreach (array('persistent' => array(), 'fork-per-request' => array('forkPerRequ
 		'webserver' => $ws)), 2);
 	$parent = rh_server_pid($name);
 	$got = array();
-	foreach (array('/Q/panel', '/Q/no-such-1', '/Q/no-such-2', '/Q/no-such-3') as $p) {
+	// /Q/panel itself used to be one of these; the server answers it now, on
+	// HTTP/2 as on HTTP/1.1 (see unit-panel-access.php).
+	foreach (array('/Q/no-such-0', '/Q/no-such-1', '/Q/no-such-2', '/Q/no-such-3') as $p) {
 		$got[] = h2Fetch($tls, "$p?parent=$parent");
 	}
 	check("$mode: unknown /Q/ paths over HTTP/2 are each answered by the application in a worker",
-		implode(' | ', $got), '200 app in worker /Q/panel | 200 app in worker /Q/no-such-1 | 200 app in worker /Q/no-such-2 | 200 app in worker /Q/no-such-3');
+		implode(' | ', $got), '200 app in worker /Q/no-such-0 | 200 app in worker /Q/no-such-1 | 200 app in worker /Q/no-such-2 | 200 app in worker /Q/no-such-3');
 	check("$mode: ...and the server's own /Q/health still answers", substr(h2Fetch($tls, '/Q/health'), 0, 3), '200');
 	check("$mode: ...and an ordinary page too", h2Fetch($tls, "/page?parent=$parent"), '200 app in worker /page');
 	rh_stop($GLOBALS['rh']['servers'][$name]); unset($GLOBALS['rh']['servers'][$name]);

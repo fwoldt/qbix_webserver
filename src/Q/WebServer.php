@@ -241,6 +241,9 @@ class Q_WebServer
 		Q_WebServer_Dashboard::init();
 		Q_WebServer_Log::init();
 		Q_WebServer_Cache::init();
+		// Q.web.cache.components.enabled was read by nothing: init() was never
+		// called, so the setting did nothing and the layer stayed off.
+		Q_WebServer_Cache_Components::init();
 
 		if ($ext = Q_Config::get('Q', 'webserver', 'extensions', null)) {
 			self::$allowedExtensions = $ext;
@@ -951,6 +954,15 @@ class Q_WebServer
 		// in front of them -- ahead of them, a document root that happened to
 		// contain a Q directory would have its files served around the
 		// allow-list and the blocked list.
+		// Who is asking, before the server's own routes: the panel and the
+		// dashboard decide by the client's address, and without one route()
+		// could not tell this machine from anyone else. See below for why the
+		// address comes off the socket.
+		$peer = @stream_socket_get_name($conn->socket, true);
+		$directIp = self::$clientInfo[$key]['ip']
+			?? ($peer ? trim(substr($peer, 0, strrpos($peer, ':')), '[]') : '0.0.0.0');
+		$clientIp = Q_WebServer_Proxy::clientIp($directIp, $request['headers']);
+
 		if (strpos($decoded, '/Q/') === 0 or strpos($decoded, '/.well-known/') === 0) {
 			$builtin = self::route(array(
 				'method' => $request['method'],
@@ -958,6 +970,10 @@ class Q_WebServer
 				'query' => $query,
 				'headers' => $request['headers'],
 				'body' => $request['body'] ?? '',
+				'clientIp' => $clientIp,
+				'_remoteAddr' => $clientIp,
+				'cookies' => isset($request['headers']['cookie'])
+					? self::parseCookieHeader($request['headers']['cookie']) : array(),
 				// The server's own routes only; the rest goes to a worker below.
 				'_builtinOnly' => true,
 			));
@@ -985,12 +1001,8 @@ class Q_WebServer
 		// the access log and the application -- and every client that did
 		// not was reported as the server itself.
 		//
-		// The address comes off the socket: clientInfo is filled in when a
+		// The address ($clientIp, above) comes off the socket: clientInfo is filled in when a
 		// plain connection is accepted, and a TLS one never passes there.
-		$peer = @stream_socket_get_name($conn->socket, true);
-		$directIp = self::$clientInfo[$key]['ip']
-			?? ($peer ? trim(substr($peer, 0, strrpos($peer, ':')), '[]') : '0.0.0.0');
-		$clientIp = Q_WebServer_Proxy::clientIp($directIp, $request['headers']);
 
 		$parsed = array(
 			'method' => $request['method'],
@@ -1396,6 +1408,11 @@ class Q_WebServer
 							Q_WebServer_Metrics::recordRequest(504, $ms, $method, $uri, '', '', 0);
 						}
 					}
+				}
+				// Pooled workers too: the loop above sees only fork-per-request
+				// children, so the limit used to mean nothing to a pool.
+				if (self::$pool and method_exists(self::$pool, 'killOverdue')) {
+					self::$pool->killOverdue($timeout);
 				}
 			});
 		}
@@ -2210,6 +2227,14 @@ class Q_WebServer
 			return array('status'=>200, 'body'=>Q_WebServer_Dashboard::renderHtml($parsed),
 				'headers'=>array('Content-Type'=>'text/html; charset=utf-8'));
 		}
+		// The control panel and its API, answered here as they are on the
+		// HTTP/1.1 path (Q_WebServer_Panel::handle()). Nothing here answered
+		// them, so over HTTP/2 -- every browser -- /Q/panel was declined,
+		// handed to the application, and showed its 404.
+		if (strpos($path, '/Q/panel') === 0 || strpos($path, '/Q/api/') === 0) {
+			$panel = Q_WebServer_Panel::respond($parsed);
+			if ($panel !== null) return $panel;
+		}
 		if (self::isBlocked($path)) {
 			return array('status'=>403, 'body'=>self::renderErrorPage(403, $path),
 				'headers'=>array('Content-Type'=>'text/plain'));
@@ -2883,17 +2908,12 @@ class Q_WebServer
 			return false;
 		}
 
-		// 3. Component cache check (Merkle tree — serves from cached slots)
-		if (Q_WebServer_Cache_Components::enabled()) {
-			$pageKey = $parsed['path'] . '?' . ($parsed['query'] ?? '');
-			$cachedPage = Q_WebServer_Cache_Components::getPage($pageKey);
-			if ($cachedPage !== null) {
-				self::sendResponse($client, 200, $cachedPage,
-					'text/html; charset=utf-8',
-					array('X-Cache' => 'HIT-COMPONENTS'));
-				return false;
-			}
-		}
+		// The component cache stores no pages -- only hashes and the data
+		// each page depends on (Q_WebServer_Cache_Components). A page it knows
+		// is served by the response cache, consulted at the top of this
+		// method, until an invalidation purges it there. This used to call a
+		// getPage() that class has never had, which would have been a fatal
+		// error on every request once the layer was switched on.
 
 		// Reverse cache: already consulted at the top of this method. What
 		// reaches here has missed, so this is left as the single place the
@@ -4694,7 +4714,7 @@ WORKER;
 
 		// Process Merkle cache headers (strips X-Q-Cache-* from response)
 		if (Q_WebServer_Cache_Components::enabled()) {
-			$pageKey = $parsed['path'] . '?' . ($parsed['query'] ?? '');
+			$pageKey = Q_WebServer_Cache_Components::pageKey($parsed);
 			Q_WebServer_Cache_Components::processResponseHeaders($pageKey, $headers);
 		}
 
@@ -5569,7 +5589,7 @@ WORKER;
 	 * @param {string} $path The requested path (for display)
 	 * @return {string} HTML
 	 */
-	static function renderErrorPage($code, $path = '')
+	static function renderErrorPage($code, $path = '', $message = null)
 	{
 		$safe = htmlspecialchars($path, ENT_QUOTES);
 
@@ -5608,7 +5628,8 @@ WORKER;
 			503 => 'The server is temporarily unavailable. Please try again later.',
 		);
 		$title = $titles[$code] ?? 'Error';
-		$msg = $messages[$code] ?? 'An unexpected error occurred.';
+		// $message, when given, is HTML the server wrote itself -- never request data.
+		$msg = $message !== null ? $message : ($messages[$code] ?? 'An unexpected error occurred.');
 
 		// The page is a design on disk -- designs/default/error/ (page.html,
 		// style.css), or the same files in the configuration directory's

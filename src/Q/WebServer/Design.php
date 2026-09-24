@@ -137,11 +137,12 @@ class Q_WebServer_Design
 	 * @static
 	 * @param {string} $view
 	 * @param {array} $values name => string, already escaped for its place
+	 * @param {string} $pageName the page to render, another view page beside page.html (the panel's refused.html)
 	 * @return {string|null} null when no design has the view
 	 */
-	static function render($view, array $values)
+	static function render($view, array $values, $pageName = 'page.html')
 	{
-		$page = self::read($view, 'page.html');
+		$page = self::read($view, $pageName);
 		if ($page === null) return null;
 		$page = preg_replace_callback('/\{\{@([A-Za-z0-9._-]+)\}\}/', function ($m) use ($view) {
 			$included = Q_WebServer_Design::read($view, $m[1]);

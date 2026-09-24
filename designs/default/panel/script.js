@@ -27,13 +27,13 @@ async function api(path, body) {
     : {headers:headers});
   var data = await r.json();
   if (data.error && (data.needsSetup || r.status === 401)) {
-    showAuthScreen(data.needsSetup);
+    showAuthScreen(data.needsSetup, data);
     throw new Error('auth');
   }
   return data;
 }
 
-function showAuthScreen(isSetup) {
+function showAuthScreen(isSetup, info) {
   var main = document.getElementById('main-content');
   if (!main) {
     // Wrap everything after tabs in a container
@@ -51,6 +51,30 @@ function showAuthScreen(isSetup) {
 
   var existing = document.getElementById('auth-screen');
   if (existing) existing.remove();
+
+  // No password yet, and it may not be set from here: say how to set it on
+  // the server rather than offering a form the server would refuse.
+  if (isSetup && info && info.setupAllowed === false) {
+    var help = document.createElement('div');
+    help.id = 'auth-screen';
+    help.className = 'content';
+    help.style.maxWidth = '460px';
+    help.style.margin = '40px auto';
+    var card = document.createElement('div');
+    card.className = 'card';
+    var h = document.createElement('h3');
+    h.style.marginBottom = '12px';
+    h.textContent = 'Panel password not set';
+    var p = document.createElement('p');
+    p.style.fontSize = '13px';
+    p.style.color = 'var(--dim)';
+    p.textContent = info.setupHelp || 'Set the panel password on the server with: qbixctl panel:password';
+    card.appendChild(h);
+    card.appendChild(p);
+    help.appendChild(card);
+    document.body.insertBefore(help, document.querySelector('.tabs').nextSibling);
+    return;
+  }
 
   var screen = document.createElement('div');
   screen.id = 'auth-screen';
@@ -119,7 +143,7 @@ async function checkAuthAndInit() {
     });
     var data = await r.json();
     if (data.needsSetup) {
-      showAuthScreen(true);
+      showAuthScreen(true, data);
       return;
     }
     // Has password — check if we have a valid token

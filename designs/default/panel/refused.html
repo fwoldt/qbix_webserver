@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{{brand}} Control Panel</title>
+{{brandHead}}
+<style>{{@style.css}}</style></head><body>
+<div class="top">
+  <h1><img src="/Q/logo.png" alt="" style="width:24px;height:auto;vertical-align:middle;margin-right:6px">Qbix Server</h1>
+  <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel" aria-current="page">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+  <div class="status"><span class="pulse"></span> Running</div>
+</div>
+<div class="content refused" style="max-width:560px;margin:40px auto">
+  <div class="card">
+    <h3>The control panel is not available here</h3>
+    <p style="font-size:13px;color:var(--dim);line-height:1.6">{{message}}</p>
+  </div>
+</div>
+<style>
+/* Inline code breaks only between words: "Q.panel.remote" and
+   "--root=<document root>" came apart mid-word at narrow widths. */
+.refused code{white-space:normal;word-break:normal;overflow-wrap:normal;font-size:12px}
+.refused .card{overflow-wrap:break-word}
+</style>
+</body></html>
