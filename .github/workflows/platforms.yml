@@ -81,6 +81,15 @@ jobs:
               for e in pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo pkg_add -I php-$e%8.3 || sudo pkg_add -I php-$e%8.2 || true
               done
+              # Installed is not enabled. Each extension package puts its ini
+              # in /etc/php-8.3.sample/ and PHP loads only what is linked into
+              # /etc/php-8.3/ -- so pcntl was on disk, PHP never saw it, and
+              # the server refused to start with no process isolation.
+              for d in /etc/php-8.3 /etc/php-8.2; do
+                [ -d "$d.sample" ] || continue
+                for f in "$d.sample"/*.ini; do sudo ln -sf "$f" "$d/"; done
+              done
+              php -m | tr '\n' ' '; echo
           - os: netbsd
             version: '10.0'
             # pkg_add on NetBSD has no repository until PKG_PATH names one,
@@ -99,11 +108,21 @@ jobs:
               # libxml2 first and by name. php83 asks for a newer one than
               # pkg_add resolves on its own, and stops on the dependency
               # rather than fetching it.
-              sudo -E /usr/sbin/pkg_add libxml2 || true
+              # -u, not a plain install: the image already carries an older
+              # libxml2, and pkg_add refuses to replace an installed package
+              # ("A different version ... is already installed") unless told
+              # to upgrade -- so php83 was never installed at all.
+              sudo -E /usr/sbin/pkg_add -u libxml2 || true
               sudo -E /usr/sbin/pkg_add php83 curl || true
               for e in phar tokenizer pcntl posix sockets session filter ctype mbstring sqlite3 pdo_sqlite; do
                 sudo -E /usr/sbin/pkg_add php83-$e || true
               done
+              # pkgsrc names the binary after its branch (php83) and installs
+              # no plain "php", so the test found no PHP at all. Each
+              # extension package enables itself through php.d.
+              PHP=$(command -v php || command -v php83 || echo /usr/pkg/bin/php83)
+              export PHP
+              "$PHP" -m | tr '\n' ' '; echo
 
     steps:
       - uses: actions/checkout@v4
