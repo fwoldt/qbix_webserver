@@ -33,6 +33,7 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;
   border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s;
   -webkit-tap-highlight-color:transparent}
 .tab:hover{color:var(--txt)}.tab.active{color:var(--ac);border-bottom-color:var(--ac)}
+@media(prefers-color-scheme:light){.tabs{background:rgba(255,255,255,.75)}}
 
 /* ── Content ── */
 .content{padding:20px;max-width:960px;margin:0 auto}

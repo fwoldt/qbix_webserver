@@ -252,3 +252,9 @@ ws.onopen=function(){wsLive=true;tickUp()};
 ws.onmessage=function(e){var m=JSON.parse(e.data);if(m.type==='request'){A(m.entry);U(m.stats)}else if(m.type==='heartbeat'){U(m.stats)}};
 ws.onclose=function(){wsLive=false;tickUp();setTimeout(C,2000)}}
 C();
+// Section tabs, as in the control panel: the one in view is marked.
+(function(){var tabs=[].slice.call(document.querySelectorAll('.tabs .tab'));if(!tabs.length||!window.IntersectionObserver)return;
+function mark(id){tabs.forEach(function(t){t.classList.toggle('active',t.getAttribute('href')==='#'+id)})}
+tabs.forEach(function(t){t.addEventListener('click',function(){mark(t.getAttribute('href').slice(1))})});
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)mark(e.target.id)})},{rootMargin:'-120px 0px -60% 0px'});
+tabs.forEach(function(t){var s=document.getElementById(t.getAttribute('href').slice(1));if(s)io.observe(s)})})();

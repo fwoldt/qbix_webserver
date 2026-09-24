@@ -3,11 +3,23 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>{{brand}} Dashboard</title>
 {{brandHead}}<style>{{@style.css}}</style></head><body>
-<div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard" aria-current="page">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
-<h1><span class="dot"></span>{{brandHeader}}</h1>
+<div class="chrome">
+<div class="top">
+  <h1><img src="/Q/logo.png" alt="" style="width:24px;height:auto;vertical-align:middle;margin-right:6px">{{brandHeader}}</h1>
+  <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard" aria-current="page">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+  <div class="status"><span class="pulse"></span> Running</div>
+</div>
+<div class="tabs" role="navigation" aria-label="Dashboard sections">
+  <a class="tab active" href="#overview">Overview</a>
+  <a class="tab" href="#throughput">Throughput</a>
+  <a class="tab" href="#paths-rooms">Paths &amp; rooms</a>
+  <a class="tab" href="#requests">Live requests</a>
+</div>
+</div>
+<div class="content">
 <div class="sub" id="sub"></div>
 
-<div class="grid">
+<div class="grid" id="overview">
 <div class="card"><div class="l">Total requests</div><div class="v" id="sr">0</div><div class="s" id="srps">0 avg req/s</div></div>
 <div class="card"><div class="l">Current RPS</div><div class="v" id="crps" style="color:var(--cyn)">0</div><div class="s">last 5 sec</div></div>
 <div class="card"><div class="l">Avg response</div><div class="v" id="avg">0<span style="font-size:12px;font-weight:400">ms</span></div><div class="s">slowest: <span id="slow">0ms</span></div></div>
@@ -30,15 +42,15 @@
 <div><span>5xx</span><b class="s5" id="s5">0</b></div></div></div>
 </div>
 
-<div class="panel" style="margin-bottom:16px"><div class="ph">Throughput <span style="font-size:11px;color:var(--dim)">last 60s</span></div>
+<div class="panel" id="throughput" style="margin-bottom:16px"><div class="ph">Throughput <span style="font-size:11px;color:var(--dim)">last 60s</span></div>
 <div class="spark" id="spark"></div></div>
 
-<div class="row">
+<div class="row" id="paths-rooms">
 <div class="panel"><div class="ph">Top paths</div><div class="pb" id="paths">{{topPathsHtml}}</div></div>
 <div class="panel"><div class="ph">Active rooms</div><div class="pb" id="rooms"><div style="color:var(--dim);padding:8px;font-size:12px">No active rooms</div></div></div>
 </div>
 
-<div class="panel"><div class="ph"><span>Live requests <span style="font-size:11px;color:var(--dim)" id="reqc">0 total</span></span>
+<div class="panel" id="requests"><div class="ph"><span>Live requests <span style="font-size:11px;color:var(--dim)" id="reqc">0 total</span></span>
 <div class="ph-btns">
 <select id="sc-filter" onchange="filterStatus()" title="Filter by status code" class="ph-sel">
 <option value="">All status codes</option>
@@ -51,8 +63,11 @@
 </div></div>
 <div class="le lh"><span class="lk"></span><span class="lt">Time</span><span class="ls">Sts</span><span class="lm">Verb</span><span class="lu">Path</span><span class="ld">ms</span><span class="lmem">Mem</span></div><div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
 
+</div>
 <script>{{@script.js}}</script>
+<div class="content foot-wrap">
 <div class="foot">{{brandName}} <span style="opacity:.6">{{verLabel}}</span></div>
 {{maintainedBy}}
 <div class="foot-docs"><a href="/Q/docs">Documentation</a> &#183; Powered by the Qbix engine</div>
+</div>
 </body></html>
