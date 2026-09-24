@@ -96,7 +96,7 @@ $opts = array(
 	'socket-mode' => null, // Permissions for the socket file (e.g. 0660)
 	'workers' => 0,
 	'config'  => null,
-	'preset'  => null,  // Framework preset: laravel, symfony, wordpress, drupal
+	'preset'  => null,  // Framework preset: laravel, symfony, wordpress, drupal, exponential
 	'sign'    => null,  // Sign a directory: --sign=DIR --key=private.pem --key-id=NAME
 	'verify'  => null,  // Verify a directory: --verify=DIR
 	'key'     => null,  // Private key for signing
@@ -128,7 +128,7 @@ foreach ($argv as $i => $arg) {
 		echo "  --socket-mode=MODE  Permissions on socket file (default: 0660)\n";
 		echo "  --workers=N      Persistent workers (default: auto = nproc × 50)\n";
 		echo "  --config=FILE    JSON config file\n";
-		echo "  --preset=NAME    Framework preset (laravel, symfony, wordpress, drupal)\n";
+		echo "  --preset=NAME    Framework preset (laravel, symfony, wordpress, drupal, exponential)\n";
 		echo "  --pid=PATH       PID file path\n";
 		echo "  --hotreload      Watch files, auto-restart on changes\n";
 		echo "  --debug          Verbose logging\n";
@@ -463,7 +463,8 @@ if (!$servingFromPhar && empty($opts['signal'])) {
 		fwrite(STDERR, "  Framework shortcuts:\n\n");
 		fwrite(STDERR, "    $me --root=public --preset=laravel\n");
 		fwrite(STDERR, "    $me --root=public --preset=symfony\n");
-		fwrite(STDERR, "    $me --root=.     --preset=wordpress\n\n");
+		fwrite(STDERR, "    $me --root=.     --preset=wordpress\n");
+		fwrite(STDERR, "    $me --root=.     --preset=exponential\n\n");
 		fwrite(STDERR, "  Docs: https://github.com/Qbix/webserver\n\n");
 		exit(1);
 	}

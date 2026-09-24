@@ -1714,7 +1714,7 @@ class Q_WebServer_Compat
 	 * Load a framework preset config.
 	 * Presets set compat.skipSourceCodeTransform, compat.rewrite, compat.ini, etc.
 	 *
-	 * @param string $preset Preset name: 'laravel', 'symfony', 'wordpress', 'drupal'
+	 * @param string $preset Preset name: 'laravel', 'symfony', 'wordpress', 'drupal', 'exponential'
 	 */
 	static function loadPreset($preset)
 	{
@@ -1765,6 +1765,36 @@ class Q_WebServer_Compat
 					'max_execution_time' => '240',
 				),
 			),
+			// Exponential (the eZ Publish 4 legacy line). Unlike the modern
+			// frameworks above it needs the source-code transform left ON --
+			// its kernel calls header() and setcookie() the SAPI-coupled way,
+			// and the transform is what makes those reach the response under a
+			// persistent worker. And it needs its type registries kept across
+			// requests: three include_once-populated globals that, cleared,
+			// empty for the worker's life and fail publishing with
+			// "Call to a member function initializeEvent() on null". Both are
+			// discoveries that cost real time; the preset is where they stop
+			// costing it.
+			'exponential' => array(
+				'enabled' => true,
+				'rewrite' => 'index.php',
+				'skipSourceCodeTransform' => false,
+				'ini' => array(
+					'upload_max_filesize' => '64M',
+					'post_max_size' => '64M',
+					'memory_limit' => '256M',
+					'max_execution_time' => '300',
+				),
+				// Merged into Q.webserver, not Q.compat -- see loadPreset().
+				'_webserver' => array(
+					'keepGlobals' => array(
+						'eZDataTypes', 'eZDataTypeObjects', 'eZDataTypeAllowedTypes',
+						'eZWorkflowTypes', 'eZWorkflowTypeObjects', 'eZWorkflowAllowedTypes',
+						'eZNotificationEventTypes', 'eZNotificationEventTypeObjects',
+						'eZNotificationEventTypeAllowedTypes',
+					),
+				),
+			),
 		);
 
 		if (!isset($presets[$preset])) {
@@ -1773,7 +1803,19 @@ class Q_WebServer_Compat
 			return false;
 		}
 
-		Q_Config::merge(array('Q' => array('compat' => $presets[$preset])));
+		$conf = $presets[$preset];
+		// A preset may carry settings for the server itself, not only for the
+		// compatibility layer -- Exponential's kept globals are the case. Pull
+		// them out of the compat block and merge them under Q.webserver.
+		$webserver = null;
+		if (isset($conf['_webserver'])) {
+			$webserver = $conf['_webserver'];
+			unset($conf['_webserver']);
+		}
+		Q_Config::merge(array('Q' => array('compat' => $conf)));
+		if (is_array($webserver)) {
+			Q_Config::merge(array('Q' => array('webserver' => $webserver)));
+		}
 		return true;
 	}
 
