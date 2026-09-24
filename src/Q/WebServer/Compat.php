@@ -2795,12 +2795,59 @@ class Q_WebServer_CompatFileWrapper
 	}
 
 	/**
+	 * Read a whole file for an include, never a mixture of two versions.
+	 *
+	 * file_get_contents() reads in 8 KB chunks. A file rewritten in place
+	 * (opened "w", truncated, written again) between two of those reads came
+	 * back as the head of one version and the tail of the next -- which is
+	 * valid PHP, so it ran and was answered as a 200. It took a reader being
+	 * held up between chunks for as long as the rewrite took, so it was rare,
+	 * and it was seen: 'V000096:...00009' . '97,...:V000097'.
+	 *
+	 * So the file is read in one read() of its whole size, and the bytes are
+	 * kept only if the file's size and mtime are the same after the read as
+	 * before it, and the bytes are exactly that size. Otherwise it is read
+	 * again. A file still changing after a few tries is served as last read,
+	 * as before: a partial file is a parse error, not a mixture.
+	 *
+	 * Called unwrapped, so fopen() is PHP's own.
+	 * @return {string|false}
+	 */
+	private static function readWhole($realPath)
+	{
+		$bytes = false;
+		for ($try = 0; $try < 5; ++$try) {
+			if ($try) usleep(1000);
+			$h = @fopen($realPath, 'rb');
+			if ($h === false) return false;
+			stream_set_read_buffer($h, 0);
+			$before = fstat($h);
+			$size = $before ? (int) $before['size'] : 0;
+			// One byte past the size, so a file that grew meanwhile shows.
+			$bytes = '';
+			while (strlen($bytes) <= $size) {
+				$chunk = fread($h, $size + 1 - strlen($bytes));
+				if ($chunk === false or $chunk === '') break;
+				$bytes .= $chunk;
+			}
+			$after = fstat($h);
+			fclose($h);
+			if ($before and $after and strlen($bytes) === $size
+				and (int) $after['size'] === $size
+				and (int) $after['mtime'] === (int) $before['mtime']) {
+				return $bytes;
+			}
+		}
+		return $bytes;
+	}
+
+	/**
 	 * Read an included file that needs no transform, keep its bytes if they
 	 * fit, and serve them. The caller has unwrapped.
 	 */
 	private function readAndServe($realPath, $stat, &$opened_path)
 	{
-		$bytes = @file_get_contents($realPath);
+		$bytes = self::readWhole($realPath);
 		if ($bytes === false) return false;
 		$size = strlen($bytes);
 		// Only kept when the bytes are the size the stat said: a file being
@@ -3069,7 +3116,7 @@ class Q_WebServer_CompatFileWrapper
 			// transform is computed without its cache side-effects, stored
 			// here once with that mtime.
 			$mtimeBefore = $stat ? (int) $stat['mtime'] : (int) @filemtime($realPath);
-			$source = file_get_contents($realPath);
+			$source = self::readWhole($realPath);
 			if ($source !== false) {
 				$transformed = Q_WebServer_Compat::transformSource($source, '');
 				if ($transformed !== $source) {
