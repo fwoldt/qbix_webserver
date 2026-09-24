@@ -1,0 +1,113 @@
+<?php
+
+/**
+ * The dashboard reads at a glance.
+ *
+ * The owner asked for a handful of layout details that are easy to undo by
+ * accident when the page is edited: the footer spells out "Documentation" and
+ * capitalises "Powered", the status-code and worker-memory cards list their
+ * figures one per line instead of a dotted run-on, and the header reads
+ * "OS · PHP x · Live · Up 15s", capitalised, uptime last. The page is one heredoc of HTML
+ * and JS, so this asserts against the source.
+ *
+ * The cards are filled live over the WebSocket by U(), so the structure has to
+ * hold in both places: the markup served first and the string U() writes.
+ *
+ *   php tests/unit-dashboard-layout.php
+ */
+
+$pass = 0;
+$fail = 0;
+
+function check($what, $got, $want)
+{
+	global $pass, $fail;
+	if ($got === $want) { ++$pass; return; }
+	++$fail;
+	printf("  FAIL  %s\n        got  %s\n        want %s\n", $what,
+		var_export($got, true), var_export($want, true));
+}
+
+$dash = file_get_contents(__DIR__ . '/../src/Q/WebServer/Dashboard.php');
+
+// ── Footer wording ──────────────────────────────────────────────
+
+check('the footer links "Documentation"',
+	strpos($dash, '<a href="/Q/docs">Documentation</a>') !== false, true);
+check('...not the old "docs"',
+	strpos($dash, '<a href="/Q/docs">docs</a>'), false);
+check('"Powered" is capitalised',
+	strpos($dash, '&#183; Powered by the Qbix engine') !== false, true);
+check('...and the lower-case form is gone',
+	strpos($dash, 'powered by'), false);
+
+// ── Footer structure: Documentation on its own centred line ─────
+// Brand and version stay on the first line; the maintainer line follows;
+// "Documentation · Powered by ..." sits on its own line below both.
+
+check('the brand line carries only the brand and version',
+	strpos($dash, '<div class="foot">$brandName <span style="opacity:.6">$verLabel</span></div>') !== false, true);
+check('Documentation opens its own footer line',
+	strpos($dash, '<div class="foot-docs"><a href="/Q/docs">Documentation</a> &#183; Powered by the Qbix engine</div>') !== false, true);
+check('...which comes after the brand and maintainer lines',
+	strpos($dash, '$verLabel</span></div>') < strpos($dash, "\$maintainedBy\n<div class=\"foot-docs\">")
+	and strpos($dash, "\$maintainedBy\n<div class=\"foot-docs\">") !== false, true);
+check('...and is centred',
+	(bool) preg_match('/\.foot-docs\{[^}]*text-align:center/', $dash), true);
+check('...and wraps rather than scrolling at phone width',
+	(bool) preg_match('/\.foot-docs\{[^}]*overflow-wrap:anywhere/', $dash), true);
+check('the Documentation link is not on the brand line any more',
+	strpos($dash, '$verLabel</span> &#183; <a href="/Q/docs">'), false);
+
+// ── Status codes: one entry per line ────────────────────────────
+
+foreach (array('s2' => 'ok', 's3' => 'redir', 's4' => '4xx', 's5' => '5xx') as $id => $label) {
+	check("status $label is its own row",
+		strpos($dash, "<div><span>$label</span><b class=\"$id\" id=\"$id\">0</b></div>") !== false, true);
+	check("...and U() still fills #$id",
+		(bool) preg_match("/el\('$id',s\.status\dxx\)/", $dash), true);
+}
+check('the status card is a vertical list',
+	strpos($dash, '<div class="l">Status codes</div><div class="vl">') !== false, true);
+check('...not the dotted single line',
+	strpos($dash, '</span> ok &#183;'), false);
+check('the list style exists',
+	(bool) preg_match('/\.vl div\{display:flex/', $dash), true);
+
+// ── Worker memory: one item per line ────────────────────────────
+
+check('the COW detail is a vertical list',
+	strpos($dash, 'class="s vl" id="cow-detail"') !== false, true);
+check('...and U() writes one <div> per item',
+	strpos($dash, "el('cow-detail','<div>'+ws.idle+'/'+ws.count+' idle</div><div>'") !== false
+	and strpos($dash, "/worker</div><div>fpm would use ~'+fpmEquiv+'MB</div>')") !== false, true);
+check('...not the dotted single line',
+	strpos($dash, "' idle \\u00B7 '"), false);
+
+// ── Header: OS · PHP · Live/Connecting · Up ─────────────────────
+
+check('the header starts with the OS, then PHP',
+	strpos($dash, "el('sub',(S.os||'')+' \\u00B7 PHP '+(S.php||'')+' \\u00B7 <span class=\"ws\">") !== false, true);
+check('...the status reads Live / Connecting, capitalised',
+	strpos($dash, "(wsLive?'Live':'Connecting')") !== false, true);
+check('...and it ends with the ticking Up after the status',
+	strpos($dash, "(wsLive?'Live':'Connecting')+'</span></span> \\u00B7 Up '+fmtUp(upSec))") !== false, true);
+check('the lowercase status is gone',
+	strpos($dash, "(wsLive?'live':'connecting')"), false);
+check('the lowercase uptime label is gone',
+	strpos($dash, "\\u00B7 up '+fmtUp") === false && strpos($dash, "'up '+fmtUp") === false, true);
+check('the older orders are gone',
+	strpos($dash, "el('sub','PHP '") === false && strpos($dash, "el('sub','up '") === false, true);
+check('the status dot still turns green when live',
+	strpos($dash, "<span class=\"wd'+(wsLive?' on':'')+'\" id=\"wd\">") !== false, true);
+
+// ── Still usable at phone width ─────────────────────────────────
+
+check('the narrow-screen breakpoint is kept',
+	strpos($dash, '@media(max-width:700px)') !== false, true);
+
+if ($fail) {
+	printf("\n  FAIL - %d of %d case(s)\n", $fail, $pass + $fail);
+	exit(1);
+}
+printf("  PASS - %d case(s)\n", $pass);

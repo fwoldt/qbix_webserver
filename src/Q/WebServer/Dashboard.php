@@ -491,11 +491,13 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px;color:var(--ac);display:flex
 h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--grn);animation:pulse 2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .sub{font-size:12px;color:var(--dim);margin-bottom:20px}.foot{font-size:11px;color:var(--dim);text-align:center;margin-top:28px;padding-top:16px;border-top:1px solid rgba(128,128,128,.18)}.foot a{color:var(--dim);text-decoration:none}.foot a:hover{color:var(--txt)}.foot-by{text-align:center;margin-top:12px}.foot-by a{text-decoration:none}.foot-by span{display:inline-block;color:#ff7a1a;border:1px solid #fff;border-radius:6px;padding:4px 14px;font-size:11px;letter-spacing:.02em}
+.foot-docs{font-size:11px;color:var(--dim);text-align:center;margin-top:12px;overflow-wrap:anywhere}.foot-docs a{color:var(--dim);text-decoration:none}.foot-docs a:hover{color:var(--txt)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}
 .card{background:var(--sfc);border:1px solid var(--bdr);border-radius:8px;padding:14px}
 .card .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
 .card .v{font-size:22px;font-weight:700;line-height:1.2}
 .card .s{font-size:11px;color:var(--dim);margin-top:4px}
+.vl{font-size:12px;line-height:1.7}.vl div{display:flex;justify-content:space-between;gap:8px}.vl b{font-weight:700}.card .s.vl{font-size:11px;line-height:1.6}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
 @media(max-width:700px){.row{grid-template-columns:1fr}.grid{grid-template-columns:repeat(auto-fit,minmax(100px,1fr))}}
 .panel{background:var(--sfc);border:1px solid var(--bdr);border-radius:8px;overflow:hidden}
@@ -544,11 +546,14 @@ transition:background .1s}
 <div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">&#8212;</div><div class="s">peak <span id="smp">&#8212;</span></div></div>
 <div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s" id="phpn">reqs: 0 PHP &#183; 0 static</div></div>
 <div class="card"><div class="l">System RAM</div><div class="v" id="sysram">&#8212;</div><div class="s" id="sysram-detail">&#8212;</div></div>
-<div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s" id="cow-detail">&#8212;</div></div>
+<div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s vl" id="cow-detail">&#8212;</div></div>
 <div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
 <div class="card"><div class="l">Data out</div><div class="v" id="bout">0</div><div class="s"><span id="conn">0</span> conn &#183; <span id="ka">0</span> keep-alive</div></div>
-<div class="card"><div class="l">Status codes</div><div class="v" style="font-size:12px;line-height:1.8">
-<span class="s2" id="s2">0</span> ok &#183; <span class="s3" id="s3">0</span> redir &#183; <span class="s4" id="s4">0</span> 4xx &#183; <span class="s5" id="s5">0</span> 5xx</div></div>
+<div class="card"><div class="l">Status codes</div><div class="vl">
+<div><span>ok</span><b class="s2" id="s2">0</b></div>
+<div><span>redir</span><b class="s3" id="s3">0</b></div>
+<div><span>4xx</span><b class="s4" id="s4">0</b></div>
+<div><span>5xx</span><b class="s5" id="s5">0</b></div></div></div>
 </div>
 
 <div class="panel" style="margin-bottom:16px"><div class="ph">Throughput <span style="font-size:11px;color:var(--dim)">last 60s</span></div>
@@ -595,7 +600,8 @@ if(d>0)return d+'d '+h+'h '+m+'m';
 if(h>0)return h+'h '+m+'m '+ss+'s';
 return m+'m '+ss+'s';
 }
-function tickUp(){upSec++;el('sub','up '+fmtUp(upSec)+' \u00B7 PHP '+(S.php||'')+' \u00B7 '+(S.os||'')+' \u00B7 <span class="ws"><span class="wd'+(wsLive?' on':'')+'" id="wd"></span><span id="wl">'+(wsLive?'live':'connecting')+'</span></span>')}
+// OS, then PHP, then the Live/Connecting status, uptime last.
+function tickUp(){upSec++;el('sub',(S.os||'')+' \u00B7 PHP '+(S.php||'')+' \u00B7 <span class="ws"><span class="wd'+(wsLive?' on':'')+'" id="wd"></span><span id="wl">'+(wsLive?'Live':'Connecting')+'</span></span> \u00B7 Up '+fmtUp(upSec))}
 var wsLive=false;
 
 // Sparkline ticker — shift left every second even when idle
@@ -637,12 +643,13 @@ if(s.workerStats){
   var avgKb=ws.count>0?Math.round(totalKb/ws.count):0;
   var fpmEquiv=ws.count*50;
   el('cow-total',fmtMem(totalKb*1024));
-  el('cow-detail',ws.idle+'/'+ws.count+' idle \u00B7 '+(real?'real ':'rss ')+fmtMem(avgKb*1024)+'/worker \u00B7 fpm would use ~'+fpmEquiv+'MB');
+  // One item per line, so the figures read at a glance.
+  el('cow-detail','<div>'+ws.idle+'/'+ws.count+' idle</div><div>'+(real?'real ':'rss ')+fmtMem(avgKb*1024)+'/worker</div><div>fpm would use ~'+fpmEquiv+'MB</div>');
   var ce=document.getElementById('cow-total');
   if(ce)ce.style.color='var(--grn)';
 }else if(s.forkMode){
   el('cow-total','fork');
-  el('cow-detail','each request forks a fresh process (~120KB COW)');
+  el('cow-detail','<div>each request forks a fresh process (~120KB COW)</div>');
 }
 el('s2',s.status2xx);el('s3',s.status3xx);el('s4',s.status4xx);el('s5',s.status5xx);
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
@@ -777,8 +784,9 @@ ws.onmessage=function(e){var m=JSON.parse(e.data);if(m.type==='request'){A(m.ent
 ws.onclose=function(){wsLive=false;tickUp();setTimeout(C,2000)}}
 C();
 </script>
-<div class="foot">$brandName <span style="opacity:.6">$verLabel</span> &#183; <a href="/Q/docs">docs</a> &#183; powered by the Qbix engine</div>
+<div class="foot">$brandName <span style="opacity:.6">$verLabel</span></div>
 $maintainedBy
+<div class="foot-docs"><a href="/Q/docs">Documentation</a> &#183; Powered by the Qbix engine</div>
 </body></html>
 HTML;
 	}
