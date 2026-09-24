@@ -16,9 +16,10 @@
   </div>
 </div>
 <style>
-/* Inline code breaks only between words: "Q.panel.remote" and
-   "--root=<document root>" came apart mid-word at narrow widths. */
-.refused code{white-space:normal;word-break:normal;overflow-wrap:normal;font-size:12px}
+/* Inline code never breaks inside itself: "Q.panel.remote" and
+   "--root=<document root>" came apart mid-word at narrow widths. Long
+   commands are written as several <code> pieces, so lines break between them. */
+.refused code{white-space:nowrap;font-size:12px}
 .refused .card{overflow-wrap:break-word}
 </style>
 </body></html>

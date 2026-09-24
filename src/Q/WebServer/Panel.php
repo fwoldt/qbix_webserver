@@ -132,7 +132,7 @@ class Q_WebServer_Panel
 	const REFUSED_TEXT = 'The control panel is available from this machine, with the dashboard token, or once a password is set -- then to anyone who signs in with it. Set one on the server with: qbixctl panel:password --root=<document root>. Or allow the panel remotely with Q.panel.remote.';
 
 	/** The same, for the server's 403 page. Written here, never request data. */
-	const REFUSED_HTML = 'The control panel is available from this machine, with the dashboard token, or once a password is set &mdash; then to anyone who signs in with it.<br><br>Set one on the server with <code>qbixctl panel:password --root=&lt;document root&gt;</code>, or allow the panel remotely with <code>Q.panel.remote</code>.';
+	const REFUSED_HTML = 'The control panel is available from this machine, with the dashboard token, or once a password is set &mdash; then to anyone who signs in with it.<br><br>Set one on the server with <code>qbixctl panel:password</code> <code>--root=&lt;document root&gt;</code>, or allow the panel remotely with <code>Q.panel.remote</code>.';
 
 	/** Why a remote first-time setup was refused, and what to do instead. */
 	const SETUP_REFUSED_TEXT = 'The panel password can be set here only from the server itself. Set it on the server with: qbixctl panel:password --root=<document root> (the same --root the server runs with), then sign in here.';
