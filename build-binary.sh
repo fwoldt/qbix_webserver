@@ -23,6 +23,7 @@ SRC_DIR="$SCRIPT_DIR/src"
 ARCH="${ARCH:-$(uname -m)}"
 OS="${OS:-linux}"
 PHP_VERSION="8.3"
+VARIANT="standard"
 
 # Parse args
 for arg in "$@"; do
@@ -30,10 +31,12 @@ for arg in "$@"; do
         --arch=*) ARCH="${arg#*=}" ;;
         --os=*)   OS="${arg#*=}" ;;
         --php=*)  PHP_VERSION="${arg#*=}" ;;
+        --variant=*) VARIANT="${arg#*=}" ;;
         --help)
-            echo "Usage: $0 [--arch=x86_64|aarch64] [--os=linux|macos] [--php=8.3|8.4]"
+            echo "Usage: $0 [--arch=x86_64|aarch64] [--os=linux|macos] [--php=8.2|8.3|8.4|8.5] [--variant=mini|lite|standard|full]"
             echo ""
-            echo "Builds a self-contained Qbix Server binary."
+            echo "Builds a self-contained Qbix Server binary. The extensions come from"
+            echo "the baseline for that variant (docs/binaries.md, docs/requirements.md)."
             echo "Requires Docker for cross-compilation."
             exit 0
             ;;
@@ -41,6 +44,18 @@ for arg in "$@"; do
 done
 
 mkdir -p "$BIN_DIR"
+
+# What this variant carries on this platform: the baseline, not a list kept
+# here (packaging/bin/qbix-ext is `qbixctl ext:list`).
+case "$OS-$ARCH" in
+    linux-x86_64|linux-amd64)  PLATFORM=linux-x86_64 ;;
+    linux-aarch64|linux-arm64) PLATFORM=linux-aarch64 ;;
+    macos-*|darwin-*)          PLATFORM=macos-arm64 ;;
+    *) echo "no baseline platform for $OS/$ARCH" >&2; exit 2 ;;
+esac
+EXTS="$(sh "$SCRIPT_DIR/packaging/bin/qbix-ext" list --variant="$VARIANT" --platform="$PLATFORM" --php="$PHP_VERSION" --format=spc)"
+LIBS="$(sh "$SCRIPT_DIR/packaging/bin/qbix-ext" list --variant="$VARIANT" --platform="$PLATFORM" --php="$PHP_VERSION" --format=libs)"
+[ -n "$EXTS" ] || { echo "the baseline gave no extensions for $VARIANT on $PLATFORM" >&2; exit 2; }
 
 echo "═══════════════════════════════════════════"
 echo "  Building Qbix Server binary"
@@ -72,12 +87,8 @@ build_with_static_php_cli() {
 
     # Build PHP micro SAPI with required extensions
     $SPC doctor --auto-fix 2>/dev/null || true
-    $SPC download --with-php=$PHP_VERSION \
-        --for-extensions=pcntl,sockets,openssl,mbstring,filter,ctype,tokenizer
-    $SPC build \
-        pcntl,sockets,openssl,mbstring,filter,ctype,tokenizer \
-        --build-micro \
-        --debug
+    $SPC download --with-php=$PHP_VERSION --for-extensions="$EXTS" ${LIBS:+--for-libs="$LIBS"}
+    $SPC build "$EXTS" --build-micro ${LIBS:+--with-libs="$LIBS"} --debug
 
     MICRO_SFXN="buildroot/bin/micro.sfx"
 
@@ -107,8 +118,7 @@ build_with_docker() {
     cp "$SCRIPT_DIR/qbixserver.php" "$TMPDIR/"
     [ -d "$SCRIPT_DIR/web" ] && cp -r "$SCRIPT_DIR/web" "$TMPDIR/web"
 
-    # Keep in sync with .github/workflows/release.yml
-    EXTS="pcntl,sockets,pdo_sqlite,sqlite3,openssl,mbstring,phar,tokenizer,filter,ctype,posix,session,gd,dom,xml,simplexml,xmlwriter,xmlreader,iconv,intl,xsl,mysqli,mysqlnd,curl,bcmath,exif"
+    # EXTS and LIBS: the baseline for this variant, resolved above.
 
     cat > "$TMPDIR/Dockerfile" << DOCKERFILE
 FROM php:$PHP_VERSION-cli-alpine AS builder
@@ -125,7 +135,7 @@ WORKDIR /build
 # step (tens of minutes); keeping it above the COPY lines means editing the
 # server's PHP code reuses the cached layer instead of rebuilding PHP.
 RUN spc doctor --auto-fix 2>/dev/null || true
-RUN spc download --with-php=$PHP_VERSION --for-extensions=$EXTS
+RUN spc download --with-php=$PHP_VERSION --for-extensions=$EXTS ${LIBS:+--for-libs=$LIBS}
 # gd's libraries have to be named. The download step pulls an extension's
 # suggested sources by default, but the build links none of them unless
 # asked, so gd came out able to read PNG only and imagejpeg() was an
@@ -136,7 +146,7 @@ RUN spc download --with-php=$PHP_VERSION --for-extensions=$EXTS
 # [libaom_posix_implict.patch] failed to apply" -- and the build dies.
 # AVIF output stays unavailable until that is fixed upstream, which
 # Image.php already handles: it guards imageavif and declines.
-RUN spc build "$EXTS" --build-micro --with-libs=libjpeg,libwebp,freetype
+RUN spc build "$EXTS" --build-micro ${LIBS:+--with-libs=$LIBS}
 
 COPY src/ src/
 COPY web/ web/

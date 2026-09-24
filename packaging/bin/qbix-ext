@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# The build and packaging scripts' way to ask about the PHP extension
+# baseline: `qbixctl ext:list` / `qbixctl ext:check`, run from this checkout,
+# so the lists live in one place (build/extensions.json, read by the engine)
+# and no workflow, Dockerfile or package spec keeps a copy of its own.
+#
+#   packaging/bin/qbix-ext list --variant=standard --platform=linux-x86_64 --php=8.3 --format=spc
+#   packaging/bin/qbix-ext list --variant=lite --platform=linux-x86_64 --format=libs
+#   QBIX_STATIC_BUILD=1 PHP=buildroot/bin/php packaging/bin/qbix-ext check --variant=lite
+#
+# list formats: table (default), spc (comma list for `spc build`), libs (for
+# spc --with-libs; may be empty), csv and json.
+# check compares the PHP running it (PHP=...) with the variant on this
+# machine and exits 0 when nothing the variant lists is missing, 2 when
+# something is. QBIX_STATIC_BUILD=1 says a static build is being checked, so
+# the platform's build exclusions apply. See docs/requirements.md.
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+PHP="${PHP:-php}"
+sub="${1:-}"
+case "$sub" in
+  list|check) shift ;;
+  *) echo "usage: qbix-ext list|check [options]" >&2; exit 2 ;;
+esac
+exec "$PHP" "$ROOT/qbixctl.php" "ext:$sub" "$@"
