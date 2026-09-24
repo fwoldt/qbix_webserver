@@ -265,6 +265,41 @@ class Q_WebServer
 		self::$fileCacheMaxFile = Q_Config::get('Q', 'webserver', 'fileCache', 'maxFile', 1048576);
 		self::$fileCacheCheckInterval = Q_Config::get('Q', 'webserver', 'fileCache', 'checkInterval', 1);
 
+		// ── HTTPS listener, first ─────────────────────────
+		// Before plain HTTP, so there is never a moment when the server answers
+		// on HTTP but not yet on HTTPS: the certificate is loaded -- or made,
+		// see Q_WebServer_Certs::init() -- and HTTPS bound, then HTTP.
+		// Starts automatically if:
+		//   1. Q.web.https is configured (explicit), OR
+		//   2. Cert files exist at the default location (auto-detect)
+		$httpsConfig = Q_Config::get('Q', 'web', 'https', array());
+		$httpsPort = (int) Q::ifset($httpsConfig, 'port', 443);
+		$explicitHttps = !empty($httpsConfig);
+
+		// Auto-detect: check for certs even without config
+		if (!$explicitHttps) {
+			$certsDir = Q_WebServer_Certs::certsDir();
+			$defaultCert = $certsDir . DS . 'fullchain.pem';
+			$defaultKey = $certsDir . DS . 'privkey.pem';
+			if (is_file($defaultCert) && is_file($defaultKey)) {
+				$explicitHttps = true; // certs found, enable HTTPS
+			}
+		}
+
+		if ($explicitHttps) {
+			self::$httpsPort = $httpsPort;
+
+			$domain = Q::ifset($httpsConfig, 'domain', '');
+			$certsReady = Q_WebServer_Certs::init($domain, $host);
+
+			if ($certsReady) {
+				self::startTls($host, $httpsPort);
+			} else {
+				fwrite(STDERR, "[HTTPS] No usable certificate, HTTPS disabled. "
+					. "HTTP will still listen on port $port.\n");
+			}
+		}
+
 		// ── HTTP listener ────────────────────────────────
 		$errno = $errstr = 0;
 		$socketPath = Q_Config::get('Q', 'webserver', 'socket', null);
@@ -284,6 +319,7 @@ class Q_WebServer
 		self::$acceptWatcher = Q_Evented::onReadable(
 			self::$socket, array(__CLASS__, 'onAccept')
 		);
+		echo "[HTTP] Listening on http://{$host}:{$port}\n";
 
 		// UDS listener — in addition to TCP, for the proxy hop
 		if ($socketPath) {
@@ -314,38 +350,6 @@ class Q_WebServer
 			@chmod($socketPath, intval($mode, 8));
 			self::$udsPath = $socketPath;
 			echo "[HTTP] Listening on unix:{$socketPath}\n";
-		}
-
-		// ── HTTPS listener ─────────────────────────────────
-		// Starts automatically if:
-		//   1. Q.web.https is configured (explicit), OR
-		//   2. Cert files exist at the default location (auto-detect)
-		$httpsConfig = Q_Config::get('Q', 'web', 'https', array());
-		$httpsPort = (int) Q::ifset($httpsConfig, 'port', 443);
-		$explicitHttps = !empty($httpsConfig);
-
-		// Auto-detect: check for certs even without config
-		if (!$explicitHttps) {
-			$certsDir = Q_WebServer_Certs::certsDir();
-			$defaultCert = $certsDir . DS . 'fullchain.pem';
-			$defaultKey = $certsDir . DS . 'privkey.pem';
-			if (is_file($defaultCert) && is_file($defaultKey)) {
-				$explicitHttps = true; // certs found, enable HTTPS
-			}
-		}
-
-		if ($explicitHttps) {
-			self::$httpsPort = $httpsPort;
-
-			$domain = Q::ifset($httpsConfig, 'domain', '');
-			$certsReady = Q_WebServer_Certs::init($domain);
-
-			if ($certsReady) {
-				self::startTls($host, $httpsPort);
-			} else {
-				fwrite(STDERR, "[HTTPS] No valid certs found, HTTPS disabled. "
-					. "HTTP still running on port $port.\n");
-			}
 		}
 
 		// ── Auto-TLS: provision certificates for configured domains ──
@@ -462,6 +466,7 @@ class Q_WebServer
 	 */
 	static function startTls($host, $port)
 	{
+		self::$tlsHost = $host;
 		if (self::$tlsWatcher) {
 			Q_Evented::cancel(self::$tlsWatcher);
 			self::$tlsWatcher = null;
@@ -489,15 +494,12 @@ class Q_WebServer
 		// stream_socket_enable_crypto(), which is what keeps accept()
 		// non-blocking; only the configuration moves.
 		//
-		// The cost of this is that a renewed certificate is not picked up by
-		// an already-running listener, where setting it per socket would have
-		// found the new file on the next connection. Certificate renewal
-		// therefore has to restart or re-bind the listener -- which is a
-		// clearer contract than a server whose connections silently disagree
-		// about which certificate they presented.
+		// A renewed certificate is put on this same context by reloadTls(),
+		// so the next handshake presents it without re-binding, and every
+		// connection accepted after that point agrees on which one it got.
 		$tlsContext = stream_context_create(array('ssl' => array(
-			'local_cert' => Q_WebServer_Certs::$certPath,
-			'local_pk' => Q_WebServer_Certs::$keyPath,
+			'local_cert' => Q_WebServer_Certs::$activeCert ?: Q_WebServer_Certs::$certPath,
+			'local_pk' => Q_WebServer_Certs::$activeKey ?: Q_WebServer_Certs::$keyPath,
 			'allow_self_signed' => true,
 			'verify_peer' => false,
 			'verify_peer_name' => false,
@@ -1183,22 +1185,41 @@ class Q_WebServer
 	}
 
 	/**
-	 * Reload TLS after cert renewal. Called by Q_WebServer_Certs.
-	 * New connections will use the new certs. Existing connections
-	 * keep their old certs until they close (normal behavior).
+	 * Put Q_WebServer_Certs' current cert and key in front of new connections.
 	 *
+	 * The listener keeps its socket; only its context changes. Every accepted
+	 * connection inherits the listener's context and does its handshake here,
+	 * in this process, so the next handshake presents the new certificate and
+	 * there is no moment without HTTPS. (It used to only say so: the context
+	 * had moved from per-connection to per-listener, and a renewed certificate
+	 * was never used until a restart.) When HTTPS never came up for want of a
+	 * certificate, it is started now.
 	 * @method reloadTls
 	 * @static
 	 */
 	static function reloadTls()
 	{
-		if (self::$httpsPort) {
-			// No need to restart the listener — we set SSL context
-			// per-connection in onAcceptTls, so new connections
-			// will pick up the new cert files automatically.
-			echo "[HTTPS] Certificates reloaded for new connections.\n";
+		$cert = Q_WebServer_Certs::$activeCert ?: Q_WebServer_Certs::$certPath;
+		$key = Q_WebServer_Certs::$activeKey ?: Q_WebServer_Certs::$keyPath;
+		if (!self::$httpsPort) return;
+		if (!self::$tlsSocket or !is_resource(self::$tlsSocket)) {
+			if (self::$tlsHost !== null and Q_WebServer_Certs::validateCerts()) {
+				self::startTls(self::$tlsHost, self::$httpsPort);
+			}
+			return;
+		}
+		$ok = @stream_context_set_option(self::$tlsSocket, 'ssl', 'local_cert', $cert)
+			&& @stream_context_set_option(self::$tlsSocket, 'ssl', 'local_pk', $key);
+		if ($ok) {
+			Q_WebServer_Certificate_Events::emit('swapped', array('cert' => $cert, 'key' => $key,
+				'source' => Q_WebServer_Certs::$source));
+		} else {
+			Q_WebServer_Certificate_Events::emit('error', array('reason' => 'could not update the HTTPS listener with ' . $cert));
 		}
 	}
+
+	/** @var string|null the address startTls() bound, for a late start */
+	private static $tlsHost = null;
 
 	/**
 	 * Graceful shutdown: stop accepting new connections,

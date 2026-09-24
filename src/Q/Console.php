@@ -65,7 +65,8 @@ class Q_Console
 	 *                                   name longer than one letter that is
 	 *                                   a known option
 	 *   --flag  -flag  --no-flag       flags (true / true / false)
-	 *   -abc                            bundled one-letter flags
+	 *   -abc                            bundled one-letter flags; one given twice
+ *                                   or more counts (-vv is v => 2)
 	 *   --                              ends options; the rest is positional
 	 *
 	 * @method parse
@@ -94,7 +95,11 @@ class Q_Console
 			// -config /path); otherwise it is bundled letters (-abc).
 			if (!$long and (strlen($name) === 1 or !in_array($name, $known, true))) {
 				if ($eq !== false and strlen($name) === 1) { $options[$name] = substr($body, $eq + 1); continue; }
-				foreach (str_split($body) as $flag) $options[$flag] = true;
+				// A letter given twice or more counts: -vv is v => 2, as verbosity reads it.
+				foreach (str_split($body) as $flag) {
+					$options[$flag] = isset($options[$flag]) && $options[$flag] !== false
+						? (is_int($options[$flag]) ? $options[$flag] + 1 : 2) : true;
+				}
 				continue;
 			}
 			if ($eq !== false) { $options[$name] = substr($body, $eq + 1); continue; }

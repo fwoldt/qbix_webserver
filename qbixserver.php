@@ -152,7 +152,7 @@ $argv = qbix_normalize_argv($argv,
 	array('root', 'app', 'host', 'port', 'https-port', 'socket', 'socket-mode', 'workers', 'config',
 		'preset', 'sign', 'verify', 'key', 'key-id', 'generate-key', 'policy', 'pid', 'pack', 'output',
 		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer', 'm'),
-	array('help', 'version', 'stop', 'reload', 'debug', 'hotreload', 'layout', 'gui', 'open', 'watchdog',
+	array('help', 'version', 'stop', 'reload', 'debug', 'quiet', 'verbose', 'hotreload', 'layout', 'gui', 'open', 'watchdog',
 		'sign-binary', 'verify-binary', 'publish-rekor'));
 
 foreach ($argv as $i => $arg) {
@@ -181,6 +181,8 @@ foreach ($argv as $i => $arg) {
 		echo "  --pid=PATH       PID file path\n";
 		echo "  --hotreload      Watch files, auto-restart on changes\n";
 		echo "  --debug          Verbose logging\n";
+		echo "  --verbose        Also report every certificate provider tried\n";
+		echo "  -q, --quiet      Report errors only\n";
 		echo "  --keep-globals=A,B  Globals the app keeps between requests\n";
 		echo "  -t               Test config and exit\n";
 		echo "  --stop           Graceful shutdown (via PID file)\n";
@@ -218,6 +220,14 @@ foreach ($argv as $i => $arg) {
 	}
 	if ($arg === '--reload') {
 		$opts['signal'] = 'reload';
+		continue;
+	}
+	if ($arg === '--quiet' || $arg === '-q') {
+		$opts['quiet'] = true;
+		continue;
+	}
+	if ($arg === '--verbose') {
+		$opts['verbose'] = true;
 		continue;
 	}
 	if ($arg === '--debug') {
@@ -701,6 +711,13 @@ if ($confDirs) {
 if ($opts['config']) {
 	Q_Config::load($opts['config']);
 }
+
+// Certificate events on the console, at the verbosity asked for: --quiet
+// (errors only), the default one line, --verbose (every provider tried) and
+// --debug (every event). -v stays --version here, as with apache2 -v.
+Q_WebServer_Certificate_Events::attach(new Q_WebServer_Certificate_Reporter(
+	Q_WebServer_Certificate_Reporter::levelFromOptions(array('quiet' => !empty($opts['quiet']),
+		'verbose' => !empty($opts['verbose']), 'debug' => !empty($opts['debug'])))));
 
 // Framework preset (--preset=laravel, etc.)
 if ($opts['preset']) {
@@ -1245,7 +1262,11 @@ $certsDir = (defined('APP_DIR') ? APP_DIR : dirname($webDir))
 // Check explicit cert paths from config first
 $certFile = Q::ifset($httpsConfig, 'cert', $certsDir . DIRECTORY_SEPARATOR . 'fullchain.pem');
 $keyFile = Q::ifset($httpsConfig, 'key', $certsDir . DIRECTORY_SEPARATOR . 'privkey.pem');
-if (is_file($certFile) && is_file($keyFile)) {
+if (is_file($certFile) && is_file($keyFile)
+	|| ($httpsConfig && (Q::ifset($httpsConfig, 'mode', 'manual') === 'self-signed'
+		|| Q::ifset($httpsConfig, 'fallback', 'self-signed') === 'self-signed'))) {
+	// A configured HTTPS comes up on a self-signed certificate when it has no
+	// usable one of its own (Q_WebServer_Certs::init).
 	$httpsAvailable = true;
 }
 

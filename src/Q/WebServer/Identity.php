@@ -52,26 +52,37 @@ class Q_WebServer_Identity
 		$keyFile = $localDir . DS . 'server.key';
 		$fpFile = $localDir . DS . 'server.fingerprint';
 
-		if (file_exists($certFile) && file_exists($keyFile) && file_exists($fpFile)) {
+		// Reused only while it is a real pair. A failed signing used to leave
+		// an empty certificate and fingerprint here, and finding the files,
+		// every later start kept that empty identity for good; such a pair is
+		// now made again. A good one is never replaced: its fingerprint is
+		// this server's identity to the rest of the cluster.
+		$existing = Q_WebServer_Certificate::fromFiles($certFile, $keyFile);
+		$fp = is_file($fpFile) ? trim((string) @file_get_contents($fpFile)) : '';
+		if ($existing and $existing->isUsable() and $fp !== '') {
 			return array(
-				'fingerprint' => trim(file_get_contents($fpFile)),
+				'fingerprint' => $fp,
 				'cert' => $certFile,
 				'key' => $keyFile,
 			);
 		}
 
-		// Generate
-		$result = Q_Utils::generateSelfSignedCert();
-		if (!$result) return null;
+		// Generate, through the same provider chain as the HTTPS certificate,
+		// so a system that refuses one method still gets an identity -- and
+		// without Q_Utils, which in --app mode is the Platform's class.
+		$me = function_exists('gethostname') ? (gethostname() ?: 'qbix-server') : 'qbix-server';
+		$c = Q_WebServer_Certificate_Factory::create(array($me), 3650);
+		if (!$c) return null;
 
 		if (!is_dir($localDir)) @mkdir($localDir, 0700, true);
-		file_put_contents($certFile, $result['cert']);
-		file_put_contents($keyFile, $result['key']);
-		chmod($keyFile, 0600);
-		file_put_contents($fpFile, $result['fingerprint']);
+		if (!Q_WebServer_Certificate_Store::writeAtomic($keyFile, $c->keyPem, 0600)
+			or !Q_WebServer_Certificate_Store::writeAtomic($certFile, $c->certPem, 0644)
+			or !Q_WebServer_Certificate_Store::writeAtomic($fpFile, $c->fingerprint(), 0644)) {
+			return null;
+		}
 
 		return array(
-			'fingerprint' => $result['fingerprint'],
+			'fingerprint' => $c->fingerprint(),
 			'cert' => $certFile,
 			'key' => $keyFile,
 		);

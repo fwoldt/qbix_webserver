@@ -10,6 +10,7 @@
  *     idempotent, refuses a missing target and a path as a name);
  *   - cache:clear touches the generation marker;
  *   - -t reports each file and fails on one that does not parse;
+ *   - ssl:renew and ssl:show manage the self-signed certificate in <tree>/ssl;
  *   - a real server started with `qbixctl start`, seen by `status`, answering,
  *     and gone after `qbixctl stop`.
  *
@@ -66,6 +67,18 @@ file_put_contents("$tree/mods-available/cache.conf", '{ not json');
 exec("$ctl -t$conf 2>&1", $o3, $code3);
 check('-t fails, naming the file, when one does not parse', array($code3, (bool) preg_grep('/BAD .*cache\.conf/', $o3)), array(1, true));
 file_put_contents("$tree/mods-available/cache.conf", '{}');
+
+// ── ssl:renew and ssl:show: the self-signed certificate in <tree>/ssl ────
+exec("$con ssl:renew localhost 127.0.0.1$conf 2>&1", $ssl1, $sslc1);
+check('ssl:renew makes a self-signed certificate in the tree\'s ssl/', array($sslc1, is_file("$tree/ssl/self-signed.pem"), (fileperms("$tree/ssl/self-signed.key") & 0777)), array(0, true, 0600));
+exec("$con ssl:show --json$conf 2>&1", $ssl2, $sslc2);
+$sslShow = json_decode(implode('', $ssl2), true);
+check('ssl:show reports it usable, with its hosts', array($sslc2, $sslShow['certificates']['self-signed']['usable'] ?? null, $sslShow['certificates']['self-signed']['hosts'] ?? null),
+	array(0, true, array('127.0.0.1', 'localhost')));
+$fp = $sslShow['certificates']['self-signed']['fingerprint'] ?? '';
+exec("$con ssl:renew --if-needed$conf 2>&1", $ssl3, $sslc3);
+check('ssl:renew --if-needed leaves a good one alone', array($sslc3, end($ssl3)), array(0, "unchanged: $tree/ssl/self-signed.pem"));
+check('a repeated letter counts (-vv)', Q_Console::parse(array('ssl:renew', '-vv'))[1], array('v' => 2));
 
 // ── A real start / status / stop ─────────────────────────────────────────
 $root = "$base/web"; mkdir($root);

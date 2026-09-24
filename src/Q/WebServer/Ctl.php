@@ -51,6 +51,9 @@ class Q_WebServer_Ctl
 		// skipped by load(), and configtest has to see it to report it.
 		foreach ($stack as $d) { Q_WebServer_Layout::load($d); $files = array_merge($files, Q_WebServer_Layout::files($d)); }
 		if ($config !== null and is_file($config)) { Q_Config::load($config); $files[] = $config; }
+		// As qbixserver.php records it: what reads the trees later (the server's
+		// designs, the self-signed certificate's ssl/) looks here.
+		if ($stack) { Q_Config::set('Q', 'webserver', 'confDirs', $stack); Q_Config::set('Q', 'webserver', 'confDir', end($stack)); }
 		return array('confDir' => $confDir, 'stack' => $stack, 'config' => $config, 'files' => $files);
 	}
 
@@ -347,6 +350,50 @@ class Q_WebServer_Ctl
 				}, $ctxOpts, array(($on ? 'en' : 'dis') . $pair), '<name>...');
 			}
 		}
+		$verbosity = array('quiet' => array('Errors only', false), 'verbose' => array('Every provider tried', false),
+			'debug' => array('Every event', false));
+		$C::add('ssl:show', 'Show the certificates HTTPS uses: configured and self-signed', function ($a, $o) {
+			self::context($o);
+			$https = Q_Config::get('Q', 'web', 'https', array());
+			$rows = array();
+			if (!empty($https['cert'])) {
+				$rows['configured'] = array($https['cert'], isset($https['key']) ? $https['key'] : '');
+			}
+			$store = new Q_WebServer_Certificate_Store();
+			$rows['self-signed'] = array($store->certFile(), $store->keyFile());
+			$report = array('mode' => isset($https['mode']) ? $https['mode'] : 'manual',
+				'fallback' => isset($https['fallback']) ? $https['fallback'] : 'self-signed', 'certificates' => array());
+			foreach ($rows as $label => $files) {
+				$c = Q_WebServer_Certificate::fromFiles($files[0], $files[1]);
+				$report['certificates'][$label] = array('cert' => $files[0], 'key' => $files[1],
+					'present' => (bool) $c, 'usable' => $c ? $c->isUsable() : false,
+					'daysLeft' => $c ? $c->daysLeft() : null, 'hosts' => $c ? $c->hosts() : array(),
+					'key type' => $c ? $c->keyType() : '', 'fingerprint' => $c ? $c->fingerprint() : '');
+			}
+			if (!empty($o['json'])) { Q_Console::out(json_encode($report, JSON_UNESCAPED_SLASHES)); return 0; }
+			Q_Console::out('  mode       : ' . $report['mode'] . ' (fallback: ' . $report['fallback'] . ')');
+			foreach ($report['certificates'] as $label => $r) {
+				Q_Console::out(sprintf('  %-11s: %s', $label, $r['cert']));
+				Q_Console::out('               ' . (!$r['present'] ? 'not present'
+					: ($r['usable'] ? 'usable' : 'NOT usable') . ', ' . $r['daysLeft'] . ' days left, ' . $r['key type']
+						. ', ' . implode(' ', $r['hosts'])));
+			}
+			return 0;
+		}, $ctxOpts + array('json' => array('Report as JSON', false)), array('ssl'));
+		$C::add('ssl:renew', 'Make a new self-signed certificate now; a running server swaps it in within a minute', function ($a, $o) {
+			self::context($o);
+			Q_WebServer_Certificate_Events::attach(new Q_WebServer_Certificate_Reporter(
+				Q_WebServer_Certificate_Reporter::levelFromOptions($o)));
+			// The hosts of the one in place, which the server chose knowing its own
+			// address; a different list would only have the server renew again.
+			$current = (new Q_WebServer_Certificate_Store())->load();
+			$hosts = $a ? $a : (($current and $current->isUsable()) ? $current->hostsInOrder() : Q_WebServer_Certificate_SelfSigned::hosts());
+			$r = Q_WebServer_Certificate_SelfSigned::ensure($hosts, empty($o['if-needed']));
+			if (!$r) { Q_Console::err('no certificate could be made'); return 1; }
+			Q_Console::out(($r[2] ? 'renewed: ' : 'unchanged: ') . $r[0]);
+			return 0;
+		}, $ctxOpts + $verbosity + array('if-needed' => array('Only when it expires within 30 days, is unusable or the hosts changed', false)),
+			array(), '[host...]');
 		$C::add('cache:clear', 'Invalidate every page in the response cache', function ($a, $o) use ($say) {
 			self::context($o);
 			$dir = isset($o['cache-dir']) ? (string) $o['cache-dir'] : Q_Config::get('Q', 'web', 'cache', 'dir', null);
