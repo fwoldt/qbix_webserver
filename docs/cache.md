@@ -44,7 +44,7 @@ costs no worker at all.
 
 A response is stored only when all of these hold:
 
-- the request is a `GET`;
+- the request is a `GET`, for a path that is not the server's own (`/Q/...` and `/.well-known/...` are never stored or served from the cache, whatever answered them);
 - the status is `200`, or `404`/`410` when `negativeTtl` is set; an error is never stored;
 - the request carries no `Authorization` header and none of the `skip.cookies`;
 - the response sets no cookie;

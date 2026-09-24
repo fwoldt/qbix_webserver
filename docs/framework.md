@@ -319,7 +319,7 @@ This is the default mode. Workers persist across requests, with all statics, glo
 
 **Default mode:** Persistent workers handle requests in a loop with snapshot restore between them. See [reset.md](docs/reset.md) for what resets, what persists, and how to write scripts for both modes.
 
-The `--workers=N` flag pre-forks N idle workers for faster dispatch (no fork latency per request). Without it, the server forks on demand. Both modes are shared-nothing.
+The `--workers=N` flag sets how many workers the pool pre-forks, for dispatch with no fork latency per request. Without it the server sizes the pool itself -- what fits in RAM, at most 8 per core and 64 in all, never fewer than 4. See [workers.md](workers.md#how-many-workers).
 
 **Windows** doesn't have `pcntl_fork`, so PHP scripts run in a subprocess via `proc_open`. This is safe — `exit()` can't crash the server — but each subprocess starts a fresh PHP interpreter (~50ms), so you don't get the preload speed benefit. Static files, WebSocket, caching, and everything else work identically. Good for development; use Linux/macOS for the full 100–300× concurrent capacity (measured) advantage.
 

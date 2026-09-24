@@ -1,6 +1,6 @@
 ## 🏎️ Why Not php-fpm?
 
-php-fpm re-bootstraps the framework on every request (10–50ms), uses ~42MB per worker, and leaks statics between requests. Qbix Server loads the framework once at startup, keeps workers persistent, resets all state in 0.03ms via Reflection + 28 function shims, and fits each worker in ~120KB thanks to copy-on-write.
+php-fpm re-bootstraps the framework on every request (10–50ms), uses ~42MB per worker, and leaks statics between requests. Qbix Server loads the framework once at startup, keeps workers persistent, resets all state in 0.03ms via Reflection + 38 function shims, and fits each worker in ~120KB thanks to copy-on-write.
 
 ```
 php-fpm:
@@ -69,7 +69,7 @@ If you're looking beyond php-fpm, you've probably seen FrankenPHP and Swoole. He
 | **PHP compatibility** | Most code works, some edge cases | Many extensions incompatible, blocking I/O breaks coroutines | ✅ 100% — standard PHP, nothing unusual |
 | **Memory safety** | Go runtime + PHP = complex interaction | C extension = segfault risk | PHP only = memory-safe by default |
 | **Access control** | No X-Accel-Redirect equivalent | Manual implementation | ✅ Built-in X-Accel-Redirect |
-| **Component cache** | No | No | ✅ X-Cache-Tree — sub-page invalidation |
+| **Component cache** | No | No | ✅ X-Q-Cache-Tree — sub-page invalidation |
 | **Early hints / 103** | ✅ Yes | No | Via amphp |
 | **HTTP/2** | ✅ Built-in (Caddy) | ✅ Built-in | ✅ Via amphp |
 | **WebSocket** | Via Mercure | ✅ Built-in | ✅ Built-in |

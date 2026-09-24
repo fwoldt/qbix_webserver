@@ -12,7 +12,8 @@
  *   --host=IP        Bind address (default: 0.0.0.0)
  *   --port=PORT      HTTP port (default: 80)
  *   --https-port=PORT HTTPS port (default: 443, only if certs available)
- *   --workers=N      Persistent workers (default: auto = nproc × 50)
+ *   --workers=N      Persistent workers (default: what fits in RAM, at most
+ *                    8 per core and 64 in all, never fewer than 4)
  *   --config=FILE    JSON config file to load
  *   --pid=PATH       Write PID file
  *   --debug          Enable verbose logging
@@ -169,7 +170,8 @@ foreach ($argv as $i => $arg) {
 		echo "  --https-port=PORT HTTPS port (default: 443, if certs available)\n";
 		echo "  --socket=PATH    Unix domain socket (e.g. /run/qbix/app.sock)\n";
 		echo "  --socket-mode=MODE  Permissions on socket file (default: 0660)\n";
-		echo "  --workers=N      Persistent workers (default: auto = nproc × 50)\n";
+		echo "  --workers=N      Persistent workers (default: what fits in RAM, at most\n";
+		echo "                   8 per core and 64 in all, never fewer than 4)\n";
 		echo "  --config=FILE    JSON config file (usually DIR/sites-enabled/SITE.conf)\n";
 		echo "  --conf-dir=DIR   Configuration directory laid out like /etc/apache2:\n";
 		echo "                   qbix.conf, ports.conf, mods-enabled/, conf-enabled/,\n";

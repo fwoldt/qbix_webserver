@@ -37,7 +37,7 @@ Create `config/server.json` next to your `web/` directory, or pass `--config=pat
 | `rateLimit.enabled` | false | Enable per-IP rate limiting |
 | `rateLimit.requests` | 100 | Requests per window |
 | `rateLimit.window` | 60 | Window in seconds |
-| `webserver.requestTimeout` | 30 | Seconds before killing a hung HTTP worker (0 = no limit) |
+| `webserver.requestTimeout` | 30 | Seconds a request may run before the client gets 504 and its worker is killed and replaced -- a pooled worker or a forked one alike; the request is not run again (0 = no limit) |
 | `webserver.workerMemoryCeiling` | 256, or ¾ of `memory_limit` if lower | Heap size in MB past which a persistent worker answers its current request and is then replaced, with the reason logged. `0` disables. See [reset.md](reset.md#a-worker-that-grows-is-replaced) |
 | `webserver.warmup` | (none) | Script run once in the parent, after the source transform and before forking, to warm the application copy-on-write. See [reset.md](reset.md) |
 | `dashboard` | (enabled) | Set to `false` to disable `/Q/dashboard`, `/Q/health`, and `/Q/ws` entirely |

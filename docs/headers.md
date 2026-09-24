@@ -10,10 +10,9 @@ Qbix Server understands special response headers from your PHP scripts. These ar
 |---|---|---|
 | `Cache-Control` | Server caches the response, serves without running PHP | `Q_Response::header('Cache-Control: public, max-age=300');` |
 | `X-Accel-Redirect` | Server streams a file after PHP checks access | `Q_Response::header('X-Accel-Redirect: /uploads/private/doc.pdf');` |
-| `X-Cache-Tree` | Registers page components with content hashes | `Q_Response::header('X-Cache-Tree: ' . json_encode([...]));` |
-| `X-Cache-Deps` | Maps components to data dependency keys | `Q_Response::header('X-Cache-Deps: ' . json_encode([...]));` |
-| `X-Cache-Invalidate` | Marks dependency keys as stale | `Q_Response::header('X-Cache-Invalidate: ' . json_encode([...]));` |
-| `X-Cache-Stale` | Invalidates cached pages containing these components | `Q_Response::header('X-Cache-Stale: feed,sidebar');` |
+| `X-Q-Cache-Tree` | Registers page components with content hashes | `Q_Response::header('X-Q-Cache-Tree: ' . json_encode([...]));` |
+| `X-Q-Cache-Deps` | Maps components to data dependency keys | `Q_Response::header('X-Q-Cache-Deps: ' . json_encode([...]));` |
+| `X-Q-Cache-Invalidate` | Marks dependency keys as stale | `Q_Response::header('X-Q-Cache-Invalidate: ' . json_encode([...]));` |
 
 All of these use `Q_Response::header()` instead of PHP's `header()`. This is because the server runs in CLI SAPI where `header()` calls are silently discarded — same as FrankenPHP worker mode and Workerman. `Q_Response::header()` has the same signature as `header()` but captures the values for the server to send. The server strips internal headers before sending the response to the client.
 
@@ -107,6 +106,18 @@ echo renderAdminPanel();
 
 Most caching systems cache whole pages. When anything changes, you throw away the entire page and re-render everything. Qbix Server tracks which data each page depends on, so when data changes, only the affected pages are invalidated — not every page on the site.
 
+It is off by default. Switch it on, with the response cache it works through:
+
+```json
+{ "Q": { "web": { "cache": { "enabled": true, "components": { "enabled": true, "maxTrees": 10000 } } } } }
+```
+
+The component layer keeps no HTML -- only each page's hashes and what it
+depends on. The page itself is stored by the response cache (so it needs a
+cacheable response, e.g. `Cache-Control: public`), and an invalidation purges it
+there. The `X-Q-Cache-*` headers are for the server and are removed before the
+response is sent.
+
 **Step 1: Register components when rendering a page**
 
 When PHP renders a page, it tells the server what data the page depends on. The server hashes each component and maps them to dependency keys. This lets the server know exactly which pages to invalidate when specific data changes.
@@ -119,7 +130,7 @@ $feedHtml    = renderFeed($communityId);
 $sidebarHtml = renderSidebar($communityId);
 $membersHtml = renderMembers($communityId);
 
-// Tell the server about the component tree and what data each depends on Q_Response::header('X-Cache-Tree: ' . json_encode([
+// Tell the server about the component tree and what data each depends on Q_Response::header('X-Q-Cache-Tree: ' . json_encode([
     'l' => [
         'feed'    => md5($feedHtml),
         'sidebar' => md5($sidebarHtml),
@@ -127,7 +138,7 @@ $membersHtml = renderMembers($communityId);
     ]
 ]));
 
-Q_Response::header('X-Cache-Deps: ' . json_encode([
+Q_Response::header('X-Q-Cache-Deps: ' . json_encode([
     'feed'    => ["community/{$communityId}/feed"],
     'sidebar' => ["community/{$communityId}/about"],
     'members' => ["community/{$communityId}/participants"],
@@ -143,7 +154,7 @@ echo $feedHtml . $sidebarHtml . $membersHtml;
 <?php
 // web/post.php — user posts to the feed saveNewPost($communityId, $content);
 
-// Tell the server which dependency key changed Q_Response::header('X-Cache-Invalidate: ' . json_encode([
+// Tell the server which dependency key changed Q_Response::header('X-Q-Cache-Invalidate: ' . json_encode([
     "community/{$communityId}/feed"
 ]));
 

@@ -93,6 +93,16 @@ once more on another worker; otherwise the client is answered `502`. An idle wor
 that exits is noticed within two seconds, removed and replaced. Every exited worker
 is reaped, so none is left behind as a zombie.
 
+A worker still on one request after `requestTimeout` seconds (default `30`, `0` for
+no limit) is killed: the client gets `504`, the kill is logged with the request,
+and a fresh worker takes its place. The request is not run again elsewhere, where
+it would hang the same way.
+
+The control panel's Workers tab (API `POST /Q/api/workers/resize` with
+`{"workers": N}`) changes the pool's size while it runs: a fixed pool forks up to
+`N` at once, and above it retires idle workers now and busy ones as each finishes;
+a dynamic pool takes `N` as its new maximum.
+
 With `forkPerRequest`, each worker serves one request and exits, and the parent
 forks its replacement: the isolation of a fresh process, at the cost of a fork per
 request.
@@ -120,6 +130,7 @@ Every setting, with its default. All are under `Q.webserver`.
 | `spareWorkers` | `0` | Workers kept when idle; above `0` makes the pool dynamic. |
 | `idleWorkerTimeout` | `60` | Seconds a worker beyond the spare count may stay idle before it is retired. |
 | `maxRequests` | `1000` | Requests a worker serves before it is replaced. `0` means no limit. |
+| `requestTimeout` | `30` | Seconds a request may run before the client gets `504` and the worker is replaced. `0` means no limit. |
 | `workerMemoryCeiling` | `256`, or ¾ of `memory_limit` if lower | Heap size in MB past which a worker is replaced. `0` turns it off. |
 | `forkPerRequest` | `false` | One request per worker, then a fresh fork. |
 | `warmup` | — | A script run once in the parent before the workers are forked. See [reset.md](reset.md#warming-the-pool-in-the-parent-and-the-one-trap-in-it). |

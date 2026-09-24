@@ -11,7 +11,7 @@ Qbix Server's persistent-worker mode ("octane mode") keeps workers alive across 
 | **$_SERVER** | Re-populated from the request | 0 (overwritten) |
 | **$_REQUEST** | Rebuilt from $_GET + $_POST | 0 |
 | **$_SESSION** | `session_write_close()` + `$_SESSION = []` | ~0 |
-| **Output buffers** | `ob_end_clean()` to level 0, then `ob_start()` | ~0 |
+| **Output buffers** | One capture buffer per process (`Q_WebServer_Capture`), emptied each request; buffers a script leaves open are part of its response. See [below](#output-buffers-and-why-a-workers-memory-is-flat) | ~0 |
 | **Error state** | `error_clear_last()` | ~0 |
 | **Custom globals** | Snapshot + restore (skipping superglobals) | ~0.01ms |
 | **Shutdown functions** | Shimmed `register_shutdown_function()` — collected per request, fired at request end, cleared | ~0 |
@@ -23,7 +23,7 @@ Qbix Server's persistent-worker mode ("octane mode") keeps workers alive across 
 
 **Total reset cost: ~0.06ms** — compared to 8ms for `pcntl_fork()`.
 
-**28 PHP functions shimmed** via source transformation (stream wrapper + `token_get_all()`): `header`, `setcookie`, `setrawcookie`, `http_response_code`, `headers_sent`, `headers_list`, `header_remove`, `session_start`, `session_write_close`, `session_regenerate_id`, `session_destroy`, `session_status`, `move_uploaded_file`, `is_uploaded_file`, `ini_get`, `ini_set`, `set_time_limit`, `getallheaders`, `apache_request_headers`, `register_shutdown_function`, `set_error_handler`, `set_exception_handler`, `restore_error_handler`, `restore_exception_handler`, `spl_autoload_register`, `spl_autoload_unregister`, `putenv`
+**38 PHP functions shimmed** via source transformation (stream wrapper + `token_get_all()`): `header`, `setcookie`, `setrawcookie`, `http_response_code`, `headers_sent`, `headers_list`, `header_remove`, `session_start`, `session_id`, `session_name`, `session_set_cookie_params`, `session_get_cookie_params`, `session_write_close`, `session_regenerate_id`, `session_destroy`, `session_status`, `move_uploaded_file`, `is_uploaded_file`, `ini_get`, `ini_set`, `set_time_limit`, `getallheaders`, `phpinfo`, `apache_request_headers`, `register_shutdown_function`, `set_error_handler`, `set_exception_handler`, `restore_error_handler`, `restore_exception_handler`, `spl_autoload_register`, `spl_autoload_unregister`, `putenv`, and the file stat functions `file_exists`, `is_dir`, `is_file`, `filemtime`, `filesize`, `clearstatcache`. `exit` and `die` are rewritten too, so they end the request rather than the worker.
 
 ## What persists (by design)
 
@@ -39,11 +39,11 @@ Qbix Server's persistent-worker mode ("octane mode") keeps workers alive across 
 
 | State | Risk | What we do | What the developer should do |
 |---|---|---|---|
-| **Database connections** | Previous request's transaction state | Flush: `ROLLBACK` if in transaction | Use a connection pooler (PgBouncer, ProxySQL) or close per request |
-| **File handles** | Open descriptors leak across requests | Close all non-server handles | Use `fclose()` in shutdown handlers |
-| **Stream contexts** | Custom SSL/proxy settings persist | Reset default context | Avoid `stream_context_set_default()` |
-| **Signal handlers** | Previous request's handlers persist | Restore server's handlers | Don't call `pcntl_signal()` in request code |
-| **cURL handles** | Cookies, auth headers persist | Close per request | Don't reuse `curl_init()` across requests |
+| **Database connections** | Previous request's transaction state | `ROLLBACK` after each request on the Qbix Platform's `Db` connections; nothing for any other database layer | Use a connection pooler (PgBouncer, ProxySQL) or close per request |
+| **File handles** | Open descriptors leak across requests | Nothing between requests (a newly forked worker closes the sockets it inherited, nothing more) | Use `fclose()` in shutdown handlers |
+| **Stream contexts** | Custom SSL/proxy settings persist | Nothing | Avoid `stream_context_set_default()` |
+| **Signal handlers** | Previous request's handlers persist | Nothing | Don't call `pcntl_signal()` in request code |
+| **cURL handles** | Cookies, auth headers persist | Nothing | Don't reuse `curl_init()` across requests |
 | **Framework registries in globals** | A registry filled once via `include_once` empties for the worker's life if its global is cleared | Preserve them by name in `Q.webserver.keepGlobals` | Name any global that holds an include-populated registry; clear everything else |
 
 Previously risky items **now handled automatically** by the compat layer:
@@ -69,15 +69,15 @@ Previously risky items **now handled automatically** by the compat layer:
 | Memory per worker | ~50 MB (independent bootstrap) | ~5 MB warmed, up to full working set unwarmed (see *Warming the pool* below) |
 | DB connections | Persist (risk) | Persist (same risk, same mitigation) |
 | OPcache | Shared across workers | Shared via parent process |
-| `max_requests` recycling | Worker dies and respawns periodically | Not needed — statics are reset, not accumulated |
+| `max_requests` recycling | Worker dies and respawns periodically | Kept as a safety net: `maxRequests` (default 1000), plus replacement on the memory ceiling or unbalanced output buffers, and on request |
 
-php-fpm's `pm.max_requests` exists specifically because statics and globals leak. Octane mode doesn't need it because the snapshot restore cleans them.
+php-fpm's `pm.max_requests` exists because statics and globals leak. The snapshot restore cleans those, so a worker here is replaced for what it cannot reach -- C extension state, closures holding references, memory the heap does not give back -- after `maxRequests` requests (default 1000), or at once if its health check fails. See [workers.md](workers.md).
 
 ### vs Laravel Octane (Swoole/RoadRunner)
 
 | | Laravel Octane | Qbix octane mode |
 |---|---|---|
-| Reset mechanism | App-level: `$app->flush()`, `Container::forgetInstances()` | Language-level: `ReflectionProperty::setValue` on all statics + 28 function shims |
+| Reset mechanism | App-level: `$app->flush()`, `Container::forgetInstances()` | Language-level: `ReflectionProperty::setValue` on all statics + 38 function shims |
 | Coverage | Only what Laravel's flusher knows about | **All user-defined classes**, automatically |
 | Lifecycle functions | Must audit manually | **Shimmed**: `register_shutdown_function`, `set_error_handler`, `set_exception_handler`, `spl_autoload_register`, `ini_set`, `putenv` — all tracked and restored |
 | Third-party packages | Must implement `ResetScope` interface | **Covered automatically** — their statics are reset too |

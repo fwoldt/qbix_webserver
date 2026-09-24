@@ -18,7 +18,7 @@ Instead of making each worker do more, Qbix runs more workers. The server loads 
 
 Your code runs unmodified, in two modes:
 
-**Persistent workers (default)** — workers stay alive across requests. Between each request, a Reflection-based snapshot restores all static properties in 0.03ms. 28 PHP functions (`header()`, `session_start()`, `ini_set()`, `set_error_handler()`, etc.) are shimmed via source transformation so they reset correctly. This is how you get 2,294 req/s on CPU-bound work and 1,060 req/s under I/O.
+**Persistent workers (default)** — workers stay alive across requests. Between each request, a Reflection-based snapshot restores all static properties in 0.03ms. 38 PHP functions (`header()`, `session_start()`, `ini_set()`, `set_error_handler()`, etc.) are shimmed via source transformation so they reset correctly. This is how you get 2,294 req/s on CPU-bound work and 1,060 req/s under I/O.
 
 **Fork-per-request** — if persistent mode doesn't work for your code (functions with internal static variables, plugins that register global state in ways the shim can't track), set `forkPerRequest: true`. Each request gets a fresh fork. It's slower than persistent mode, but each forked worker still costs only 120KB instead of 50MB, so you can run 100× more of them than fpm on the same hardware. That's the whole point — blocking I/O doesn't matter when you have enough workers, and COW makes "enough workers" nearly free.
 
@@ -32,7 +32,7 @@ Your code runs unmodified, in two modes:
 | 🚀 **Throughput** (CPU-bound) | ~400 req/s (Swoole 4w) | **2,294 req/s** (100w) |
 | 🚀 **Throughput** (I/O, same RAM) | 78 req/s (fpm/Swoole 4w) | **1,060 req/s** (100w) |
 | 🌐 **WebSocket** | Needs a separate server | Built in |
-| 🧩 **Cache invalidation** | Whole-page only | `X-Cache-Tree` — per-component |
+| 🧩 **Cache invalidation** | Whole-page only | `X-Q-Cache-Tree` — per-component |
 | ⚙️ **Setup** | nginx + fpm pools + sockets | `php qbixserver.php` |
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for full methodology and [reset.md](docs/reset.md) for what gets restored between requests.
@@ -55,7 +55,7 @@ You can also package your entire app — code, assets, SQLite database — into 
 | 📋 | [Changelog](CHANGELOG.md) | Every change worth reading, newest first. A release links here rather than repeating itself |
 | 🏎️ | [Why Not php-fpm?](docs/why.md) | COW memory model, comparison with Swoole and FrankenPHP |
 | 🔐 | [HTTPS & Certificates](docs/https.md) | Your own certificates (files, archives, .p12), Let's Encrypt built in, self-signed fallback, live renewal |
-| 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Cache-Tree, X-Accel-Redirect, ETag |
+| 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Q-Cache-Tree, X-Accel-Redirect, ETag |
 | 🗃️ | [Response Cache](docs/cache.md) | What is kept and for how long, the generation marker, every setting |
 | 🛡️ | [Security](docs/security.md) | What is refused and why: document-root containment, request framing, HTTP/2 frame validation, header injection |
 | 🌐 | [HTTP](docs/http.md) | Fork-per-request mode, request lifecycle |
@@ -127,7 +127,7 @@ php qbixserver.phar --root=./web
 
 ## Use With Your Existing Codebase
 
-If you already have a PHP app running on nginx + php-fpm, switching is one command. The server reads your `.htaccess`, rewrites URLs to your front controller, and runs your code with 28 functions shimmed so static variables, sessions, and headers work correctly between requests.
+If you already have a PHP app running on nginx + php-fpm, switching is one command. The server reads your `.htaccess`, rewrites URLs to your front controller, and runs your code with 38 functions shimmed so static variables, sessions, and headers work correctly between requests.
 
 **Laravel:**
 
@@ -182,7 +182,7 @@ Each preset sets framework-appropriate defaults: the front controller path, uplo
 
 ### What gets shimmed
 
-The server intercepts 28 PHP functions (`header()`, `session_start()`, `setcookie()`, `ini_set()`, etc.) via source transformation at include time. Your code calls `header()` and it works — the server captures it. Between requests, all static properties are restored from a snapshot in 0.03ms. See [Compatibility](docs/compatibility.md) for the full list.
+The server intercepts 38 PHP functions (`header()`, `session_start()`, `setcookie()`, `ini_set()`, etc.) via source transformation at include time. Your code calls `header()` and it works — the server captures it. Between requests, all static properties are restored from a snapshot in 0.03ms. See [Compatibility](docs/compatibility.md) for the full list.
 
 ### What to watch for
 
