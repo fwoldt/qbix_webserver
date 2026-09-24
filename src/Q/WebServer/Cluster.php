@@ -86,6 +86,7 @@ class Q_WebServer_Cluster
 		if (empty($peers)) return; // single server, no clustering
 
 		self::$peers = array_values(array_diff($peers, array(self::$self)));
+		self::$configuredPeers = self::$peers;
 		self::$servers = array_values(array_unique(
 			array_merge(array(self::$self), self::$peers)
 		));
@@ -274,9 +275,11 @@ class Q_WebServer_Cluster
 	private static function registerWith($peerUrl)
 	{
 		$url = rtrim($peerUrl, '/') . '/Q/cluster/join';
+		$secret = (string) Q_Config::get('Q', 'cluster', 'secret', '');
 		$ctx = stream_context_create(array('http' => array(
 			'method' => 'POST',
-			'header' => "Content-Type: application/json\r\n",
+			'header' => "Content-Type: application/json\r\n"
+				. ($secret !== '' ? "X-Q-Cluster-Secret: $secret\r\n" : ''),
 			'content' => json_encode(array(
 				'url' => self::$self,
 				'fingerprint' => Q_Config::get('Q', 'internal', 'fingerprint', ''),
@@ -285,6 +288,36 @@ class Q_WebServer_Cluster
 			'ignore_errors' => true,
 		)));
 		@file_get_contents($url, false, $ctx);
+	}
+
+	/** Peers named in configuration (Q.cluster.peers, PEERS) at init. */
+	static $configuredPeers = array();
+
+	/**
+	 * Whether a join request may be accepted.
+	 *
+	 * Any client could POST /Q/cluster/join with any URL, and the server then
+	 * treated that URL as a peer: it contacted it on every heartbeat and, with
+	 * Q.cluster.replicate set, sent it events. With Q.cluster.secret set, a
+	 * join must carry it in X-Q-Cluster-Secret (peers send it); without one,
+	 * only a peer already named in the configuration may (re)join.
+	 *
+	 * @method joinAllowed
+	 * @static
+	 * @param {array} $parsed the request
+	 * @param {array} $data its decoded body
+	 * @return {boolean}
+	 */
+	static function joinAllowed($parsed, $data)
+	{
+		$url = is_array($data) ? (string) ($data['url'] ?? '') : '';
+		if ($url === '' or !preg_match('#^https?://[^\s/]+#i', $url)) return false;
+		$secret = (string) Q_Config::get('Q', 'cluster', 'secret', '');
+		if ($secret !== '') {
+			$given = (string) ($parsed['headers']['x-q-cluster-secret'] ?? '');
+			return $given !== '' and hash_equals($secret, $given);
+		}
+		return in_array($url, self::$configuredPeers, true);
 	}
 
 	/**

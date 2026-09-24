@@ -1972,6 +1972,9 @@ class Q_WebServer
 			if (Q_Config::get('Q', 'dashboard', null) === false) {
 				return array('status' => 404, 'body' => 'Not found');
 			}
+			// Liveness for anyone (load balancers, cluster peers); the stats,
+			// which name request paths, for an admin only.
+			if (!self::adminAllowed($parsed)) return self::healthMinimal();
 			$stats = Q_WebServer_Dashboard::getStats();
 			$result = array('status' => 'ok') + $stats;
 			if (class_exists('Q_WebServer_Cluster', false) && Q_WebServer_Cluster::isActive()) {
@@ -1979,6 +1982,9 @@ class Q_WebServer
 			}
 			return array('status'=>200, 'body'=>json_encode($result),
 				'headers'=>array('Content-Type'=>'application/json'));
+		}
+		if (($path === '/Q/metrics' || $path === '/Q/attestation') and !self::adminAllowed($parsed)) {
+			return self::adminForbidden();
 		}
 		if ($path === '/Q/metrics') {
 			if (class_exists('Q_WebServer_Metrics', false)) {
@@ -2002,6 +2008,10 @@ class Q_WebServer
 			if (class_exists('Q_WebServer_Cluster', false)) {
 				$body = $parsed['body'] ?? '';
 				$data = json_decode($body, true) ?: array();
+				if (!Q_WebServer_Cluster::joinAllowed($parsed, $data)) {
+					return array('status' => 403, 'body' => 'Forbidden',
+						'headers' => array('Content-Type' => 'text/plain'));
+				}
 				Q_WebServer_Cluster::handleJoin($data);
 				return array('status' => 200, 'body' => '{"ok":true}',
 					'headers' => array('Content-Type' => 'application/json'));
@@ -2080,6 +2090,8 @@ class Q_WebServer
 		}
 
 		if ($path === '/Q/phpinfo') {
+			// The process environment is in it: never remote without a credential.
+			if (!self::adminAllowed($parsed, true)) return self::adminForbidden();
 			ob_start();
 			phpinfo();
 			$html = self::phpinfoHtml(ob_get_clean());
@@ -2091,13 +2103,14 @@ class Q_WebServer
 			if (Q_Config::get('Q', 'dashboard', null) === false) {
 				return array('status' => 404, 'body' => 'Not found');
 			}
+			if (!self::adminAllowed($parsed)) return self::adminForbidden();
 			// Static dashboard token (from config)
 			$token = Q_Config::get('Q', 'dashboard', 'token', null);
 			if ($token !== null) {
 				$qp = array();
 				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
 				$given = $qp['token'] ?? '';
-				if ($given !== $token) {
+				if (!is_string($given) or !hash_equals((string) $token, $given)) {
 					return array('status' => 403, 'body' => 'Forbidden — token required',
 						'headers' => array('Content-Type' => 'text/plain'));
 				}
@@ -2110,7 +2123,7 @@ class Q_WebServer
 				$qToken = $qp['token'] ?? '';
 				if (!Q_WebServer_Panel::validateToken($cookie)
 					&& !Q_WebServer_Panel::validateToken($qToken)
-					&& ($token === null || $qToken !== $token)
+					&& ($token === null || !is_string($qToken) || !hash_equals((string) $token, $qToken))
 				) {
 					// Redirect to panel (which has the login form)
 					return array('status' => 302, 'body' => '',
@@ -2608,29 +2621,11 @@ class Q_WebServer
 					self::sendResponse($client, 404, 'Not found');
 					return false;
 				}
-				// Authenticate: require panel session token or dashboard token
-				$qp = array();
-				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
-				$wsToken = $qp['token'] ?? '';
-				$cookieToken = $parsed['cookies']['Q_panel_token'] ?? '';
-				$authed = false;
-				// Check query token against panel sessions
-				if ($wsToken && Q_WebServer_Panel::validateToken($wsToken)) {
-					$authed = true;
-				}
-				// Check cookie against panel sessions
-				if (!$authed && $cookieToken && Q_WebServer_Panel::validateToken($cookieToken)) {
-					$authed = true;
-				}
-				// Check against static dashboard token
-				$dashToken = Q_Config::get('Q', 'dashboard', 'token', null);
-				if ($dashToken !== null && ($wsToken === $dashToken || $cookieToken === $dashToken)) {
-					$authed = true;
-				}
-				// If no password is set yet (first run), allow unauthenticated
-				if (!Q_WebServer_Panel::hasPassword()) {
-					$authed = true;
-				}
+				// The same rule as the dashboard page (adminAllowed()). This
+				// used to let anyone connect while no panel password was set,
+				// even with a dashboard token configured, and compared the
+				// token with === rather than in constant time.
+				$authed = self::adminAllowed($parsed);
 				if (!$authed) {
 					self::sendResponse($client, 403, 'Forbidden — token required');
 					return false;
@@ -2651,10 +2646,23 @@ class Q_WebServer
 				}
 			}
 			if ($path === '/Q/phpinfo') {
+				// The process environment is in it: never remote without a credential.
+				if (!self::adminAllowed($parsed, true)) {
+					$f = self::adminForbidden();
+					self::sendResponse($client, $f['status'], $f['body'], $f['headers']['Content-Type']);
+					return false;
+				}
 				ob_start();
 				phpinfo();
 				$html = self::phpinfoHtml(ob_get_clean());
 				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8');
+				return false;
+			}
+			// The rest of the admin surface, before anything answers it.
+			if (in_array(rtrim($path, '/'), array('/Q/dashboard', '/Q/stats', '/Q/metrics', '/Q/attestation'), true)
+				and !self::adminAllowed($parsed)) {
+				$f = self::adminForbidden();
+				self::sendResponse($client, $f['status'], $f['body'], $f['headers']['Content-Type']);
 				return false;
 			}
 			if ($path === '/Q/docs' || $path === '/Q/docs/') {
@@ -2689,6 +2697,12 @@ class Q_WebServer
 			if ($path === '/Q/health') {
 				if (Q_Config::get('Q', 'dashboard', null) === false) {
 					self::sendResponse($client, 404, 'Not found');
+					return false;
+				}
+				// Liveness for anyone (load balancers, cluster peers); the stats,
+				// which name request paths, for an admin only.
+				if (!self::adminAllowed($parsed)) {
+					self::sendResponse($client, 200, '{"status":"ok"}', 'application/json');
 					return false;
 				}
 				$stats = Q_WebServer_Dashboard::getStats();
@@ -2726,6 +2740,10 @@ class Q_WebServer
 			if ($path === '/Q/cluster/join' && $method === 'POST') {
 				if (class_exists('Q_WebServer_Cluster', false)) {
 					$data = json_decode($parsed['body'] ?? '', true) ?: array();
+					if (!Q_WebServer_Cluster::joinAllowed($parsed, $data)) {
+						self::sendResponse($client, 403, 'Forbidden');
+						return false;
+					}
 					Q_WebServer_Cluster::handleJoin($data);
 					self::sendResponse($client, 200, '{"ok":true}', 'application/json');
 				} else {
@@ -5577,6 +5595,104 @@ HTML;
 	 * @return {string}
 	 */
 	static $brand = null;
+
+	/**
+	 * Whether a request comes from this machine.
+	 *
+	 * Taken from the address the server resolved for the request (the
+	 * connection's, or a trusted proxy's forwarded one). An address that is
+	 * missing or unknown counts as remote: the admin surface fails closed.
+	 *
+	 * @method isLocalRequest
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function isLocalRequest($parsed)
+	{
+		$ip = (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '');
+		return $ip === '127.0.0.1' || $ip === '::1' || $ip === '::ffff:127.0.0.1';
+	}
+
+	/**
+	 * Whether a request carries a valid admin credential: the static
+	 * Q.dashboard.token, or a control-panel session token, as ?token=, as
+	 * "Authorization: Bearer", or as the Q_panel_token cookie. The static
+	 * token is compared in constant time.
+	 *
+	 * @method hasAdminCredential
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function hasAdminCredential($parsed)
+	{
+		$qp = array();
+		if (!empty($parsed['query'])) parse_str((string) $parsed['query'], $qp);
+		$auth = (string) ($parsed['headers']['authorization'] ?? '');
+		$given = array(
+			is_string($qp['token'] ?? null) ? $qp['token'] : '',
+			strncmp($auth, 'Bearer ', 7) === 0 ? substr($auth, 7) : '',
+			(string) ($parsed['cookies']['Q_panel_token'] ?? ''),
+		);
+		$static = Q_Config::get('Q', 'dashboard', 'token', null);
+		foreach ($given as $t) {
+			if ($t === '') continue;
+			if (is_string($static) and $static !== '' and hash_equals($static, $t)) return true;
+			if (Q_WebServer_Panel::validateToken($t)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Who may use the server's own admin surface: /Q/dashboard, /Q/stats,
+	 * the dashboard WebSocket, the full /Q/health, /Q/metrics,
+	 * /Q/attestation and, as a secret, /Q/phpinfo.
+	 *
+	 * They were open to anyone who could reach the port: phpinfo() printed
+	 * the server process's environment, and the dashboard listed every
+	 * visitor's paths and session-id prefixes. Now:
+	 *
+	 *   - this machine: always, except that a secret needs the credential
+	 *     once one is configured;
+	 *   - anywhere else: the credential when a password or token is
+	 *     configured; without one, only if Q.dashboard.remote is true, and
+	 *     never a secret.
+	 *
+	 * @method adminAllowed
+	 * @static
+	 * @param {array} $parsed
+	 * @param {boolean} [$secret=false] true for what must never be remote without a credential
+	 * @return {boolean}
+	 */
+	static function adminAllowed($parsed, $secret = false)
+	{
+		$local = self::isLocalRequest($parsed);
+		if ($local and !$secret) return true;
+		$static = Q_Config::get('Q', 'dashboard', 'token', null);
+		$configured = Q_WebServer_Panel::hasPassword() || (is_string($static) and $static !== '');
+		if ($configured) return self::hasAdminCredential($parsed);
+		if ($local) return true;
+		if ($secret) return false;
+		return (bool) Q_Config::get('Q', 'dashboard', 'remote', false);
+	}
+
+	/** The answer to a request adminAllowed() refused. */
+	static function adminForbidden()
+	{
+		return array('status' => 403,
+			'body' => "Forbidden. This page is available from this machine, or with the dashboard token "
+				. "or a control panel session; to allow it remotely without one, set Q.dashboard.remote.",
+			'headers' => array('Content-Type' => 'text/plain; charset=utf-8'));
+	}
+
+	/** /Q/health for a caller that may not see the stats: alive, and nothing else. */
+	static function healthMinimal()
+	{
+		return array('status' => 200, 'body' => '{"status":"ok"}',
+			'headers' => array('Content-Type' => 'application/json'));
+	}
+
 	static function brand()
 	{
 		if (self::$brand === null) {
