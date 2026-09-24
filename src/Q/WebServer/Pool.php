@@ -1135,7 +1135,13 @@ class Q_WebServer_Pool
 			'scriptFilename' => $scriptPath,
 			'scriptName'     => self::scriptName($scriptPath),
 			'documentRoot'   => rtrim(Q_WebServer::$rootDir ?? '', '/\\'),
-			'serverPort'     => (string)($_SERVER['SERVER_PORT'] ?? '8080'),
+			// The port this request arrived on. It was read from the parent's
+			// own $_SERVER, which a command-line process does not fill in, so
+			// every pooled request was told SERVER_PORT=8080 whatever the
+			// server listened on. An application that builds an absolute URL
+			// from it -- when the Host header carries no port, as it does not
+			// behind a proxy on 80 or 443 -- sent visitors to :8080.
+			'serverPort'     => self::serverPortOf($client),
 			// Who is asking. The parent has already worked it out -- the
 			// connection's address, or a forwarded one from a trusted proxy --
 			// and this sent 127.0.0.1 instead, so every application behind
@@ -1508,6 +1514,33 @@ class Q_WebServer_Pool
 		if ($port) return (int) substr($name, $colon + 1);
 		// "[::1]:52000" carries the address in brackets.
 		return trim(substr($name, 0, $colon), '[]');
+	}
+
+	/**
+	 * The local port of the connection a request came in on.
+	 *
+	 * Read from the socket rather than from configuration, because a server
+	 * can listen on more than one port -- plain HTTP and TLS at least -- and
+	 * only the connection knows which of them this request used.
+	 *
+	 * @method serverPortOf
+	 * @static
+	 * @param {resource} $client
+	 * @return {string}
+	 */
+	static function serverPortOf($client)
+	{
+		if (is_resource($client)) {
+			$name = @stream_socket_get_name($client, false);
+			// "127.0.0.1:8484", "[::1]:8484": the port follows the last colon.
+			if (is_string($name) and ($colon = strrpos($name, ':')) !== false) {
+				$port = substr($name, $colon + 1);
+				if ($port !== '' and ctype_digit($port)) return $port;
+			}
+		}
+		// No socket to ask. The configured listener is the best remaining
+		// answer, and still better than a number nobody configured.
+		return (string) (Q_WebServer::$port ?: 80);
 	}
 
 	protected function findIdle()
