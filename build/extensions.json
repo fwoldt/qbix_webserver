@@ -1,0 +1,1702 @@
+{
+    "$schema": "./extensions.schema.json",
+    "version": 1,
+    "description": "The PHP extensions this server provides, by tier and variant, and where each form of distribution departs from that. The single source of truth for builds, checks and docs.",
+    "spc": {
+        "version": "2.8.5",
+        "note": "Build support per OS is taken from static-php-cli 2.8.5 config/ext.json; our own verified exceptions are added on top."
+    },
+    "php": {
+        "versions": [
+            "8.2",
+            "8.3",
+            "8.4",
+            "8.5"
+        ],
+        "default": "8.3",
+        "minimum": "8.1",
+        "notes": {
+            "8.4": "imap, oci8 and pdo_oci are no longer bundled with PHP; they build from PECL.",
+            "8.5": "opcache is always compiled in and cannot be left out."
+        }
+    },
+    "core": [
+        "Core",
+        "date",
+        "hash",
+        "json",
+        "pcre",
+        "random",
+        "Reflection",
+        "SPL",
+        "standard"
+    ],
+    "tiers": {
+        "server": "What the server itself needs to run and isolate requests.",
+        "required": "What the standard application platform needs to run.",
+        "recommended": "Default extensions, every statically linkable database driver, and caching.",
+        "extra": "Everything else static-php-cli can build on the platform.",
+        "other": "Known, but not built into any variant (development tools, conflicting runtimes, run-time drivers); ext:build --with adds them."
+    },
+    "variants": {
+        "mini": {
+            "tiers": [
+                "server"
+            ],
+            "description": "Only what the server itself needs: the smallest binary."
+        },
+        "lite": {
+            "tiers": [
+                "server",
+                "required"
+            ],
+            "description": "The server plus everything the standard application platform requires."
+        },
+        "standard": {
+            "tiers": [
+                "server",
+                "required",
+                "recommended"
+            ],
+            "description": "lite plus the recommended tier: all static database drivers, caching and full image support. The default."
+        },
+        "full": {
+            "tiers": [
+                "server",
+                "required",
+                "recommended",
+                "extra"
+            ],
+            "description": "Everything static-php-cli can build on the platform."
+        },
+        "source": {
+            "tiers": [
+                "server",
+                "required",
+                "recommended",
+                "extra"
+            ],
+            "kit": true,
+            "description": "A build kit, not a binary: the phar, this manifest, the console tool and the static-php-cli recipe, to build any variant locally with qbixctl ext:build."
+        }
+    },
+    "withLibs": {
+        "gd": [
+            "libjpeg",
+            "libpng",
+            "libwebp",
+            "freetype"
+        ]
+    },
+    "defaultVariant": "standard",
+    "platforms": {
+        "linux-x86_64": {
+            "os": "Linux",
+            "arch": "x86_64",
+            "label": "Linux x86-64 (static, musl)"
+        },
+        "linux-aarch64": {
+            "os": "Linux",
+            "arch": "aarch64",
+            "label": "Linux ARM64 (static, musl)"
+        },
+        "macos-arm64": {
+            "os": "Darwin",
+            "arch": "arm64",
+            "label": "macOS Apple silicon"
+        },
+        "windows-x64": {
+            "os": "Windows",
+            "arch": "x64",
+            "label": "Windows x64"
+        }
+    },
+    "extensions": {
+        "amqp": {
+            "tier": "extra",
+            "purpose": "RabbitMQ / AMQP messaging",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "amqp",
+            "libs": [
+                "librabbitmq"
+            ]
+        },
+        "apcu": {
+            "tier": "recommended",
+            "purpose": "In-memory user cache for cache handlers",
+            "source": "owner",
+            "type": "pecl",
+            "spc": "apcu",
+            "packages": {
+                "pkg": "php{vv}-pecl-APCu"
+            }
+        },
+        "ast": {
+            "tier": "extra",
+            "purpose": "PHP abstract syntax trees (static analysis)",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "ast"
+        },
+        "bcmath": {
+            "tier": "recommended",
+            "purpose": "Arbitrary-precision arithmetic for prices and authentication maths",
+            "source": "code",
+            "type": "bundled",
+            "spc": "bcmath"
+        },
+        "brotli": {
+            "tier": "extra",
+            "purpose": "Brotli compression",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "brotli",
+            "libs": [
+                "brotli"
+            ]
+        },
+        "bz2": {
+            "tier": "recommended",
+            "purpose": "bzip2 archives",
+            "source": "code",
+            "type": "bundled",
+            "spc": "bz2",
+            "libs": [
+                "bzip2"
+            ]
+        },
+        "calendar": {
+            "tier": "recommended",
+            "purpose": "Calendar conversions used by date helpers",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "calendar",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "com_dotnet": {
+            "tier": "extra",
+            "purpose": "COM and .NET interop (Windows only)",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "com_dotnet",
+            "unavailable": {
+                "linux-x86_64": "Not available on Linux (static-php-cli: no)",
+                "linux-aarch64": "Not available on Linux (static-php-cli: no)",
+                "macos-arm64": "Not available on Darwin (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Linux",
+                "Darwin"
+            ]
+        },
+        "ctype": {
+            "tier": "server",
+            "purpose": "Character-class checks used when parsing requests and configuration",
+            "source": "server",
+            "type": "bundled",
+            "spc": "ctype",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "curl": {
+            "tier": "required",
+            "purpose": "Outgoing HTTP: package downloads, feeds, web services, cache warming",
+            "source": "code",
+            "type": "bundled",
+            "spc": "curl",
+            "libs": [
+                "curl"
+            ],
+            "packages": {
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "dba": {
+            "tier": "extra",
+            "purpose": "Berkeley-style key-value databases",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "dba"
+        },
+        "decimal": {
+            "tier": "extra",
+            "purpose": "Arbitrary-precision decimals",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "decimal",
+            "libs": [
+                "libmpdec"
+            ]
+        },
+        "deepclone": {
+            "tier": "extra",
+            "purpose": "Fast deep object cloning",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "deepclone"
+        },
+        "dio": {
+            "tier": "extra",
+            "purpose": "Direct low-level I/O (serial ports, devices)",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "dio"
+        },
+        "dom": {
+            "tier": "required",
+            "purpose": "XML documents: rich text, packages, feeds, WebDAV",
+            "source": "code",
+            "type": "bundled",
+            "spc": "dom",
+            "libs": [
+                "libxml2",
+                "zlib"
+            ],
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "ds": {
+            "tier": "extra",
+            "purpose": "Efficient data structures",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "ds"
+        },
+        "enchant": {
+            "tier": "other",
+            "purpose": "Not yet buildable by static-php-cli",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "enchant",
+            "unavailable": {
+                "linux-x86_64": "static-php-cli does not build it for Linux yet",
+                "linux-aarch64": "static-php-cli does not build it for Linux yet",
+                "macos-arm64": "static-php-cli does not build it for Darwin yet",
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "notInFull": "Not yet buildable by static-php-cli"
+        },
+        "ev": {
+            "tier": "extra",
+            "purpose": "libev event loop",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "ev"
+        },
+        "event": {
+            "tier": "extra",
+            "purpose": "libevent event loop",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "event",
+            "libs": [
+                "libevent"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "excimer": {
+            "tier": "other",
+            "purpose": "A sampling profiler, for development only",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "excimer",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "notInFull": "A sampling profiler, for development only"
+        },
+        "exif": {
+            "tier": "recommended",
+            "purpose": "Reading photo metadata (orientation, camera data) on upload",
+            "source": "code",
+            "type": "bundled",
+            "spc": "exif",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "ffi": {
+            "tier": "extra",
+            "purpose": "Calling C libraries from PHP",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "ffi",
+            "libs": [
+                "libffi"
+            ],
+            "unavailable": {
+                "linux-x86_64": "A fully static binary cannot load C libraries at run time",
+                "linux-aarch64": "A fully static binary cannot load C libraries at run time"
+            }
+        },
+        "fileinfo": {
+            "tier": "required",
+            "purpose": "Detecting the MIME type of uploaded and stored files",
+            "source": "code",
+            "type": "bundled",
+            "spc": "fileinfo",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "filter": {
+            "tier": "server",
+            "purpose": "Validating host names, addresses and URLs in requests",
+            "source": "server",
+            "type": "bundled",
+            "spc": "filter",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "ftp": {
+            "tier": "recommended",
+            "purpose": "FTP transfers for deployment and import tools",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "ftp",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "gd": {
+            "tier": "required",
+            "purpose": "Image aliases: resizing, cropping and converting images (with JPEG, PNG, WebP and FreeType)",
+            "source": "code",
+            "type": "bundled",
+            "spc": "gd",
+            "libs": [
+                "zlib",
+                "libpng"
+            ]
+        },
+        "gettext": {
+            "tier": "recommended",
+            "purpose": "gettext translations for components that use them",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "gettext",
+            "libs": [
+                "gettext"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "glfw": {
+            "tier": "other",
+            "purpose": "Desktop windowing, not for a server",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "glfw",
+            "libs": [
+                "glfw"
+            ],
+            "unavailable": {
+                "linux-x86_64": "Not available on Linux (static-php-cli: no)",
+                "linux-aarch64": "Not available on Linux (static-php-cli: no)",
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "unsupportedOs": [
+                "Linux"
+            ],
+            "notInFull": "Desktop windowing, not for a server"
+        },
+        "gmp": {
+            "tier": "recommended",
+            "purpose": "Big-integer maths for authentication libraries",
+            "source": "code",
+            "type": "bundled",
+            "spc": "gmp",
+            "libs": [
+                "gmp"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "gmssl": {
+            "tier": "extra",
+            "purpose": "Chinese national cryptography (SM2/3/4)",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "gmssl",
+            "libs": [
+                "gmssl"
+            ]
+        },
+        "grpc": {
+            "tier": "extra",
+            "purpose": "gRPC clients",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "grpc",
+            "libs": [
+                "grpc",
+                "zlib",
+                "openssl",
+                "libcares"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "iconv": {
+            "tier": "required",
+            "purpose": "Character-set conversion for content, mail and the console",
+            "source": "code",
+            "type": "bundled",
+            "spc": "iconv",
+            "libs": [
+                "libiconv"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "igbinary": {
+            "tier": "recommended",
+            "purpose": "Compact binary serializer for caches (used by redis and memcached)",
+            "source": "owner",
+            "type": "pecl",
+            "spc": "igbinary"
+        },
+        "imagick": {
+            "tier": "extra",
+            "purpose": "ImageMagick image processing",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "imagick",
+            "libs": [
+                "imagemagick"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "packages": {
+                "dnf": "php-pecl-imagick-im7",
+                "dnf-scl": "php{vv}-php-pecl-imagick-im7"
+            }
+        },
+        "imap": {
+            "tier": "extra",
+            "purpose": "IMAP/POP3 mail access (unbundled from PHP 8.4, built from PECL)",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "imap",
+            "libs": [
+                "imap"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "inotify": {
+            "tier": "extra",
+            "purpose": "Linux file-change notifications",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "inotify",
+            "unavailable": {
+                "macos-arm64": "Not available on Darwin (static-php-cli: no)",
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Darwin",
+                "Windows"
+            ]
+        },
+        "intl": {
+            "tier": "required",
+            "purpose": "Locale-aware formatting, collation and transliteration",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "intl",
+            "libs": [
+                "icu"
+            ],
+            "unavailable": {
+                "windows-x64": "The Windows ICU bundle is ICU 78, whose headers need C++17, and PHP's Windows build compiles ext/intl without it (see binaries.md, \"The Windows Build\")"
+            }
+        },
+        "ldap": {
+            "tier": "recommended",
+            "purpose": "Signing users in against LDAP / Active Directory",
+            "source": "code",
+            "type": "bundled",
+            "spc": "ldap",
+            "libs": [
+                "ldap"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "libxml": {
+            "tier": "required",
+            "purpose": "The XML library behind dom, simplexml, xml, xmlreader, xmlwriter and xsl",
+            "source": "code",
+            "type": "bundled",
+            "spc": "libxml",
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "lz4": {
+            "tier": "extra",
+            "purpose": "LZ4 compression",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "lz4",
+            "libs": [
+                "liblz4"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "maxminddb": {
+            "tier": "extra",
+            "purpose": "MaxMind GeoIP lookups",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "maxminddb",
+            "libs": [
+                "libmaxminddb"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "mbregex": {
+            "tier": "extra",
+            "purpose": "Multibyte regular expressions for mbstring",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "mbregex",
+            "libs": [
+                "onig"
+            ]
+        },
+        "mbstring": {
+            "tier": "server",
+            "purpose": "Multibyte strings: request parsing, templates and text handling",
+            "source": "server",
+            "type": "bundled",
+            "spc": "mbstring"
+        },
+        "mcrypt": {
+            "tier": "other",
+            "purpose": "Removed from PHP; not buildable",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "mcrypt",
+            "unavailable": {
+                "linux-x86_64": "Not available on Linux (static-php-cli: no)",
+                "linux-aarch64": "Not available on Linux (static-php-cli: no)",
+                "macos-arm64": "Not available on Darwin (static-php-cli: no)",
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Linux",
+                "Darwin",
+                "Windows"
+            ],
+            "notInFull": "Removed from PHP; not buildable"
+        },
+        "memcache": {
+            "tier": "extra",
+            "purpose": "The older memcache client, for libraries that still use it",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "memcache",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "memcached": {
+            "tier": "recommended",
+            "purpose": "Memcached cache backend",
+            "source": "owner",
+            "type": "pecl",
+            "spc": "memcached",
+            "libs": [
+                "libmemcached",
+                "fastlz"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "mongodb": {
+            "tier": "recommended",
+            "purpose": "MongoDB database driver",
+            "source": "owner",
+            "type": "pecl",
+            "spc": "mongodb",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "msgpack": {
+            "tier": "extra",
+            "purpose": "MessagePack serialization",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "msgpack"
+        },
+        "mysqli": {
+            "tier": "required",
+            "purpose": "The default MySQL/MariaDB database handler",
+            "source": "code",
+            "type": "bundled",
+            "spc": "mysqli",
+            "packages": {
+                "apt": "php{v}-mysql",
+                "dnf": "php-mysqlnd",
+                "dnf-scl": "php{vv}-php-mysqlnd"
+            }
+        },
+        "mysqlnd": {
+            "tier": "required",
+            "purpose": "The native MySQL driver mysqli and pdo_mysql use",
+            "source": "code",
+            "type": "bundled",
+            "spc": "mysqlnd",
+            "libs": [
+                "zlib"
+            ],
+            "packages": {
+                "apt": "php{v}-mysql",
+                "dnf": "php-mysqlnd",
+                "dnf-scl": "php{vv}-php-mysqlnd"
+            }
+        },
+        "mysqlnd_ed25519": {
+            "tier": "extra",
+            "purpose": "MariaDB ed25519 authentication",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "mysqlnd_ed25519",
+            "libs": [
+                "libsodium"
+            ]
+        },
+        "mysqlnd_parsec": {
+            "tier": "extra",
+            "purpose": "MariaDB PARSEC authentication",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "mysqlnd_parsec",
+            "libs": [
+                "libsodium"
+            ]
+        },
+        "oci8": {
+            "tier": "other",
+            "purpose": "Needs Oracle Instant Client at run time: provided as a loadable add-on instead",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "oci8",
+            "unavailable": {
+                "linux-x86_64": "Not available on Linux (static-php-cli: no)",
+                "linux-aarch64": "Not available on Linux (static-php-cli: no)",
+                "macos-arm64": "Not available on Darwin (static-php-cli: no)",
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "unsupportedOs": [
+                "Linux",
+                "Darwin"
+            ],
+            "notInFull": "Needs Oracle Instant Client at run time: provided as a loadable add-on instead"
+        },
+        "odbc": {
+            "tier": "recommended",
+            "purpose": "ODBC database access (unixODBC)",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "odbc",
+            "libs": [
+                "unixodbc"
+            ],
+            "unavailable": {
+                "linux-x86_64": "A fully static binary cannot load ODBC driver libraries at run time; use the Docker image or OS packages for ODBC",
+                "linux-aarch64": "A fully static binary cannot load ODBC driver libraries at run time; use the Docker image or OS packages for ODBC",
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "packages": {
+                "apt": "php{v}-odbc"
+            }
+        },
+        "opcache": {
+            "tier": "required",
+            "purpose": "Opcode cache (and JIT); always compiled in from PHP 8.5",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "opcache",
+            "packages": {
+                "pkg": "php{vv}-opcache"
+            }
+        },
+        "openssl": {
+            "tier": "server",
+            "purpose": "TLS for HTTPS, certificates, ACME and secure random bytes",
+            "source": "server",
+            "type": "bundled",
+            "spc": "openssl",
+            "libs": [
+                "openssl",
+                "zlib"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "opentelemetry": {
+            "tier": "extra",
+            "purpose": "OpenTelemetry tracing",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "opentelemetry"
+        },
+        "parallel": {
+            "tier": "other",
+            "purpose": "Needs a thread-safe (ZTS) PHP; the builds are non-thread-safe",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "parallel",
+            "notInFull": "Needs a thread-safe (ZTS) PHP; the builds are non-thread-safe"
+        },
+        "password-argon2": {
+            "tier": "extra",
+            "purpose": "Argon2 password hashing",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "password-argon2",
+            "libs": [
+                "libargon2",
+                "openssl"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "pcntl": {
+            "tier": "server",
+            "purpose": "Forking a worker per request (the process isolation the pool relies on)",
+            "source": "server",
+            "type": "bundled",
+            "spc": "pcntl",
+            "unavailable": {
+                "windows-x64": "No fork() on Windows: isolation comes from qbix_fork.dll, or php-cgi"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "packages": {
+                "apt": "php{v}-cli",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "pcov": {
+            "tier": "other",
+            "purpose": "Code coverage, for development only",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "pcov",
+            "notInFull": "Code coverage, for development only"
+        },
+        "pdo": {
+            "tier": "required",
+            "purpose": "Database abstraction layer used by persistent-object libraries and tools",
+            "source": "code",
+            "type": "bundled",
+            "spc": "pdo",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-pdo",
+                "dnf-scl": "php{vv}-php-pdo"
+            }
+        },
+        "pdo_mysql": {
+            "tier": "required",
+            "purpose": "PDO driver for MySQL/MariaDB",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "pdo_mysql",
+            "packages": {
+                "apt": "php{v}-mysql",
+                "dnf": "php-mysqlnd",
+                "dnf-scl": "php{vv}-php-mysqlnd"
+            }
+        },
+        "pdo_odbc": {
+            "tier": "recommended",
+            "purpose": "PDO driver for ODBC data sources",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "pdo_odbc",
+            "libs": [
+                "unixodbc"
+            ],
+            "unavailable": {
+                "linux-x86_64": "A fully static binary cannot load ODBC driver libraries at run time; use the Docker image or OS packages for ODBC",
+                "linux-aarch64": "A fully static binary cannot load ODBC driver libraries at run time; use the Docker image or OS packages for ODBC"
+            },
+            "packages": {
+                "apt": "php{v}-odbc",
+                "dnf": "php-odbc",
+                "dnf-scl": "php{vv}-php-odbc"
+            }
+        },
+        "pdo_pgsql": {
+            "tier": "recommended",
+            "purpose": "PDO driver for PostgreSQL",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "pdo_pgsql",
+            "libs": [
+                "postgresql"
+            ],
+            "packages": {
+                "apt": "php{v}-pgsql",
+                "dnf": "php-pgsql",
+                "dnf-scl": "php{vv}-php-pgsql"
+            }
+        },
+        "pdo_sqlite": {
+            "tier": "recommended",
+            "purpose": "PDO driver for SQLite",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "pdo_sqlite",
+            "libs": [
+                "sqlite"
+            ],
+            "packages": {
+                "apt": "php{v}-sqlite3",
+                "dnf": "php-pdo",
+                "dnf-scl": "php{vv}-php-pdo"
+            }
+        },
+        "pdo_sqlsrv": {
+            "tier": "other",
+            "purpose": "Needs Microsoft's ODBC driver at run time: documented install instead",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "pdo_sqlsrv",
+            "notInFull": "Needs Microsoft's ODBC driver at run time: documented install instead"
+        },
+        "pgsql": {
+            "tier": "recommended",
+            "purpose": "PostgreSQL database handler",
+            "source": "code",
+            "type": "bundled",
+            "spc": "pgsql",
+            "libs": [
+                "postgresql"
+            ],
+            "packages": {
+                "apt": "php{v}-pgsql"
+            }
+        },
+        "phar": {
+            "tier": "server",
+            "purpose": "Running the server from its single-file archive",
+            "source": "server",
+            "type": "bundled",
+            "spc": "phar",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "posix": {
+            "tier": "server",
+            "purpose": "Process and user control for workers, pid files and signals",
+            "source": "server",
+            "type": "bundled",
+            "spc": "posix",
+            "unavailable": {
+                "windows-x64": "POSIX-only; not available on Windows"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "protobuf": {
+            "tier": "extra",
+            "purpose": "Protocol Buffers",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "protobuf",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "rar": {
+            "tier": "extra",
+            "purpose": "RAR archives",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "rar"
+        },
+        "rdkafka": {
+            "tier": "extra",
+            "purpose": "Kafka clients",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "rdkafka",
+            "libs": [
+                "librdkafka"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "readline": {
+            "tier": "recommended",
+            "purpose": "Interactive console input for command-line tools",
+            "source": "code",
+            "type": "bundled",
+            "spc": "readline",
+            "libs": [
+                "libedit"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "redis": {
+            "tier": "recommended",
+            "purpose": "Redis / Valkey cache backend",
+            "source": "owner",
+            "type": "pecl",
+            "spc": "redis",
+            "packages": {
+                "dnf": "php-pecl-redis6",
+                "dnf-scl": "php{vv}-php-pecl-redis6"
+            }
+        },
+        "session": {
+            "tier": "server",
+            "purpose": "PHP sessions, kept correct across persistent workers",
+            "source": "server",
+            "type": "bundled",
+            "spc": "session",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "shmop": {
+            "tier": "extra",
+            "purpose": "Shared memory segments",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "shmop",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "simdjson": {
+            "tier": "extra",
+            "purpose": "Very fast JSON decoding",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "simdjson"
+        },
+        "simplexml": {
+            "tier": "required",
+            "purpose": "Reading XML settings, metadata and package descriptions",
+            "source": "code",
+            "type": "bundled",
+            "spc": "simplexml",
+            "libs": [
+                "libxml2"
+            ],
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "snappy": {
+            "tier": "extra",
+            "purpose": "Snappy compression",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "snappy",
+            "libs": [
+                "snappy"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "snmp": {
+            "tier": "extra",
+            "purpose": "SNMP network management",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "snmp",
+            "libs": [
+                "net-snmp"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "soap": {
+            "tier": "recommended",
+            "purpose": "SOAP web-service clients and servers",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "soap"
+        },
+        "sockets": {
+            "tier": "server",
+            "purpose": "TCP options (no-delay, keep-alive) on client connections",
+            "source": "server",
+            "type": "bundled",
+            "spc": "sockets",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "sodium": {
+            "tier": "recommended",
+            "purpose": "Modern cryptography: signing, sealed boxes, Argon2 hashing",
+            "source": "owner",
+            "type": "bundled",
+            "spc": "sodium",
+            "libs": [
+                "libsodium"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "spx": {
+            "tier": "other",
+            "purpose": "A profiler, for development only",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "spx",
+            "libs": [
+                "zlib"
+            ],
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "A profiler, for development only"
+        },
+        "sqlite3": {
+            "tier": "server",
+            "purpose": "The server's own metrics store",
+            "source": "server",
+            "type": "bundled",
+            "spc": "sqlite3",
+            "libs": [
+                "sqlite"
+            ],
+            "packages": {
+                "apt": "php{v}-sqlite3",
+                "dnf": "php-pdo",
+                "dnf-scl": "php{vv}-php-pdo"
+            }
+        },
+        "sqlsrv": {
+            "tier": "other",
+            "purpose": "Needs Microsoft's ODBC driver at run time: documented install instead",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "sqlsrv",
+            "libs": [
+                "unixodbc"
+            ],
+            "notInFull": "Needs Microsoft's ODBC driver at run time: documented install instead"
+        },
+        "ssh2": {
+            "tier": "extra",
+            "purpose": "SSH and SFTP clients",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "ssh2",
+            "libs": [
+                "libssh2"
+            ]
+        },
+        "swoole": {
+            "tier": "other",
+            "purpose": "Its own event loop and server; conflicts with this server's workers",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "swoole",
+            "libs": [
+                "libcares",
+                "brotli",
+                "nghttp2",
+                "zlib"
+            ],
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "Its own event loop and server; conflicts with this server's workers"
+        },
+        "swoole-hook-mysql": {
+            "tier": "other",
+            "purpose": "Swoole add-on",
+            "source": "spc",
+            "type": "addon",
+            "spc": "swoole-hook-mysql",
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "Swoole add-on"
+        },
+        "swoole-hook-odbc": {
+            "tier": "other",
+            "purpose": "Swoole add-on",
+            "source": "spc",
+            "type": "addon",
+            "spc": "swoole-hook-odbc",
+            "libs": [
+                "unixodbc"
+            ],
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "Swoole add-on"
+        },
+        "swoole-hook-pgsql": {
+            "tier": "other",
+            "purpose": "Swoole add-on",
+            "source": "spc",
+            "type": "addon",
+            "spc": "swoole-hook-pgsql",
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "Swoole add-on"
+        },
+        "swoole-hook-sqlite": {
+            "tier": "other",
+            "purpose": "Swoole add-on",
+            "source": "spc",
+            "type": "addon",
+            "spc": "swoole-hook-sqlite",
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "notInFull": "Swoole add-on"
+        },
+        "swow": {
+            "tier": "other",
+            "purpose": "Its own coroutine runtime; conflicts with this server's workers",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "swow",
+            "notInFull": "Its own coroutine runtime; conflicts with this server's workers"
+        },
+        "sysvmsg": {
+            "tier": "extra",
+            "purpose": "System V message queues",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "sysvmsg",
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "sysvsem": {
+            "tier": "extra",
+            "purpose": "System V semaphores",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "sysvsem",
+            "unavailable": {
+                "windows-x64": "Not available on Windows (static-php-cli: no)"
+            },
+            "unsupportedOs": [
+                "Windows"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "sysvshm": {
+            "tier": "extra",
+            "purpose": "System V shared memory",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "sysvshm",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-process",
+                "dnf-scl": "php{vv}-php-process"
+            }
+        },
+        "tidy": {
+            "tier": "extra",
+            "purpose": "HTML clean-up and repair",
+            "source": "spc",
+            "type": "bundled",
+            "spc": "tidy",
+            "libs": [
+                "tidy"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "tokenizer": {
+            "tier": "server",
+            "purpose": "The source transform that lets applications run in persistent workers",
+            "source": "server",
+            "type": "bundled",
+            "spc": "tokenizer",
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "trader": {
+            "tier": "extra",
+            "purpose": "Technical-analysis maths",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "trader",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "uuid": {
+            "tier": "extra",
+            "purpose": "UUID generation",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "uuid",
+            "libs": [
+                "libuuid"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "uv": {
+            "tier": "extra",
+            "purpose": "libuv event loop",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "uv",
+            "libs": [
+                "libuv"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        },
+        "xdebug": {
+            "tier": "other",
+            "purpose": "A debugger: slows every request, for development only",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "xdebug",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "notInFull": "A debugger: slows every request, for development only"
+        },
+        "xhprof": {
+            "tier": "other",
+            "purpose": "A profiler, for development only",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "xhprof",
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            },
+            "notInFull": "A profiler, for development only"
+        },
+        "xlswriter": {
+            "tier": "extra",
+            "purpose": "Writing Excel files",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "xlswriter"
+        },
+        "xml": {
+            "tier": "required",
+            "purpose": "Event-based XML parsing",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "xml",
+            "libs": [
+                "libxml2"
+            ],
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "xmlreader": {
+            "tier": "required",
+            "purpose": "Streaming XML reading for large imports",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "xmlreader",
+            "libs": [
+                "libxml2"
+            ],
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "xmlwriter": {
+            "tier": "required",
+            "purpose": "Streaming XML output for AJAX and feeds",
+            "source": "code",
+            "type": "bundled",
+            "spc": "xmlwriter",
+            "libs": [
+                "libxml2"
+            ],
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "xsl": {
+            "tier": "required",
+            "purpose": "XSLT transforms for document import and export",
+            "source": "platform",
+            "type": "bundled",
+            "spc": "xsl",
+            "libs": [
+                "libxslt"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli cannot compile libxslt on Windows"
+            },
+            "packages": {
+                "apt": "php{v}-xml",
+                "dnf": "php-xml",
+                "dnf-scl": "php{vv}-php-xml"
+            }
+        },
+        "xz": {
+            "tier": "extra",
+            "purpose": "XZ / LZMA compression",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "xz",
+            "libs": [
+                "xz"
+            ]
+        },
+        "yac": {
+            "tier": "extra",
+            "purpose": "Lock-free shared-memory cache",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "yac",
+            "libs": [
+                "fastlz"
+            ]
+        },
+        "yaml": {
+            "tier": "extra",
+            "purpose": "YAML parsing",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "yaml",
+            "libs": [
+                "libyaml"
+            ]
+        },
+        "zip": {
+            "tier": "required",
+            "purpose": "Zip archives: package import and export, document formats",
+            "source": "code",
+            "type": "pecl",
+            "spc": "zip",
+            "libs": [
+                "libzip"
+            ]
+        },
+        "zlib": {
+            "tier": "required",
+            "purpose": "Compression: gzip responses, compressed cache and archives",
+            "source": "code",
+            "type": "bundled",
+            "spc": "zlib",
+            "libs": [
+                "zlib"
+            ],
+            "packages": {
+                "apt": "php{v}-common",
+                "dnf": "php-common",
+                "dnf-scl": "php{vv}-php-common"
+            }
+        },
+        "zstd": {
+            "tier": "extra",
+            "purpose": "Zstandard compression",
+            "source": "spc",
+            "type": "pecl",
+            "spc": "zstd",
+            "libs": [
+                "zstd"
+            ],
+            "unavailable": {
+                "windows-x64": "static-php-cli does not build it for Windows yet"
+            }
+        }
+    },
+    "addons": {
+        "oci8": {
+            "database": "Oracle",
+            "purpose": "Oracle Database (OCI8 API)",
+            "client": "Oracle Instant Client (basic + sdk)",
+            "why": "Oracle Instant Client is a proprietary shared library; it cannot be linked into a static binary.",
+            "install": {
+                "apt": [
+                    "Download Oracle Instant Client basic and sdk zips from oracle.com and unzip to /opt/oracle/instantclient",
+                    "echo /opt/oracle/instantclient > /etc/ld.so.conf.d/oracle.conf && ldconfig",
+                    "apt-get install -y php{v}-dev libaio1",
+                    "echo \"instantclient,/opt/oracle/instantclient\" | pecl install oci8",
+                    "echo \"extension=oci8\" > /etc/php/{v}/mods-available/oci8.ini && phpenmod oci8"
+                ],
+                "dnf": [
+                    "dnf install -y oracle-instantclient-basic oracle-instantclient-devel (Oracle's yum repository)",
+                    "dnf install -y php-devel php-pear libaio",
+                    "echo \"instantclient,/usr/lib/oracle/*/client64/lib\" | pecl install oci8",
+                    "echo \"extension=oci8\" > /etc/php.d/40-oci8.ini"
+                ],
+                "brew": [
+                    "brew tap InstantClientTap/instantclient && brew install instantclient-basic instantclient-sdk",
+                    "echo \"instantclient,$(brew --prefix)/lib\" | pecl install oci8"
+                ],
+                "windows": [
+                    "Unzip Oracle Instant Client and add it to PATH",
+                    "Download php_oci8.dll for your PHP version from pecl.php.net/package/oci8 and add extension=oci8 to php.ini"
+                ],
+                "docker": [
+                    "Use the image variant that includes the Oracle add-on (see docker.md)"
+                ]
+            }
+        },
+        "pdo_oci": {
+            "database": "Oracle",
+            "purpose": "Oracle Database through PDO",
+            "client": "Oracle Instant Client (basic + sdk)",
+            "why": "Needs Oracle Instant Client, as oci8 does. Bundled with PHP up to 8.3; from 8.4 in PECL.",
+            "install": {
+                "apt": [
+                    "Install Oracle Instant Client as for oci8",
+                    "PHP 8.4+: echo \"instantclient,/opt/oracle/instantclient\" | pecl install pdo_oci",
+                    "PHP 8.3 and earlier: build ext/pdo_oci from the PHP source with --with-pdo-oci=instantclient,/opt/oracle/instantclient"
+                ],
+                "dnf": [
+                    "Install Oracle Instant Client as for oci8",
+                    "PHP 8.4+: pecl install pdo_oci"
+                ],
+                "docker": [
+                    "Use the image variant that includes the Oracle add-on (see docker.md)"
+                ]
+            }
+        },
+        "pdo_firebird": {
+            "database": "Firebird",
+            "purpose": "Firebird / InterBase through PDO",
+            "client": "fbclient (Firebird client library)",
+            "why": "Needs the Firebird client library at run time, which static-php-cli does not build. (The old interbase extension was removed from PHP in 7.4; pdo_firebird replaces it.)",
+            "install": {
+                "apt": [
+                    "apt-get install -y php{v}-interbase"
+                ],
+                "dnf": [
+                    "dnf install -y php-pdo-firebird"
+                ],
+                "apk": [
+                    "apk add php{vv}-pdo_firebird"
+                ],
+                "pkg": [
+                    "pkg install -y php{vv}-pdo_firebird"
+                ],
+                "docker": [
+                    "Use the image variant that includes the Firebird add-on (see docker.md)"
+                ]
+            }
+        }
+    },
+    "documented": {
+        "sqlsrv": {
+            "database": "Microsoft SQL Server",
+            "purpose": "SQL Server (sqlsrv API)",
+            "why": "Needs Microsoft's ODBC Driver for SQL Server at run time, a proprietary shared library; not shipped.",
+            "install": {
+                "apt": [
+                    "Add Microsoft's package repository (packages.microsoft.com) and: ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev",
+                    "apt-get install -y php{v}-dev && pecl install sqlsrv",
+                    "echo \"extension=sqlsrv\" > /etc/php/{v}/mods-available/sqlsrv.ini && phpenmod sqlsrv"
+                ],
+                "dnf": [
+                    "Add Microsoft's repository and: ACCEPT_EULA=Y dnf install -y msodbcsql18 unixODBC-devel",
+                    "dnf install -y php-devel && pecl install sqlsrv"
+                ],
+                "windows": [
+                    "Install \"ODBC Driver 18 for SQL Server\"",
+                    "Download the Microsoft Drivers for PHP for SQL Server matching your PHP version and add extension=sqlsrv to php.ini"
+                ]
+            }
+        },
+        "pdo_sqlsrv": {
+            "database": "Microsoft SQL Server",
+            "purpose": "SQL Server through PDO",
+            "why": "Needs Microsoft's ODBC Driver for SQL Server at run time; not shipped.",
+            "install": {
+                "apt": [
+                    "Install msodbcsql18 as for sqlsrv",
+                    "pecl install pdo_sqlsrv && echo \"extension=pdo_sqlsrv\" > /etc/php/{v}/mods-available/pdo_sqlsrv.ini && phpenmod pdo_sqlsrv"
+                ],
+                "dnf": [
+                    "Install msodbcsql18 as for sqlsrv",
+                    "pecl install pdo_sqlsrv"
+                ],
+                "windows": [
+                    "As for sqlsrv, with extension=pdo_sqlsrv"
+                ]
+            }
+        },
+        "msaccess": {
+            "database": "Microsoft Access",
+            "purpose": "Access .mdb/.accdb files through ODBC",
+            "why": "Reached through odbc/pdo_odbc and an Access ODBC driver; there is no PHP extension of its own.",
+            "install": {
+                "apt": [
+                    "apt-get install -y php{v}-odbc odbc-mdbtools (read-only mdbtools driver)",
+                    "Connect with pdo_odbc: odbc:Driver=MDBTools;DBQ=/path/file.mdb"
+                ],
+                "windows": [
+                    "Install the Microsoft Access Database Engine (ACE) redistributable",
+                    "Enable extension=pdo_odbc and connect with odbc:Driver={Microsoft Access Driver (*.mdb, *.accdb)};Dbq=C:\\path\\file.accdb"
+                ]
+            }
+        }
+    },
+    "packageDefaults": {
+        "bundled": {
+            "apt": "php{v}-{ext}",
+            "dnf": "php-{ext}",
+            "dnf-scl": "php{vv}-php-{ext}",
+            "plesk": "",
+            "apk": "php{vv}-{ext}",
+            "pkg": "php{vv}-{ext}",
+            "brew": "",
+            "windows": "extension={ext} in php.ini"
+        },
+        "pecl": {
+            "apt": "php{v}-{ext}",
+            "dnf": "php-pecl-{ext}",
+            "dnf-scl": "php{vv}-php-pecl-{ext}",
+            "plesk": "pecl:/opt/plesk/php/{v}/bin/pecl install {ext}",
+            "apk": "php{vv}-pecl-{ext}",
+            "pkg": "php{vv}-pecl-{ext}",
+            "brew": "shivammathur/extensions/{ext}@{v}",
+            "windows": "php_{ext}.dll from pecl.php.net, then extension={ext} in php.ini",
+            "pecl": "{ext}"
+        },
+        "core": {
+            "apt": "php{v}-common",
+            "dnf": "php-common",
+            "dnf-scl": "php{vv}-php-common",
+            "plesk": "",
+            "apk": "php{vv}",
+            "pkg": "php{vv}",
+            "brew": "",
+            "windows": ""
+        }
+    }
+}

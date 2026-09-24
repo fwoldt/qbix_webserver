@@ -38,6 +38,10 @@ foreach ($it as $file) {
 
 // Add the main server file at root
 $phar->addFile(__DIR__ . '/qbixserver.php', 'qbixserver.php');
+// The PHP extension manifest: Q_WebServer_Extensions reads it from build/ beside src/.
+foreach (array('build/extensions.json', 'build/extensions.schema.json') as $__f) {
+	if (is_file(__DIR__ . '/' . $__f)) $phar->addFile(__DIR__ . '/' . $__f, $__f);
+}
 // Which distribution of the engine this is (see qbixserver.php, --distribution).
 if (is_file(__DIR__ . '/DISTRIBUTION')) $phar->addFile(__DIR__ . '/DISTRIBUTION', 'DISTRIBUTION');
 

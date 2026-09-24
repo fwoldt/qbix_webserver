@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PHP extension manifest",
+  "description": "The PHP extensions the server provides, by tier and variant. Validated by tests/unit-extensions-manifest.php.",
+  "type": "object",
+  "required": ["version", "php", "core", "tiers", "variants", "defaultVariant", "platforms", "extensions", "addons", "documented", "packageDefaults"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "version": {"const": 1},
+    "description": {"type": "string"},
+    "spc": {"type": "object", "properties": {"version": {"type": "string"}, "note": {"type": "string"}}},
+    "php": {
+      "type": "object",
+      "required": ["versions", "default", "minimum"],
+      "properties": {
+        "versions": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}, "minItems": 1},
+        "default": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "minimum": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "notes": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "core": {"type": "array", "items": {"type": "string"}},
+    "tiers": {
+      "type": "object",
+      "required": ["server", "required", "recommended", "extra", "other"],
+      "additionalProperties": {"type": "string"}
+    },
+    "variants": {
+      "type": "object",
+      "required": ["mini", "lite", "standard", "full", "source"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["tiers", "description"],
+        "properties": {
+          "tiers": {"type": "array", "items": {"enum": ["server", "required", "recommended", "extra"]}, "minItems": 1},
+          "kit": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "withLibs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "defaultVariant": {"type": "string"},
+    "platforms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["os", "arch", "label"],
+        "properties": {"os": {"enum": ["Linux", "Darwin", "Windows", "BSD"]}, "arch": {"type": "string"}, "label": {"type": "string"}}
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["tier", "purpose", "source", "type"],
+        "properties": {
+          "tier": {"enum": ["server", "required", "recommended", "extra", "other"]},
+          "purpose": {"type": "string", "minLength": 3},
+          "source": {"enum": ["server", "code", "platform", "owner", "spc"]},
+          "type": {"enum": ["bundled", "pecl", "addon"]},
+          "spc": {"type": "string"},
+          "static": {"type": "boolean"},
+          "libs": {"type": "array", "items": {"type": "string"}},
+          "unavailable": {"type": "object", "additionalProperties": {"type": "string", "minLength": 3}},
+          "packages": {"type": "object", "additionalProperties": {"type": "string"}},
+          "notInFull": {"type": "string"}
+        }
+      }
+    },
+    "addons": {"$ref": "#/definitions/driverMap"},
+    "documented": {"$ref": "#/definitions/driverMap"},
+    "packageDefaults": {
+      "type": "object",
+      "required": ["bundled", "pecl", "core"],
+      "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}}
+    }
+  },
+  "definitions": {
+    "driverMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["database", "purpose", "why", "install"],
+        "properties": {
+          "database": {"type": "string"},
+          "purpose": {"type": "string"},
+          "client": {"type": "string"},
+          "why": {"type": "string"},
+          "install": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}, "minItems": 1}}
+        }
+      }
+    }
+  }
+}

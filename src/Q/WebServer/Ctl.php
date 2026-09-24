@@ -539,5 +539,9 @@ class Q_WebServer_Ctl
 			$dir = isset($o['cache-dir']) ? (string) $o['cache-dir'] : Q_Config::get('Q', 'web', 'cache', 'dir', null);
 			return $say(self::clearCache($dir, Q_Config::get('Q', 'web', 'cache', 'generationFile', null)));
 		}, $ctxOpts + array('cache-dir' => 'The cache directory (default: Q.web.cache.dir)'));
+		// The PHP extension baseline: ext:list, ext:check, ext:plan, ext:install-hint, ext:build.
+		if (!class_exists('Q_WebServer_ExtensionsCtl', false)) require_once __DIR__ . '/ExtensionsCtl.php';
+		if (!class_exists('Q_WebServer_Extensions', false)) require_once __DIR__ . '/Extensions.php';
+		Q_WebServer_ExtensionsCtl::register();
 	}
 }
