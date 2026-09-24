@@ -2256,7 +2256,8 @@ class Q_WebServer
 				}
 			}
 			// Panel password — require a valid session cookie
-			if (Q_WebServer_Panel::hasPassword()) {
+			// This machine is let in, as adminAllowed() lets it in everywhere else.
+			if (Q_WebServer_Panel::hasPassword() && !self::isLocalRequest($parsed)) {
 				$cookie = $parsed['cookies']['Q_panel_token'] ?? '';
 				$qp = array();
 				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
@@ -2716,7 +2717,7 @@ class Q_WebServer
 			list($assetFile, $assetType) = $assetMap[$path];
 			if (file_exists($assetFile)) {
 				self::sendResponse($client, 200, file_get_contents($assetFile),
-					$assetType, array('Cache-Control' => 'public, max-age=86400'));
+					$assetType, array('Cache-Control' => 'public, max-age=604800'));
 			} else {
 				self::sendResponse($client, 404, 'Not found');
 			}

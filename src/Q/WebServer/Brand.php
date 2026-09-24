@@ -48,6 +48,7 @@ class Q_WebServer_Brand
 		'/Q/favicon.svg' => 'svg',
 		'/Q/favicon.ico' => 'ico',
 		'/Q/icon-32.png' => 32,
+		'/Q/icon-48.png' => 48,
 		'/Q/icon-180.png' => 180,
 		'/Q/icon-192.png' => 192,
 		'/Q/icon-512.png' => 512,

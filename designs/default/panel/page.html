@@ -5,7 +5,7 @@
 {{brandHead}}
 <style>{{@style.css}}</style></head><body>
 <div class="top">
-  <h1><a href="/Q/panel" style="color:inherit;text-decoration:none"><img src="/Q/logo.png" alt="" style="width:24px;height:auto;vertical-align:middle;margin-right:6px">{{brand}}</a></h1>
+  <h1><a href="/Q/panel" style="color:inherit;text-decoration:none"><img src="/Q/icon-48.png" alt="" width="24" height="24" style="vertical-align:middle;margin-right:6px">{{brand}}</a></h1>
   <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel" aria-current="page">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
   <div class="status"><span class="pulse"></span> Running</div>
 </div>
@@ -37,8 +37,8 @@
     Scanning: <span id="apps-dir-path" style="cursor:pointer;border-bottom:1px dashed var(--dim)" onclick="editAppsDir()"></span>
     <span id="apps-dir-edit" class="hidden" style="margin-left:4px">
       <input id="apps-dir-input" style="font-size:12px;padding:2px 6px;width:260px;background:var(--card);border:1px solid var(--border);color:var(--txt);border-radius:4px">
-      <button class="btn btn-sm btn-primary" onclick="saveAppsDir()" style="font-size:11px;padding:2px 8px">Save</button>
-      <button class="btn btn-sm btn-ghost" onclick="cancelAppsDir()" style="font-size:11px;padding:2px 8px">✕</button>
+      <button class="btn btn-sm btn-primary" onclick="saveAppsDir()" style="font-size:12px;padding:2px 8px">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="cancelAppsDir()" style="font-size:12px;padding:2px 8px">✕</button>
     </span>
   </div>
   <div id="create-form" class="card hidden">
@@ -78,7 +78,7 @@
     <h3 style="font-size:14px;margin-bottom:12px">Sign Binary</h3>
     <p style="font-size:12px;color:var(--dim);margin-bottom:12px">Paste a PEM private key to add your signature to this binary. Multiple signers can sign independently for M-of-N verification.</p>
     <div class="form-row"><label>Signer name</label><input id="sec-signer" placeholder="alice@example.com"></div>
-    <div class="form-row"><label>Private key (PEM)</label><textarea id="sec-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;..." style="font-size:11px;font-family:monospace"></textarea></div>
+    <div class="form-row"><label>Private key (PEM)</label><textarea id="sec-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;..." style="font-size:12px;font-family:monospace"></textarea></div>
     <button class="btn btn-primary" onclick="signBinary()">Sign</button>
   </div>
 
@@ -147,11 +147,11 @@
     </div>
   </div>
   <p style="font-size:12px;color:var(--dim);margin-bottom:10px">
-    Q classes are preloaded. Try <code style="font-size:11px">Q::app()</code>, <code style="font-size:11px">Q_Config::getAll()</code>, <code style="font-size:11px">Q_Request::url()</code>. Ctrl+Enter to run.
+    Q classes are preloaded. Try <code style="font-size:12px">Q::app()</code>, <code style="font-size:12px">Q_Config::getAll()</code>, <code style="font-size:12px">Q_Request::url()</code>. Ctrl+Enter to run.
   </p>
   <div style="display:grid;grid-template-rows:1fr auto;gap:10px;min-height:400px">
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
-      <div style="padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--border)">editor</div>
+      <div style="padding:6px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border)">editor</div>
       <textarea id="pg-code" spellcheck="false" style="
         flex:1;width:100%;border:none;background:transparent;color:var(--txt);
         font-family:'SF Mono',Monaco,Consolas,monospace;font-size:13px;line-height:1.5;
@@ -160,7 +160,7 @@
       <script>document.getElementById('pg-code').value="<?php\necho \"App: \" . Q::app() . \"\\n\";\necho \"Config: \" . json_encode(Q_Config::getAll(), JSON_PRETTY_PRINT) . \"\\n\";\n\n// Available classes:\n// Q, Q_Config, Q_Request, Q_Response, Q_Socket, Q_Room\necho \"\\nLoaded classes:\\n\";\nforeach (get_declared_classes() as $c) {\n    if (strpos($c, 'Q_') === 0) echo \"  $c\\n\";\n}";</script>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:120px">
-      <div style="padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--border)">
+      <div style="padding:6px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border)">
         output <span id="pg-time" style="float:right"></span>
       </div>
       <pre id="pg-output" style="
@@ -225,7 +225,7 @@
     <h3 style="font-size:14px;margin-bottom:12px">Resize Pool</h3>
     <div class="form-row"><label>Workers</label><input id="worker-count" type="number" min="1" max="10000" placeholder="200"></div>
     <button onclick="resizeWorkers()">Resize</button>
-    <p style="font-size:11px;color:var(--dim);margin-top:8px">Takes effect gradually as workers finish their current requests.</p>
+    <p style="font-size:12px;color:var(--dim);margin-top:8px">Takes effect gradually as workers finish their current requests.</p>
   </div>
   <div id="worker-detail"></div>
 </div>
@@ -243,7 +243,7 @@
       <option value="500">500 lines</option>
     </select>
   </div>
-  <pre id="logs-output" style="max-height:500px;overflow:auto;font-size:11px;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;white-space:pre-wrap;word-break:break-all"></pre>
+  <pre id="logs-output" style="max-height:500px;overflow:auto;font-size:12px;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;white-space:pre-wrap;word-break:break-all"></pre>
 </div>
 
 <!-- CRON TAB -->

@@ -276,7 +276,8 @@ class Q_WebServer_Dashboard
 		$p = $parsed['path'];
 		if ($p === '/Q/dashboard' || $p === '/Q/dashboard/') {
 			// If panel password is set, require auth (cookie or query token)
-			if (Q_WebServer_Panel::hasPassword()) {
+			// This machine is let in, as adminAllowed() lets it in everywhere else.
+			if (Q_WebServer_Panel::hasPassword() && !Q_WebServer::isLocalRequest($parsed)) {
 				$cookie = $parsed['cookies']['Q_panel_token'] ?? '';
 				$qp = array();
 				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
