@@ -1,0 +1,5 @@
+{
+    "safePath": "<i>safePath</i> {{x}} \\ $y &amp;",
+    "listHtml": "<i>listHtml</i> {{x}} \\ $y &amp;",
+    "imagesJson": "<i>imagesJson</i> {{x}} \\ $y &amp;"
+}

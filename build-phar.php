@@ -51,6 +51,19 @@ if (is_dir($webDir)) {
 	}
 }
 
+// Add designs/: the server's own pages (dashboard, panel, docs, listing,
+// error) are design files now, read by Q_WebServer_Design at runtime.
+$designsDir = __DIR__ . '/designs';
+if (is_dir($designsDir)) {
+	$dit = new RecursiveIteratorIterator(
+		new RecursiveDirectoryIterator($designsDir, RecursiveDirectoryIterator::SKIP_DOTS)
+	);
+	foreach ($dit as $file) {
+		$rel = substr($file->getPathname(), strlen($baseDir) + 1); // e.g. designs/default/dashboard/page.html
+		$phar->addFile($file->getPathname(), $rel);
+	}
+}
+
 // Stamp the build: the short commit and the date it was built. Inside a phar
 // there is no git to ask at runtime, so it is recorded now, at build time, and
 // bundled. From source the server falls back to asking git directly.

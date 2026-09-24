@@ -46,6 +46,16 @@ function sources()
 			$found[] = $f->getPathname();
 		}
 	}
+	// The server's own pages are design files now; a script.js is script
+	// throughout, so it is scanned as if inside <script>.
+	$designs = __DIR__ . '/../designs';
+	if (is_dir($designs)) {
+		foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($designs, FilesystemIterator::SKIP_DOTS)) as $f) {
+			if ($f->isFile() and in_array(strtolower($f->getExtension()), array('html', 'js'), true)) {
+				$found[] = $f->getPathname();
+			}
+		}
+	}
 	sort($found);
 	$entry = __DIR__ . '/../qbixserver.php';
 	if (is_file($entry)) $found[] = $entry;
@@ -61,7 +71,8 @@ foreach (sources() as $path) {
 
 	// Blank out script bodies, keeping the offsets so a line number still
 	// means something, then look at what is left.
-	$masked = preg_replace_callback('#<script\b.*?</script>#is',
+	$masked = substr($path, -3) === '.js' ? str_repeat(' ', strlen($src))
+		: preg_replace_callback('#<script\b.*?</script>#is',
 		function ($m) { return str_repeat(' ', strlen($m[0])); }, $src);
 
 	$inScript += preg_match_all('/\\\\u[0-9A-Fa-f]{4}/', $src)
@@ -89,7 +100,10 @@ check('escapes inside <script> are left alone, where they are correct',
 
 // And the entities that replaced them are actually present, so a future
 // "tidy-up" that deletes them is caught rather than silently blanking the page.
+// The dashboard's PHP and its page, which is a design on disk now
+// (designs/default/dashboard: page.html, style.css, script.js).
 $dash = file_get_contents(__DIR__ . '/../src/Q/WebServer/Dashboard.php');
+foreach (array('page.html', 'style.css', 'script.js') as $__f) $dash .= "\n" . file_get_contents(__DIR__ . '/../designs/default/dashboard/' . $__f);
 // The cards that listed several counts on one dotted line now list them one
 // per row, so fewer separators remain; the ones that do must still be the
 // entity, on the lines that keep them.

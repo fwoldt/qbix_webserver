@@ -1,0 +1,1225 @@
+
+const API = '/Q/api';
+let hasNode = false;
+let hasComposer = false;
+let authToken = null;
+
+// ── Auth ─────────────────────────────────────────────
+
+function getToken() {
+  if (authToken) return authToken;
+  try { authToken = sessionStorage.getItem('Q_panel_token'); } catch(e) {}
+  return authToken;
+}
+function setToken(t) {
+  authToken = t;
+  try { sessionStorage.setItem('Q_panel_token', t); } catch(e) {}
+  // Also set as cookie for WebSocket auth
+  document.cookie = 'Q_panel_token=' + t + '; path=/; SameSite=Strict';
+}
+
+async function api(path, body) {
+  var headers = {'Content-Type':'application/json'};
+  var t = getToken();
+  if (t) headers['X-Panel-Token'] = t;
+  var r = await fetch(API+'/'+path, body
+    ? {method:'POST', headers:headers, body:JSON.stringify(body)}
+    : {headers:headers});
+  var data = await r.json();
+  if (data.error && (data.needsSetup || r.status === 401)) {
+    showAuthScreen(data.needsSetup);
+    throw new Error('auth');
+  }
+  return data;
+}
+
+function showAuthScreen(isSetup) {
+  var main = document.getElementById('main-content');
+  if (!main) {
+    // Wrap everything after tabs in a container
+    var tabs = document.querySelector('.tabs');
+    var els = [];
+    var sib = tabs.nextElementSibling;
+    while (sib) { els.push(sib); sib = sib.nextElementSibling; }
+    main = document.createElement('div');
+    main.id = 'main-content';
+    els.forEach(function(el) { main.appendChild(el); });
+    tabs.parentNode.insertBefore(main, tabs.nextSibling);
+  }
+  main.style.display = 'none';
+  document.querySelector('.tabs').style.display = 'none';
+
+  var existing = document.getElementById('auth-screen');
+  if (existing) existing.remove();
+
+  var screen = document.createElement('div');
+  screen.id = 'auth-screen';
+  screen.className = 'content';
+  screen.style.maxWidth = '380px';
+  screen.style.margin = '40px auto';
+  screen.innerHTML = '<div class="card">'
+    + '<h3 style="margin-bottom:12px">' + (isSetup ? 'Set Panel Password' : 'Panel Login') + '</h3>'
+    + (isSetup ? '<p style="font-size:13px;color:var(--dim);margin-bottom:16px">You\'re the first person to access this panel. Set a password to secure it.</p>' : '')
+    + '<div class="form-row"><label>Password</label><input type="password" id="auth-pw" placeholder="' + (isSetup ? 'Choose a password (6+ chars)' : 'Enter password') + '"></div>'
+    + (isSetup ? '<div class="form-row"><label>Confirm</label><input type="password" id="auth-pw2" placeholder="Confirm password"></div>' : '')
+    + '<button class="btn btn-primary" onclick="doAuth(' + (isSetup ? 'true' : 'false') + ')" style="width:100%">' + (isSetup ? 'Set Password' : 'Login') + '</button>'
+    + '<div id="auth-error" style="color:var(--red);font-size:13px;margin-top:8px;display:none"></div>'
+    + '</div>';
+  document.body.insertBefore(screen, document.querySelector('.tabs').nextSibling);
+
+  // Enter key
+  screen.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') doAuth(isSetup);
+  });
+  document.getElementById('auth-pw').focus();
+}
+
+async function doAuth(isSetup) {
+  var pw = document.getElementById('auth-pw').value;
+  var errEl = document.getElementById('auth-error');
+  errEl.style.display = 'none';
+
+  if (isSetup) {
+    var pw2 = document.getElementById('auth-pw2').value;
+    if (pw !== pw2) { errEl.textContent = 'Passwords don\'t match'; errEl.style.display = 'block'; return; }
+    if (pw.length < 6) { errEl.textContent = 'Must be at least 6 characters'; errEl.style.display = 'block'; return; }
+  }
+
+  var endpoint = isSetup ? 'auth/setup' : 'auth/login';
+  var r = await fetch(API + '/' + endpoint, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pw})
+  });
+  var data = await r.json();
+  if (data.error) {
+    errEl.textContent = data.error;
+    errEl.style.display = 'block';
+    return;
+  }
+  if (data.token) {
+    setToken(data.token);
+    // If we were redirected here from another page, go back
+    var next = new URLSearchParams(window.location.search).get('next');
+    if (next) { window.location.href = next; return; }
+    document.getElementById('auth-screen').remove();
+    document.querySelector('.tabs').style.display = '';
+    document.getElementById('main-content').style.display = '';
+    initPanel();
+  }
+}
+
+async function checkAuthAndInit() {
+  try {
+    // Quick auth check — system endpoint requires auth
+    var r = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    var data = await r.json();
+    if (data.needsSetup) {
+      showAuthScreen(true);
+      return;
+    }
+    // Has password — check if we have a valid token
+    var t = getToken();
+    if (!t) {
+      showAuthScreen(false);
+      return;
+    }
+    // Validate token by calling a real endpoint
+    try { await api('system'); initPanel(); }
+    catch (e) { /* showAuthScreen already called by api() */ }
+  } catch (e) {
+    showAuthScreen(false);
+  }
+}
+
+function initPanel() {
+  detectTools();
+  loadApps();
+}
+
+// Node detection + suggestions
+async function detectTools() {
+  var d = await api('system');
+  hasNode = d.hasNode;
+  hasComposer = d.hasComposer;
+  document.querySelectorAll('[id=btn-npm],[id=btn-bundle]').forEach(function(el) {
+    el.classList.toggle('disabled', !hasNode);
+  });
+  renderSuggestions(d);
+  return d;
+}
+
+function renderSuggestions(sys) {
+  var el = document.getElementById('suggestions');
+  if (!el) return;
+  var html = '';
+  var isIOS = /iPhone|iPad/.test(navigator.userAgent);
+  var isAndroid = /Android/.test(navigator.userAgent);
+  var isMobile = isIOS || isAndroid;
+
+  if (isMobile) {
+    html += '<div class="suggest suggest-hotspot" onclick="showHotspotTip()">'
+      + '<div class="suggest-icon">' + String.fromCodePoint(0x1F4E1) + '</div><div class="suggest-body">'
+      + '<div class="suggest-title">Share with nearby people</div>'
+      + '<div class="suggest-desc">Create a Personal Hotspot so others can connect</div>'
+      + '</div><div class="suggest-action">How &rarr;</div></div>';
+  }
+  if (isIOS) {
+    html += '<a href="https://apps.apple.com/us/app/groups/id407855546" target="_blank" style="text-decoration:none">'
+      + '<div class="suggest suggest-app"><div class="suggest-icon">' + String.fromCodePoint(0x1F465) + '</div><div class="suggest-body">'
+      + '<div class="suggest-title">Get the Groups app</div>'
+      + '<div class="suggest-desc">Community app with mesh networking</div>'
+      + '</div><div class="suggest-action">App Store &rarr;</div></div></a>';
+  } else if (isAndroid) {
+    html += '<div class="suggest suggest-app" style="opacity:.6;cursor:default">'
+      + '<div class="suggest-icon">' + String.fromCodePoint(0x1F465) + '</div><div class="suggest-body">'
+      + '<div class="suggest-title">Groups for Android</div>'
+      + '<div class="suggest-desc">Coming soon</div></div></div>';
+  }
+  if (!sys.hasNode) {
+    html += '<div class="suggest suggest-warn" onclick="showNodeDialog()">'
+      + '<div class="suggest-icon">' + String.fromCodePoint(0x26A0) + '</div><div class="suggest-body">'
+      + '<div class="suggest-title">Node.js not installed</div>'
+      + '<div class="suggest-desc">Optional &mdash; needed for npm and JS/CSS bundling</div>'
+      + '</div><div class="suggest-action">Install &rarr;</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function showHotspotTip() {
+  var isIOS = /iPhone|iPad/.test(navigator.userAgent);
+  var steps = isIOS
+    ? 'Open <b>Settings &rarr; Personal Hotspot</b> and turn it on.'
+    : 'Open <b>Settings &rarr; Hotspot & tethering</b> and enable WiFi hotspot.';
+  var overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = '<div class="dialog"><h3>Share via Hotspot</h3>'
+    + '<p>' + steps + ' Others connect to your hotspot, then scan the QR code to access your server.</p>'
+    + '<p style="color:var(--dim);font-size:13px">Once someone connects, their device remembers it. Next time they auto-reconnect.</p>'
+    + '<div class="btn-row"><button class="btn btn-ghost" onclick="this.closest(\'.dialog-overlay\').remove()">Got it</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+function requireNode(callback) {
+  if (hasNode) return callback();
+  showNodeDialog();
+}
+
+function showNodeDialog() {
+  var overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = '<div class="dialog">'
+    + '<h3>Node.js Required</h3>'
+    + '<p>This action needs Node.js for npm package management and JS/CSS bundling. '
+    + 'Install Node.js, then refresh this page — the buttons will activate automatically.</p>'
+    + '<div class="btn-row">'
+    + '<a href="https://nodejs.org/" target="_blank" class="btn btn-primary" '
+    + 'style="text-decoration:none">Download Node.js ↗</a>'
+    + '<button class="btn btn-ghost" onclick="this.closest(\'.dialog-overlay\').remove()">Cancel</button>'
+    + '</div></div>';
+  document.body.appendChild(overlay);
+}
+
+// Tabs
+function showTab(name) {
+  document.querySelectorAll('[id^=tab-]').forEach(function(el) { el.classList.add('hidden'); });
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('active'); });
+  event.target.classList.add('active');
+  if (name==='apps') loadApps();
+  if (name==='plugins') loadPlugins();
+  if (name==='system') loadSystem();
+  if (name==='servers') loadServers();
+  if (name==='domains') loadDomains();
+  if (name==='autohost') loadAutohost();
+  if (name==='security') loadSecurity();
+  if (name==='workers') loadWorkers();
+  if (name==='logs') loadLogs('access');
+  if (name==='cron') loadCron();
+  if (name==='frameworks') loadFrameworks();
+  if (name==='scripts') loadAppSelect();
+}
+
+// Apps
+async function loadApps() {
+  var d = await api('apps');
+  var el = document.getElementById('apps-list');
+  // Show appsDir
+  document.getElementById('apps-dir-path').textContent = d.appsDir || '(not set)';
+  if (!d.apps || !d.apps.length) {
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No apps found in this directory. Click + New App to create one.</p></div>';
+    return;
+  }
+  el.innerHTML = d.apps.map(function(a) {
+    var isServing = a.serving;
+    var badges = [];
+    if (a.hasWeb) badges.push('web');
+    if (a.hasHandlers) badges.push('handlers');
+    if (a.hasClasses) badges.push('classes');
+    if (a.isQbixApp) badges.push('qbix');
+    var badgeHtml = badges.map(function(b){return '<span style="font-size:10px;background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;color:var(--dim)">'+b+'</span>'}).join(' ');
+    var statusText = isServing ? '<span style="color:var(--grn)">serving on this port</span>'
+      : (a.url ? a.url : (a.configured ? 'configured' : 'not configured'));
+    var forkLabel = a.forkPerRequest === true ? 'fork' : (a.forkPerRequest === false ? 'persistent' : 'auto');
+    var forkColor = a.forkPerRequest === true ? 'var(--yel)' : (a.forkPerRequest === false ? 'var(--grn)' : 'var(--dim)');
+    var forkHtml = '<select style="font-size:10px;padding:1px 4px;background:var(--card);color:' + forkColor + ';border:1px solid var(--brd);border-radius:3px;cursor:pointer" onchange="setForkMode(\'' + a.dirName + '\',this.value)">'
+      + '<option value="auto"' + (a.forkPerRequest === null ? ' selected' : '') + '>auto</option>'
+      + '<option value="false"' + (a.forkPerRequest === false ? ' selected' : '') + '>persistent workers</option>'
+      + '<option value="true"' + (a.forkPerRequest === true ? ' selected' : '') + '>fork per request</option>'
+      + '</select>';
+    return ''
+    + '<div class="app-row">'
+    + '<span class="dot '+(isServing?'on':(a.configured?'on':'off'))+'"></span>'
+    + '<span class="app-name">'+a.name+'</span>'
+    + '<span class="app-url">'+statusText+' '+badgeHtml+' '+forkHtml+'</span>'
+    + '<div class="btn-row">'
+    + (a.hasWeb && !isServing ? '<button class="btn btn-sm btn-primary" onclick="serveApp(\''+a.dirName+'\',true)">Serve</button>' : '')
+    + (isServing ? '<button class="btn btn-sm btn-red" onclick="serveApp(\''+a.dirName+'\',false)">Stop</button>' : '')
+    + (a.isQbixApp && a.hasScripts && !a.configured ? '<button class="btn btn-sm btn-grn" onclick="configureApp(\''+a.dirName+'\',\''+a.name+'\')">Configure</button>' : '')
+    + '<button class="btn btn-sm btn-ghost" onclick="openFolder(\''+a.dir+'\',\'folder\')">📂</button>'
+    + '<button class="btn btn-sm btn-ghost" onclick="openFolder(\''+a.dir+'\',\'vscode\')">VS</button>'
+    + '</div></div>';
+  }).join('');
+}
+
+function showCreate(){document.getElementById('create-form').classList.remove('hidden')}
+function hideCreate(){document.getElementById('create-form').classList.add('hidden')}
+
+async function setForkMode(app, value) {
+  var forkVal = value === 'true' ? true : (value === 'false' ? false : null);
+  var r = await api('apps/fork-mode', {app: app, forkPerRequest: forkVal});
+  if (r.note) {
+    var out = document.getElementById('fw-output-' + app) || null;
+    if (!out) alert(r.note);
+  }
+  loadApps();
+}
+async function createApp() {
+  var name = document.getElementById('new-name').value.trim();
+  var template = document.getElementById('new-template').value;
+  if (!name) return alert('Enter an app name');
+  var r = await api('apps/create', {name:name, template:template});
+  if (r.error) return alert(r.error);
+  hideCreate();
+  loadApps();
+}
+async function configureApp(dirName, appName) {
+  var name = prompt('App name for configuration:', appName || dirName);
+  if (!name) return;
+  var r = await api('apps/configure', {app: dirName, name: name});
+  if (r.error) alert(r.error);
+  else if (r.output) alert(r.output);
+  loadApps();
+}
+async function serveApp(name, enable) {
+  var r = await api('apps/serve', {app:name, enable:enable});
+  if (r.error) return alert(r.error);
+  loadApps();
+}
+function editAppsDir() {
+  document.getElementById('apps-dir-input').value = document.getElementById('apps-dir-path').textContent;
+  document.getElementById('apps-dir-edit').classList.remove('hidden');
+  document.getElementById('apps-dir-path').style.display = 'none';
+  document.getElementById('apps-dir-input').focus();
+}
+function cancelAppsDir() {
+  document.getElementById('apps-dir-edit').classList.add('hidden');
+  document.getElementById('apps-dir-path').style.display = '';
+}
+async function saveAppsDir() {
+  var dir = document.getElementById('apps-dir-input').value.trim();
+  var r = await api('apps/setdir', {dir: dir});
+  if (r.error) return alert(r.error);
+  cancelAppsDir();
+  loadApps();
+}
+async function openFolder(dir, editor) {
+  await api('apps/open', {dir:dir, editor:editor});
+}
+
+// Playground
+async function runPlayground() {
+  var code = document.getElementById('pg-code').value;
+  var outEl = document.getElementById('pg-output');
+  var timeEl = document.getElementById('pg-time');
+  var btn = document.getElementById('pg-run');
+  btn.disabled = true; btn.textContent = '⏳ Running...';
+  outEl.textContent = '';
+  outEl.style.color = 'var(--grn)';
+  timeEl.textContent = '';
+  try {
+    var r = await api('playground/run', {code: code});
+    outEl.textContent = r.output || '(no output)';
+    if (r.error) { outEl.textContent += '\n\n⚠ ' + r.error; outEl.style.color = 'var(--red)'; }
+    if (r.ms) timeEl.textContent = r.ms + 'ms';
+  } catch(e) {
+    outEl.textContent = 'Error: ' + e.message;
+    outEl.style.color = 'var(--red)';
+  }
+  btn.disabled = false; btn.textContent = '▶ Run';
+}
+function clearPlayground() {
+  document.getElementById('pg-output').textContent = '';
+  document.getElementById('pg-time').textContent = '';
+}
+// Ctrl+Enter to run
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && document.getElementById('tab-playground').style.display !== 'none') {
+    e.preventDefault(); runPlayground();
+  }
+});
+
+// Scripts
+async function loadAppSelect() {
+  var d = await api('apps');
+  var sel = document.getElementById('script-app');
+  sel.innerHTML = (d.apps||[]).map(function(a) {
+    return '<option value="'+a.dirName+'">'+a.name+'</option>';
+  }).join('');
+  loadScripts();
+}
+async function loadScripts() {
+  var app = document.getElementById('script-app').value;
+  if (!app) return;
+  var d = await api('scripts', {app:app});
+  var sel = document.getElementById('script-name');
+  sel.innerHTML = (d.scripts||[]).map(function(s) {
+    return '<option value="'+s.name+'">'+s.name+' ('+s.scope+')</option>';
+  }).join('');
+}
+async function runScript() {
+  var app = document.getElementById('script-app').value;
+  var script = document.getElementById('script-name').value;
+  var args = document.getElementById('script-args').value.split(/\s+/).filter(Boolean);
+  var out = document.getElementById('script-output');
+  out.classList.remove('hidden');
+  out.textContent = 'Running '+script+'...';
+  var r = await api('scripts/run', {app:app, script:script, args:args});
+  out.textContent = (r.output||'(no output)') + '\n\nExit code: '+(r.exitCode||'0');
+}
+function quickScript(name, args) {
+  var app = document.getElementById('script-app').value;
+  if (!app) return alert('Select an app first');
+  document.getElementById('script-name').value = name;
+  document.getElementById('script-args').value = args||'';
+  runScript();
+}
+
+// Plugins
+function showAddPlugin() {
+  document.getElementById('add-plugin-form').classList.remove('hidden');
+  document.getElementById('plugin-name').focus();
+}
+function hideAddPlugin() {
+  document.getElementById('add-plugin-form').classList.add('hidden');
+  document.getElementById('plugin-log').style.display = 'none';
+}
+function hidePrivateDialog() {
+  document.getElementById('plugin-private-dialog').classList.add('hidden');
+}
+async function addPlugin() {
+  var name = document.getElementById('plugin-name').value.trim();
+  if (!name) return alert('Enter a plugin name');
+  var log = document.getElementById('plugin-log');
+  log.style.display = 'block';
+  log.style.color = 'var(--dim)';
+  log.textContent = 'Cloning https://github.com/Qbix/' + name + '...\n';
+  try {
+    var r = await api('plugins/add', {name: name});
+    if (r.private) {
+      hideAddPlugin();
+      var d = document.getElementById('plugin-private-dialog');
+      document.getElementById('plugin-private-name').textContent = name;
+      var subject = encodeURIComponent('Access to ' + name + ' plugin');
+      var body = encodeURIComponent('Hi Qbix team,\n\nI would like access to the ' + name + ' plugin for my project.\n\nThanks!');
+      document.getElementById('plugin-contact-link').href = 'mailto:team@qbix.com?subject=' + subject + '&body=' + body;
+      d.classList.remove('hidden');
+    } else if (r.error) {
+      log.textContent += '\n⚠ ' + r.error;
+      log.style.color = 'var(--red)';
+    } else {
+      log.textContent += (r.output || '') + '\n✅ Installed!';
+      log.style.color = 'var(--grn)';
+      setTimeout(function() { hideAddPlugin(); loadPlugins(); }, 1500);
+    }
+  } catch(e) {
+    log.textContent += '\nError: ' + e.message;
+    log.style.color = 'var(--red)';
+  }
+}
+
+async function loadPlugins() {
+  var r = await api('qbix/plugins');
+  var info = document.getElementById('qbix-plugins-info');
+  var list = document.getElementById('qbix-plugins-list');
+  
+  var topHtml = '';
+  if (r.app) {
+    topHtml += '<div class="card" style="margin-bottom:12px"><strong>' + r.app + '</strong> v' + (r.appVersion||'?')
+      + (r.pluginsDir ? '<span style="color:var(--dim);font-size:11px;margin-left:8px">' + r.pluginsDir + '</span>' : '')
+      + (r.dbError ? '<div style="color:var(--red);font-size:12px;margin-top:4px">DB: ' + r.dbError + '</div>' : '')
+      + '</div>';
+  } else {
+    topHtml += '<div class="card" style="margin-bottom:12px;color:var(--dim)">No Qbix app detected. Point --app or --root at a Qbix app directory.</div>';
+  }
+  
+  // Download from URL
+  topHtml += '<div class="card" style="margin-bottom:12px">';
+  topHtml += '<div style="font-size:12px;margin-bottom:6px;color:var(--dim)">Download plugin from GitHub or URL</div>';
+  topHtml += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">';
+  topHtml += '<input id="qbix-dl-url" type="text" placeholder="https://github.com/Qbix/PluginName" style="flex:1;min-width:200px;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+  topHtml += '<input id="qbix-dl-name" type="text" placeholder="PluginName (optional)" style="width:140px;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+  topHtml += '<button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="downloadPlugin()">Clone</button>';
+  topHtml += '</div></div>';
+  
+  // Installer controls
+  topHtml += '<div class="card" style="margin-bottom:12px">';
+  topHtml += '<div style="font-size:12px;margin-bottom:6px;color:var(--dim)">Qbix Installer (scripts/Q/install.php)</div>';
+  topHtml += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  topHtml += '<button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="qbixInstall(\'all\')">Install All (--all)</button>';
+  topHtml += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="qbixInstall(\'plugins\')">--plugins</button>';
+  topHtml += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="qbixInstall(\'app\')">--app</button>';
+  topHtml += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="qbixInstall(\'composer\')">--composer</button>';
+  topHtml += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="qbixInstall(\'npm\')">--npm</button>';
+  topHtml += '</div>';
+  topHtml += '<pre id="qbix-install-output" style="display:none;margin-top:8px;font-size:11px;max-height:300px;overflow:auto;white-space:pre-wrap"></pre>';
+  topHtml += '</div>';
+  
+  info.innerHTML = topHtml;
+  
+  if (!r.plugins || !r.plugins.length) {
+    list.innerHTML = '<div class="card"><p style="color:var(--dim)">No plugins found.</p></div>';
+    return;
+  }
+  
+  list.innerHTML = r.plugins.map(function(p) {
+    var statusBadge = {
+      'installed': '<span style="color:var(--grn)">\u2713 installed</span>',
+      'available': '<span style="color:var(--dim)">available</span>',
+      'upgradable': '<span style="color:var(--yel)">\u2191 upgrade</span>',
+      'missing': '<span style="color:var(--red)">\u2717 missing</span>'
+    }[p.status] || p.status;
+    
+    var schemaBadge = '';
+    if (p.schemaVersion) {
+      schemaBadge = p.schemaStatus === 'current'
+        ? ' <span style="color:var(--grn);font-size:11px">schema ' + p.schemaVersion + '</span>'
+        : ' <span style="color:var(--yel);font-size:11px">schema ' + p.schemaVersion + ' \u2191</span>';
+      if (p.db) schemaBadge += ' <span style="color:var(--dim);font-size:10px">(' + p.db + ')</span>';
+    }
+    
+    var versions = '';
+    if (p.availableVersion) versions += '<span style="font-size:11px;color:var(--dim)">v' + p.availableVersion + '</span> ';
+    if (p.installedVersion && p.installedVersion !== p.availableVersion) versions += '<span style="font-size:11px;color:var(--dim)">installed: ' + p.installedVersion + '</span> ';
+    
+    // Package manager badges
+    var pkgBadges = '';
+    if (p.hasPackageJson) pkgBadges += ' <span style="font-size:9px;padding:1px 4px;border-radius:2px;background:#cb3837;color:#fff" title="Has package.json">npm</span>';
+    if (p.hasComposerJson) pkgBadges += ' <span style="font-size:9px;padding:1px 4px;border-radius:2px;background:#885630;color:#fff" title="Has composer.json">composer</span>';
+    if (p.hasNodeModules) pkgBadges += ' <span style="font-size:9px;color:var(--grn)" title="node_modules exists">\u2713npm</span>';
+    if (p.hasVendor) pkgBadges += ' <span style="font-size:9px;color:var(--grn)" title="vendor exists">\u2713vendor</span>';
+    
+    var requires = '';
+    if (p.requires && Object.keys(p.requires).length) {
+      requires = ' <span style="font-size:10px;color:var(--dim)">needs ' + Object.keys(p.requires).join(', ') + '</span>';
+    }
+    
+    var extra = '';
+    if (p.extra && Object.keys(p.extra).length) {
+      extra = '<details style="margin-top:4px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">extra</summary><pre style="font-size:10px;margin-top:4px;max-height:80px;overflow:auto">' + JSON.stringify(p.extra, null, 2) + '</pre></details>';
+    }
+    
+    // Action buttons
+    var bs = 'font-size:10px;padding:2px 7px;margin-left:3px';
+    var btns = '';
+    if (p.hasDir) {
+      btns += '<button class="btn btn-ghost" style="' + bs + '" onclick="viewPluginSchema(\'' + p.name + '\')">Scripts</button>';
+      if (p.status === 'available' || p.status === 'upgradable') {
+        btns += '<button class="btn btn-primary" style="' + bs + '" onclick="qbixInstall(\'plugin-full\',\'' + p.name + '\')">' + (p.status === 'upgradable' ? 'Upgrade' : 'Install') + '</button>';
+      }
+      if (p.hasPackageJson && !p.hasNodeModules) {
+        btns += '<button class="btn btn-ghost" style="' + bs + '" onclick="qbixNpm(\'install\',\'' + p.name + '\')">npm install</button>';
+      }
+      if (p.hasPackageJson && p.hasNodeModules) {
+        btns += '<button class="btn btn-ghost" style="' + bs + '" onclick="qbixNpm(\'update\',\'' + p.name + '\')">npm update</button>';
+      }
+    }
+    
+    return '<div class="card" style="margin-bottom:4px;padding:8px 12px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">'
+      + '<div><strong>' + p.name + '</strong>'
+      + (p.declared ? ' <span style="font-size:9px;background:var(--dim);color:var(--bg);padding:1px 4px;border-radius:2px">declared</span>' : '')
+      + ' ' + statusBadge + schemaBadge + pkgBadges + ' ' + versions + requires + '</div>'
+      + '<div>' + btns + '</div>'
+      + '</div>'
+      + extra
+      + '<pre id="plugin-scripts-' + p.name + '" style="display:none;margin-top:4px;font-size:10px;max-height:120px;overflow:auto"></pre>'
+      + '</div>';
+  }).join('');
+}
+
+async function downloadPlugin() {
+  var url = document.getElementById('qbix-dl-url').value.trim();
+  var name = document.getElementById('qbix-dl-name').value.trim();
+  if (!url) { alert('Enter a URL'); return; }
+  var out = document.getElementById('qbix-install-output');
+  out.style.display = 'block';
+  out.textContent = 'Downloading ' + url + '...';
+  var r = await api('frameworks/pkg-download', {framework: 'qbix', source: url, target: name});
+  out.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  if (!r.error) setTimeout(function(){ loadPlugins(); }, 500);
+}
+
+async function qbixInstall(action, plugin) {
+  var out = document.getElementById('qbix-install-output');
+  out.style.display = 'block';
+  out.textContent = 'Running installer (' + action + (plugin ? ' ' + plugin : '') + ')...';
+  var r = await api('qbix/installer', {action: action, plugin: plugin || ''});
+  out.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  if (!r.error) setTimeout(function(){ loadPlugins(); }, 500);
+}
+
+async function qbixNpm(action, target) {
+  var out = document.getElementById('qbix-install-output');
+  out.style.display = 'block';
+  out.textContent = 'Running npm ' + action + ' for ' + target + '...';
+  var r = await api('qbix/npm', {action: action, target: target});
+  out.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  if (!r.error) setTimeout(function(){ loadPlugins(); }, 500);
+}
+
+async function installQbixPlugin(name) {
+  qbixInstall('plugin-full', name);
+}
+
+async function viewPluginSchema(name) {
+  var el = document.getElementById('plugin-scripts-' + name);
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.textContent = 'Loading...';
+  var r = await api('qbix/plugins/schema', {plugin: name});
+  if (r.scripts && r.scripts.length) {
+    el.textContent = 'Schema version: ' + (r.schemaVersion || 'none') + '\n\nInstall scripts:\n' + r.scripts.join('\n');
+  } else {
+    el.textContent = 'No install scripts found for ' + name;
+  }
+}
+
+// System
+// Servers
+function showAddServer() { document.getElementById('add-server-form').classList.remove('hidden'); document.getElementById('srv-name').focus(); }
+function hideAddServer() { document.getElementById('add-server-form').classList.add('hidden'); }
+async function saveServer() {
+  var s = { name: document.getElementById('srv-name').value.trim(), host: document.getElementById('srv-host').value.trim(),
+    user: document.getElementById('srv-user').value.trim(), path: document.getElementById('srv-path').value.trim(),
+    key: document.getElementById('srv-key').value.trim() };
+  if (!s.name || !s.host) return alert('Name and host required');
+  var r = await api('servers/add', s);
+  if (r.error) return alert(r.error);
+  hideAddServer(); loadServers();
+}
+async function deployTo(name) {
+  var btn = event.target; btn.disabled = true; btn.textContent = '⏳ Deploying...';
+  var r = await api('servers/deploy', {target: name});
+  btn.disabled = false; btn.textContent = '⬆ Deploy';
+  if (r.error) alert(r.error);
+  else alert('✨ Deployed ' + (r.files||0) + ' files to ' + name);
+}
+async function removeServer(name) {
+  if (!confirm('Remove server "' + name + '"?')) return;
+  await api('servers/remove', {name: name});
+  loadServers();
+}
+async function loadServers() {
+  var d = await api('servers');
+  var el = document.getElementById('servers-list');
+  if (!d.servers || !d.servers.length) {
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No remote servers configured. Add one to deploy your app.</p></div>';
+    return;
+  }
+  el.innerHTML = d.servers.map(function(s) { return ''
+    + '<div class="app-row">'
+    + '<span class="dot on"></span>'
+    + '<span class="app-name">' + s.name + '</span>'
+    + '<span class="app-url">' + s.user + '@' + s.host + ':' + s.path + '</span>'
+    + '<div class="btn-row">'
+    + '<button class="btn btn-sm btn-primary" onclick="deployTo(\'' + s.name + '\')">⬆ Deploy</button>'
+    + '<button class="btn btn-sm btn-red" onclick="removeServer(\'' + s.name + '\')">✕</button>'
+    + '</div></div>';
+  }).join('');
+}
+
+async function loadSystem() {
+  var d = await detectTools();
+  var el = document.getElementById('system-info');
+  
+  // Key extensions to highlight
+  var keyExts = ['pdo_sqlite','pdo_mysql','pdo_pgsql','openssl','curl','mbstring','gd','zip','sockets','pcntl','posix','readline'];
+  var extStatus = keyExts.map(function(e) {
+    var has = d.extensions && d.extensions.indexOf(e) !== -1;
+    return (has ? '<span style="color:var(--grn)">✅</span>' : '<span style="color:var(--red)">❌</span>') + ' ' + e;
+  }).join('&nbsp;&nbsp;');
+  var extCount = d.extensions ? d.extensions.length : 0;
+  
+  var items = [
+    ['PHP', d.php + ' <span style="font-size:11px;color:var(--dim)">' + extCount + ' extensions</span>'],
+    ['OS', d.os + ' ' + d.arch],
+    ['Memory Limit', d.memoryLimit],
+    ['pcntl', d.hasPcntl ? '✅' : '❌'],
+    ['APCu', d.hasApcu ? '✅' : '❌'],
+    ['Composer', d.hasComposer ? '✅ installed' : '❌ not found'],
+    ['Node.js', d.hasNode ? '✅ installed' : '<span style="color:var(--red)">❌ not found</span>'],
+    ['npm', d.hasNpm ? '✅ installed' : '❌ requires Node.js'],
+    ['Git', d.hasGit ? '✅ installed' : '❌ not found'],
+  ];
+  if (d.platform) items.push(['Platform', d.platform]);
+  if (d.appDir) items.push(['App Dir', d.appDir]);
+  if (d.diskFree) items.push(['Disk Free', d.diskFree]);
+  if (d.serverVersion) items.push(['Server', d.serverVersion]);
+  
+  el.innerHTML = items.map(function(i) {
+    return '<div class="card"><div class="stat-lbl">'+i[0]+'</div><div class="stat-val" style="font-size:16px">'+i[1]+'</div></div>';
+  }).join('');
+  
+  // Extensions detail
+  el.innerHTML += '<div class="card" style="grid-column:1/-1"><div class="stat-lbl">Key Extensions</div><div style="font-size:12px;line-height:2;margin-top:4px">' + extStatus + '</div>'
+    + '<details style="margin-top:8px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">All ' + extCount + ' extensions</summary>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:4px;column-count:3;column-gap:12px">' + (d.extensions||[]).sort().join('<br>') + '</div></details></div>';
+
+  // Platform install section
+  var pEl = document.getElementById('platform-status');
+  if (d.platform) {
+    pEl.innerHTML = '<p style="color:var(--grn)">✅ Platform installed at <code style="font-size:12px">'+d.platform+'</code></p>';
+  } else {
+    pEl.innerHTML = ''
+      + '<p style="color:var(--dim);margin-bottom:12px">Qbix Platform adds user accounts, real-time streams, assets, and 20+ plugins to your app.</p>'
+      + '<div class="form-row"><label>Install to</label>'
+      + '<input id="platform-dir" value="'+(d.appDir ? d.appDir.replace(/[/\\][^/\\]*$/,'') : '')+'/platform" '
+      + 'style="font-size:12px" placeholder="/path/to/install/platform"></div>'
+      + '<div class="btn-row">'
+      + '<button class="btn btn-primary" onclick="installPlatform()" id="platform-btn">Clone from GitHub</button>'
+      + '</div>'
+      + '<pre id="platform-log" style="display:none;margin-top:12px;font-size:11px;color:var(--dim);max-height:200px;overflow:auto;background:rgba(0,0,0,.2);padding:8px;border-radius:4px"></pre>';
+  }
+}
+
+async function installPlatform() {
+  var dir = document.getElementById('platform-dir').value.trim();
+  if (!dir) return alert('Enter a directory path');
+  var btn = document.getElementById('platform-btn');
+  var log = document.getElementById('platform-log');
+  btn.disabled = true; btn.textContent = '⏳ Cloning...';
+  log.style.display = 'block'; log.textContent = 'git clone https://github.com/Qbix/Platform.git ' + dir + '\n';
+  try {
+    var r = await api('platform/install', {dir: dir});
+    if (r.error) { log.textContent += '\n⚠ ' + r.error; log.style.color = 'var(--red)'; }
+    else { log.textContent += r.output + '\n✅ Done! Refresh to see plugins.'; log.style.color = 'var(--grn)'; }
+  } catch(e) { log.textContent += '\nError: ' + e.message; log.style.color = 'var(--red)'; }
+  btn.disabled = false; btn.textContent = 'Clone from GitHub';
+}
+
+// ── Domains ─────────────────────────────────────────
+async function loadDomains() {
+  var r = await api('domains');
+  var el = document.getElementById('domains-list');
+  if (!r.domains || !r.domains.length) {
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No domains configured. Add one below, or set <code>Q.webserver.domains</code> in config.</p></div>';
+  } else {
+    el.innerHTML = r.domains.map(function(d) {
+      var badge = d.certStatus === 'valid' ? '<span style="color:var(--grn)">\u2713 valid</span>'
+        : d.certStatus === 'expiring' ? '<span style="color:var(--yel)">\u26a0 ' + d.certDaysLeft + ' days</span>'
+        : d.certStatus === 'expired' ? '<span style="color:var(--red)">\u2717 expired</span>'
+        : '<span style="color:var(--dim)">no cert</span>';
+      var btns = '';
+      if (d.certStatus !== 'valid') btns += ' <button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="provisionCert(\'' + d.domain + '\')">Provision</button>';
+      else btns += ' <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="provisionCert(\'' + d.domain + '\')">Renew</button>';
+      btns += ' <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px;color:var(--red)" onclick="removeDomain(\'' + d.domain + '\')">Remove</button>';
+      return '<div class="card" style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center"><div><strong>' + d.domain + '</strong></div><div>' + badge + btns + '</div></div>'
+        + (d.root ? '<div style="font-size:11px;color:var(--dim);margin-top:4px">Root: ' + d.root + '</div>' : '')
+        + (d.certExpires ? '<div style="font-size:11px;color:var(--dim);margin-top:2px">Expires: ' + d.certExpires + '</div>' : '')
+        + '</div>';
+    }).join('');
+  }
+  loadHosts();
+}
+async function loadHosts() {
+  var r = await api('domains/hosts');
+  var el = document.getElementById('hosts-info');
+  if (!el) return;
+  if (r.error) { el.innerHTML = '<div class="card"><p style="color:var(--dim)">' + r.error + '</p></div>'; return; }
+  var html = '<h3 style="font-size:14px;margin:16px 0 8px">System Hosts <span style="font-size:11px;color:var(--dim)">(' + r.path + ')</span></h3>';
+  if (r.domains && r.domains.length) {
+    html += r.domains.map(function(d) {
+      if (d.inHosts) {
+        return '<div class="card" style="margin-bottom:6px;padding:8px 12px"><span style="color:var(--grn)">\u2713</span> <strong>' + d.domain + '</strong> \u2192 ' + d.hostsIp + '</div>';
+      }
+      var isLocalhost = d.domain.endsWith('.localhost');
+      if (isLocalhost) {
+        return '<div class="card" style="margin-bottom:6px;padding:8px 12px"><span style="color:var(--grn)">\u2713</span> <strong>' + d.domain + '</strong> <span style="color:var(--dim)">(resolves via .localhost)</span></div>';
+      }
+      return '<div class="card" style="margin-bottom:6px;padding:8px 12px"><span style="color:var(--yel)">\u26a0</span> <strong>' + d.domain + '</strong> <span style="color:var(--dim)">not in hosts</span>'
+        + ' <button class="btn btn-primary" style="font-size:11px;padding:3px 8px;margin-left:8px" onclick="addHostsEntry(\'' + d.domain + '\')">Add to hosts</button></div>';
+    }).join('');
+  } else {
+    html += '<div class="card"><p style="color:var(--dim)">No domains configured.</p></div>';
+  }
+  el.innerHTML = html;
+}
+async function addHostsEntry(hostname, ip) {
+  ip = ip || '127.0.0.1';
+  var r = await api('domains/hosts/add', {hostname: hostname, ip: ip});
+  if (r.already) { alert(hostname + ' is already in your hosts file.'); return; }
+  if (r.conflict) { alert(hostname + ' is mapped to ' + r.existingIp + ' (not ' + r.requestedIp + '). Edit your hosts file manually to change it.'); return; }
+  if (r.added) { alert('Added ' + hostname + ' \u2192 ' + ip); loadHosts(); return; }
+  if (r.needsElevation) {
+    var cmd = r.commands.gui || r.commands.command;
+    if (confirm(hostname + ' needs admin access to add to ' + r.entry + '.\n\nRun this command in your terminal:\n\n' + r.commands.command + '\n\nCopy to clipboard?')) {
+      try { navigator.clipboard.writeText(r.commands.command); } catch(e) {}
+    }
+  }
+}
+async function addDomain() {
+  var name = document.getElementById('dom-name').value.trim();
+  if (!name) return alert('Enter a domain');
+  await api('domains/add', {domain:name, root:document.getElementById('dom-root').value.trim()||null, app:document.getElementById('dom-app').value.trim()||null, tls:document.getElementById('dom-tls').value});
+  document.getElementById('dom-name').value=''; loadDomains();
+}
+async function removeDomain(n) { if(!confirm('Remove '+n+'?'))return; await api('domains/remove',{domain:n}); loadDomains(); }
+async function provisionCert(n) { alert('Provisioning '+n+'...'); var r=await api('domains/provision',{domain:n}); alert(r.success?'Done!':r.error||'Failed'); loadDomains(); }
+
+// ── Security & Attestation ──────────────────────────
+async function loadSecurity() {
+  var el = document.getElementById('sec-attestation');
+  try {
+    var r = await api('attestation');
+    var html = '<div class="card"><h3 style="font-size:14px;margin-bottom:8px">Binary Attestation</h3>';
+    html += '<div style="font-size:12px;margin-bottom:8px"><strong>Hash:</strong> <code style="font-size:11px">' + (r.binary_hash||'unknown') + '</code></div>';
+    html += '<div style="font-size:12px;margin-bottom:8px"><strong>Size:</strong> ' + ((r.binary_size||0)/1024).toFixed(0) + ' KB</div>';
+    if (r.verification) {
+      var v = r.verification;
+      var color = v.valid ? 'var(--grn)' : 'var(--red)';
+      html += '<div style="font-size:12px;margin-bottom:8px"><strong>Status:</strong> <span style="color:'+color+'">' + v.label + ' — ' + (v.valid?'VALID':'FAILED') + '</span></div>';
+      if (v.hash_matches === false) {
+        html += '<div style="font-size:12px;color:var(--red)">⚠ Binary was modified since signing</div>';
+      }
+    }
+    if (r.signatures && r.signatures.length) {
+      html += '<h4 style="font-size:13px;margin:12px 0 6px">Signatures</h4>';
+      r.signatures.forEach(function(s) {
+        html += '<div style="font-size:12px;padding:4px 0;border-top:1px solid var(--border)">';
+        html += '<strong>' + s.signer + '</strong> <span style="color:var(--dim)">(key:' + (s.key_id||'?').slice(0,8) + ')</span>';
+        if (s.signed_at) html += ' <span style="color:var(--dim)">' + s.signed_at.slice(0,10) + '</span>';
+        html += '</div>';
+      });
+    } else {
+      html += '<div style="font-size:12px;color:var(--dim)">No signatures. Use the form below or the CLI to sign.</div>';
+    }
+    if (r.rekor && r.rekor.uuid) {
+      html += '<div style="font-size:12px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)"><strong>Transparency log:</strong> <a href="' + (r.rekor.url||'#') + '" target="_blank" style="color:#4a9eff">' + r.rekor.uuid.slice(0,24) + '...</a> <span style="color:var(--grn)">✓ on Rekor</span></div>';
+    } else if (r.signed) {
+      html += '<div style="font-size:12px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)"><strong>Transparency log:</strong> <span style="color:var(--dim)">not published</span> <button class="btn btn-ghost" style="font-size:10px;padding:2px 8px;margin-left:6px" onclick="publishRekor()">Publish to Sigstore Rekor</button></div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">Attestation data unavailable.</p></div>';
+  }
+  // Trust status
+  var trustEl = document.getElementById('sec-trust');
+  try {
+    var t = await api('trust');
+    if (t.enabled) {
+      var thtml = '<div class="card"><h3 style="font-size:14px;margin-bottom:8px">Code Trust (File Manifests)</h3>';
+      thtml += '<div style="font-size:12px">Trusted keys: ' + (t.keys||[]).length + '</div>';
+      if (t.verified && t.verified.length) {
+        thtml += '<div style="font-size:12px;margin-top:6px">';
+        t.verified.forEach(function(v) {
+          var icon = v.ok ? '<span style="color:var(--grn)">✓</span>' : '<span style="color:var(--red)">✗</span>';
+          thtml += '<div>' + icon + ' ' + v.dir + (v.errors && v.errors.length ? ' (' + v.errors.length + ' errors)' : '') + '</div>';
+        });
+        thtml += '</div>';
+      }
+      thtml += '</div>';
+      trustEl.innerHTML = thtml;
+    } else {
+      trustEl.innerHTML = '<div class="card"><p style="font-size:12px;color:var(--dim)">Code trust not enabled. Set <code>Q.trust.enabled: true</code> and add trusted keys.</p></div>';
+    }
+  } catch(e) {}
+}
+async function signBinary() {
+  var key = document.getElementById('sec-key').value.trim();
+  var signer = document.getElementById('sec-signer').value.trim() || 'panel-user';
+  if (!key) return alert('Paste a PEM private key');
+  var r = await api('attestation/sign', {key: key, signer: signer});
+  if (r.error) { alert(r.error); return; }
+  alert('Signed! ' + r.signers + ' total signature(s)');
+  document.getElementById('sec-key').value = '';
+  loadSecurity();
+}
+async function verifyBinary() {
+  var m = parseInt(document.getElementById('sec-m').value) || 1;
+  var r = await api('attestation/verify?m=' + m);
+  var el = document.getElementById('sec-verify-result');
+  var color = r.valid ? 'var(--grn)' : 'var(--red)';
+  var html = '<div style="color:'+color+';font-weight:700">' + (r.valid ? '✓ VALID' : '✗ FAILED') + ' — ' + r.label + '</div>';
+  if (r.details) {
+    r.details.forEach(function(d) {
+      var icon = d.status === 'valid' ? '✓' : '✗';
+      html += '<div style="font-size:12px">' + icon + ' ' + d.signer + ' (' + d.status + ')</div>';
+    });
+  }
+  el.innerHTML = html;
+}
+async function publishRekor() {
+  if (!confirm('Publish this binary\'s attestation to the public Sigstore Rekor transparency log?\n\nThis is permanent and publicly visible.')) return;
+  var r = await api('attestation/publish-rekor', {});
+  if (r.published) {
+    alert('Published to Rekor!\n\nUUID: ' + r.uuid + '\n\nVerify at: ' + r.url);
+    loadSecurity();
+  } else {
+    alert(r.error || 'Failed to publish');
+  }
+}
+
+// ── Autohost ────────────────────────────────────────
+async function loadAutohost() {
+  var r = await api('autohost');
+  document.getElementById('ah-enabled').value = r.enabled ? '1' : '0';
+  document.getElementById('ah-authorize').value = r.authorize || 'open';
+  document.getElementById('ah-dns').value = r.dnsCheck !== false ? '1' : '0';
+  document.getElementById('ah-allowlist-row').style.display = r.authorize === 'allowlist' ? '' : 'none';
+  var el = document.getElementById('ah-status');
+  var prov = r.provisioning || [];
+  el.innerHTML = prov.length
+    ? '<div class="card" style="margin-bottom:12px"><h3 style="font-size:14px;margin-bottom:8px">Currently Provisioning</h3>' + prov.map(function(h){return '<div>\u23f3 '+h+'</div>';}).join('') + '</div>'
+    : '';
+  var logEl = document.getElementById('ah-log');
+  var lines = r.recentLog || [];
+  if (lines.length) {
+    logEl.innerHTML = '<div class="card"><h3 style="font-size:14px;margin-bottom:8px">Recent Activity</h3>'
+      + '<pre style="font-size:11px;max-height:200px;overflow-y:auto;margin:0;white-space:pre-wrap">' + lines.join('\n') + '</pre></div>';
+  } else {
+    logEl.innerHTML = '<div class="card"><p style="color:var(--dim)">No autohost activity yet.</p></div>';
+  }
+  document.getElementById('ah-authorize').onchange = function() {
+    document.getElementById('ah-allowlist-row').style.display = this.value === 'allowlist' ? '' : 'none';
+  };
+}
+async function saveAutohost() {
+  var data = {
+    enabled: document.getElementById('ah-enabled').value === '1',
+    authorize: document.getElementById('ah-authorize').value,
+    dnsCheck: document.getElementById('ah-dns').value === '1',
+    acmeEmail: document.getElementById('ah-email').value.trim()
+  };
+  if (data.authorize === 'allowlist') {
+    data.allowlist = document.getElementById('ah-allowlist').value;
+  }
+  await api('autohost/toggle', data);
+  loadAutohost();
+}
+
+// ── Workers ─────────────────────────────────────────
+async function loadWorkers() {
+  var r = await api('workers');
+  var el = document.getElementById('workers-info');
+  if (r.mode==='in-process') { el.innerHTML='<div class="card"><p>In-process mode (no pool).</p></div>'; return; }
+  function s(l,v){return '<div><div style="font-size:18px;font-weight:700">'+v+'</div><div style="font-size:11px;color:var(--dim)">'+l+'</div></div>';}
+  function fmt(b){return b>1048576?(b/1048576).toFixed(1)+' MB':(b/1024).toFixed(0)+' KB';}
+  function fmtT(s){var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?h+'h '+m+'m':m+'m';}
+  el.innerHTML='<div class="card"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px">'
+    +s('Workers',r.workers)+s('Active',r.activeWorkers||0)+s('Requests',(r.totalRequests||0).toLocaleString())
+    +s('Memory',fmt(r.memoryUsage||0))+s('Peak',fmt(r.memoryPeak||0))+s('Uptime',fmtT(r.uptime||0))
+    +'</div></div>';
+  document.getElementById('worker-count').value=r.workers;
+  // Load worker detail
+  var d = await api('workers/detail');
+  var detailEl = document.getElementById('worker-detail');
+  if (detailEl && d.workers) {
+    var tbl = '<table style="width:100%;font-size:12px;border-collapse:collapse"><tr style="color:var(--dim)">'
+      + '<th style="text-align:left;padding:4px">PID</th><th>Status</th><th>Requests</th><th></th></tr>';
+    d.workers.forEach(function(w) {
+      var status = w.busy ? '<span style="color:var(--yel)">\u25cf busy</span>'
+        : w.recycleAfter ? '<span style="color:var(--red)">\u21bb recycling</span>'
+        : '<span style="color:var(--grn)">\u25cf idle</span>';
+      tbl += '<tr style="border-top:1px solid var(--border);padding:4px"><td style="padding:4px">' + w.pid + '</td><td style="text-align:center">' + status
+        + '</td><td style="text-align:center">' + (w.requests||0)
+        + '</td><td style="text-align:right"><button class="btn btn-ghost" style="font-size:10px;padding:2px 6px" onclick="recycleWorker(' + w.index + ')">\u21bb</button></td></tr>';
+    });
+    tbl += '</table>';
+    detailEl.innerHTML = '<div class="card" style="margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+      + '<h3 style="font-size:14px;margin:0">Worker Detail</h3>'
+      + '<button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="recycleAll()">Recycle All</button></div>'
+      + '<p style="font-size:11px;color:var(--dim);margin:0 0 8px">Mode: ' + d.mode + ' \u00b7 Max requests: ' + d.maxRequests + ' \u00b7 Queue: ' + (d.pending||0) + '</p>'
+      + tbl + '</div>';
+  }
+}
+async function resizeWorkers() {
+  var c=parseInt(document.getElementById('worker-count').value);
+  if(!c||c<1)return alert('Enter a number');
+  var r=await api('workers/resize',{workers:c});
+  alert(r.error||'Resizing to '+c); loadWorkers();
+}
+async function recycleWorker(idx) {
+  var r = await api('workers/recycle', {index: idx});
+  loadWorkers();
+}
+async function recycleAll() {
+  if (!confirm('Recycle all workers? Busy workers finish their current request first.')) return;
+  var r = await api('workers/recycle', {});
+  alert('Recycled: ' + (r.recycled ? r.recycled.immediate + ' immediate, ' + r.recycled.pending + ' pending' : 'done'));
+  loadWorkers();
+}
+
+// ── Logs ────────────────────────────────────────────
+async function loadLogs(type) {
+  type=type||'access';
+  var lines=document.getElementById('log-lines').value;
+  var r=await api('logs?type='+type+'&lines='+lines);
+  var el=document.getElementById('logs-output');
+  if(!r.exists){el.textContent='Log file not found: '+r.file;return;}
+  el.textContent=r.lines.join('\n');
+  el.scrollTop=el.scrollHeight;
+}
+
+// ── Cron ────────────────────────────────────────────
+async function loadCron() {
+  var r=await api('cron');
+  var el=document.getElementById('cron-list');
+  if(!r.tasks||!r.tasks.length){el.innerHTML='<div class="card"><p style="color:var(--dim)">No scheduled tasks configured.</p></div>';return;}
+  el.innerHTML=r.tasks.map(function(t){
+    var sched=t.every?'Every '+t.every+'s':t.times?t.times.join(', '):'manual';
+    return '<div class="card" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">'
+      +'<div><strong>'+t.name+'</strong><div style="font-size:11px;color:var(--dim)">'+t.handler+' · '+sched+'</div></div>'
+      +'<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="runCron(\''+t.name+'\')">Run Now</button></div>';
+  }).join('');
+}
+async function runCron(n){var r=await api('cron/run',{task:n});alert(r.error||'Dispatched '+n);}
+
+
+// ── Frameworks ──────────────────────────────────────
+async function loadFrameworks() {
+  var r = await api('frameworks');
+  var el = document.getElementById('fw-list');
+  if (!r.frameworks || !r.frameworks.length) {
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No known frameworks detected in the current document root.</p><p style="font-size:12px;color:var(--dim);margin-top:8px">Supported: Laravel, Symfony, WordPress, Drupal, Joomla</p></div>';
+    return;
+  }
+  el.innerHTML = r.frameworks.map(function(fw) {
+    var info = '<div class="card" style="margin-bottom:12px">';
+    info += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">';
+    info += '<h3 style="font-size:15px;margin-bottom:0">' + fw.name + '</h3>';
+    info += '<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadFwPackages(\'' + fw.framework + '\')">Packages</button>';
+    info += '</div>';
+    info += '<div style="font-size:12px;color:var(--dim);margin:6px 0">' + fw.dir + '</div>';
+    if (fw.appName) info += '<div style="font-size:12px;margin-bottom:4px">App: <strong>' + fw.appName + '</strong> (' + (fw.appEnv||'') + ')' + (fw.debug ? ' <span style="color:var(--yel)">DEBUG ON</span>' : '') + '</div>';
+    if (fw.hasCli === false) {
+      info += '<div style="color:var(--yel);font-size:12px;margin:8px 0">CLI tool not found. Install it for full management.</div>';
+    }
+    if (fw.commands && fw.commands.length) {
+      info += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">';
+      fw.commands.forEach(function(cmd) {
+        info += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="runFwCmd(\'' + fw.framework + '\',\'' + cmd.cmd.replace(/'/g,"\\'") + '\',this)">' + cmd.name + '</button>';
+      });
+      info += '</div>';
+    }
+    info += '<pre id="fw-output-' + fw.framework + '" style="display:none;margin-top:12px;max-height:300px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre>';
+    info += '<div id="fw-packages-' + fw.framework + '" style="display:none;margin-top:12px"></div>';
+    info += '</div>';
+    return info;
+  }).join('');
+}
+
+async function runFwCmd(framework, cmd, btn) {
+  var el = document.getElementById('fw-output-' + framework);
+  el.style.display = 'block';
+  el.textContent = 'Running ' + cmd + '...';
+  btn.disabled = true;
+  try {
+    var r = await api('frameworks/run', {framework: framework, cmd: cmd});
+    el.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  } catch(e) {
+    el.textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+async function loadFwPackages(framework) {
+  var el = document.getElementById('fw-packages-' + framework);
+  if (el.style.display !== 'none' && el.innerHTML && !el.dataset.reload) {
+    el.style.display = 'none';
+    return;
+  }
+  delete el.dataset.reload;
+  el.style.display = 'block';
+  el.innerHTML = '<p style="color:var(--dim);font-size:12px">Loading packages...</p>';
+  
+  var r = await api('frameworks/packages?framework=' + framework);
+  if (r.error) { el.innerHTML = '<p style="color:var(--red);font-size:12px">' + r.error + '</p>'; return; }
+  
+  var isComposer = (framework === 'laravel' || framework === 'symfony');
+  var isWP = (framework === 'wordpress');
+  var isDrupal = (framework === 'drupal');
+  
+  var html = '<div style="font-size:11px;color:var(--dim);margin-bottom:6px">' + (r.packages||[]).length + ' packages (source: ' + (r.source||'?') + ')</div>';
+  
+  // Add new package form
+  if (isComposer) {
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-add-pkg-' + framework + '" type="text" placeholder="vendor/package" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="pkgAction(\'' + framework + '\',\'require\',document.getElementById(\'fw-add-pkg-' + framework + '\').value)">composer require</button>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-dl-url-' + framework + '" type="text" placeholder="https://github.com/author/package" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="fwDownload(\'' + framework + '\')">Clone from URL</button>';
+    html += '</div>';
+  } else if (isWP) {
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-add-pkg-' + framework + '" type="text" placeholder="plugin-slug" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="pkgAction(\'' + framework + '\',\'install\',document.getElementById(\'fw-add-pkg-' + framework + '\').value)">Install Plugin</button>';
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="pkgAction(\'' + framework + '\',\'install\',\'theme:\'+document.getElementById(\'fw-add-pkg-' + framework + '\').value)">Install Theme</button>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-dl-url-' + framework + '" type="text" placeholder="https://github.com/author/plugin-name" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="fwDownload(\'' + framework + '\')">Clone from URL</button>';
+    html += '</div>';
+  } else if (isDrupal) {
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-add-pkg-' + framework + '" type="text" placeholder="module_name" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="pkgAction(\'' + framework + '\',\'install\',document.getElementById(\'fw-add-pkg-' + framework + '\').value)">Install Module</button>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">';
+    html += '<input id="fw-dl-url-' + framework + '" type="text" placeholder="https://github.com/author/module" style="flex:1;padding:5px 8px;font-size:12px;background:var(--card);border:1px solid var(--brd);color:var(--fg);border-radius:4px">';
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="fwDownload(\'' + framework + '\')">Clone from URL</button>';
+    html += '</div>';
+  }
+  
+  if (!r.packages || !r.packages.length) {
+    html += '<p style="color:var(--dim);font-size:12px">No packages found.</p>';
+    el.innerHTML = html;
+    return;
+  }
+  
+  html += '<div style="max-height:400px;overflow:auto">';
+  html += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+  html += '<tr style="background:rgba(255,255,255,.05)"><th style="text-align:left;padding:5px 8px">Name</th><th style="padding:5px 8px">Version</th>';
+  if (isWP) html += '<th style="padding:5px 8px">Status</th>';
+  html += '<th style="padding:5px 8px;text-align:right">Actions</th></tr>';
+  
+  r.packages.forEach(function(p) {
+    var name = p.title || p.name;
+    var pkgId = p.name;
+    var rowStyle = 'border-bottom:1px solid rgba(255,255,255,.06)';
+    html += '<tr style="' + rowStyle + '">';
+    html += '<td style="padding:4px 8px">' + name;
+    if (p.dev) html += ' <span style="color:var(--yel);font-size:10px">dev</span>';
+    if (p.constraint) html += ' <span style="color:var(--dim);font-size:10px">' + p.constraint + '</span>';
+    html += '</td>';
+    html += '<td style="padding:4px 8px;text-align:center">' + (p.version||'-');
+    if (p.update && p.update !== 'none') html += ' <span style="color:var(--yel)">→ ' + p.update + '</span>';
+    html += '</td>';
+    
+    // Status column for WP
+    if (isWP) {
+      var sBadge = p.status === 'active' ? '<span style="color:var(--grn)">active</span>' : '<span style="color:var(--dim)">' + (p.status||'?') + '</span>';
+      html += '<td style="padding:4px 8px;text-align:center">' + sBadge + '</td>';
+    }
+    
+    // Action buttons
+    html += '<td style="padding:3px 8px;text-align:right;white-space:nowrap">';
+    var bs = 'font-size:10px;padding:2px 7px;margin-left:3px';
+    
+    if (isWP) {
+      var wpPkg = (p.type === 'theme' ? 'theme:' : '') + pkgId;
+      if (p.status === 'active') {
+        html += '<button class="btn btn-ghost" style="' + bs + '" onclick="pkgAction(\'' + framework + '\',\'deactivate\',\'' + wpPkg + '\')">Deactivate</button>';
+      } else if (p.status === 'inactive') {
+        html += '<button class="btn btn-ghost" style="' + bs + '" onclick="pkgAction(\'' + framework + '\',\'activate\',\'' + wpPkg + '\')">Activate</button>';
+      }
+      if (p.update && p.update !== 'none') {
+        html += '<button class="btn btn-primary" style="' + bs + '" onclick="pkgAction(\'' + framework + '\',\'update\',\'' + wpPkg + '\')">Update</button>';
+      }
+      html += '<button class="btn btn-ghost" style="' + bs + ';color:var(--red)" onclick="if(confirm(\'Delete ' + pkgId + '?\'))pkgAction(\'' + framework + '\',\'delete\',\'' + wpPkg + '\')">Delete</button>';
+    } else if (isComposer) {
+      html += '<button class="btn btn-ghost" style="' + bs + '" onclick="pkgAction(\'' + framework + '\',\'update\',\'' + pkgId + '\')">Update</button>';
+      if (pkgId.indexOf('/') !== -1) {
+        html += '<button class="btn btn-ghost" style="' + bs + ';color:var(--red)" onclick="if(confirm(\'Remove ' + pkgId + '?\'))pkgAction(\'' + framework + '\',\'remove\',\'' + pkgId + '\')">Remove</button>';
+      }
+    } else if (isDrupal) {
+      if (p.status === 'Enabled' || p.status === 'enabled') {
+        html += '<button class="btn btn-ghost" style="' + bs + ';color:var(--red)" onclick="if(confirm(\'Uninstall ' + pkgId + '?\'))pkgAction(\'' + framework + '\',\'uninstall\',\'' + pkgId + '\')">Uninstall</button>';
+      } else {
+        html += '<button class="btn btn-ghost" style="' + bs + '" onclick="pkgAction(\'' + framework + '\',\'enable\',\'' + pkgId + '\')">Enable</button>';
+      }
+    }
+    html += '</td></tr>';
+  });
+  html += '</table></div>';
+  
+  // Global actions
+  html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">';
+  if (isComposer) {
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="pkgAction(\'' + framework + '\',\'update\',\'--all\')">Update All</button>';
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="composerAction(\'dump-autoload\',\'\',\'' + framework + '\')">Dump Autoload</button>';
+  }
+  if (isWP) {
+    html += '<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="runFwCmd(\'' + framework + '\',\'plugin update --all\',this)">Update All Plugins</button>';
+  }
+  html += '</div>';
+  html += '<pre id="fw-pkg-output-' + framework + '" style="display:none;margin-top:8px;font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap"></pre>';
+  
+  el.innerHTML = html;
+}
+
+async function pkgAction(framework, action, pkg) {
+  if (!pkg) { alert('Enter a package name'); return; }
+  var isUpdateAll = (pkg === '--all');
+  
+  var output = document.getElementById('fw-pkg-output-' + framework);
+  if (!output) output = document.getElementById('fw-output-' + framework);
+  output.style.display = 'block';
+  output.textContent = (isUpdateAll ? 'Updating all packages' : action + ' ' + pkg) + '...';
+  
+  var r;
+  if (isUpdateAll) {
+    r = await api('frameworks/composer', {action: 'update', package: ''});
+  } else {
+    r = await api('frameworks/pkg-action', {framework: framework, action: action, package: pkg});
+  }
+  output.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  
+  // Reload package list
+  var el = document.getElementById('fw-packages-' + framework);
+  if (el) { el.dataset.reload = '1'; setTimeout(function(){ loadFwPackages(framework); }, 500); }
+}
+
+async function composerAction(action, pkg, framework) {
+  var output = document.getElementById('fw-pkg-output-' + framework) || document.getElementById('fw-output-' + framework);
+  output.style.display = 'block';
+  output.textContent = 'Running composer ' + action + (pkg ? ' ' + pkg : '') + '...';
+  var r = await api('frameworks/composer', {action: action, package: pkg || ''});
+  output.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+}
+
+async function fwDownload(framework) {
+  var urlEl = document.getElementById('fw-dl-url-' + framework);
+  if (!urlEl || !urlEl.value.trim()) { alert('Enter a URL'); return; }
+  var out = document.getElementById('fw-pkg-output-' + framework) || document.getElementById('fw-output-' + framework);
+  out.style.display = 'block';
+  out.textContent = 'Cloning ' + urlEl.value.trim() + '...';
+  var r = await api('frameworks/pkg-download', {framework: framework, source: urlEl.value.trim()});
+  out.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+  if (!r.error) {
+    var el = document.getElementById('fw-packages-' + framework);
+    if (el) { el.dataset.reload = '1'; setTimeout(function(){ loadFwPackages(framework); }, 500); }
+  }
+}
+
+// Init
+checkAuthAndInit();

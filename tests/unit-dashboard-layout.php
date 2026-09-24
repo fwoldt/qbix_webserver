@@ -28,7 +28,10 @@ function check($what, $got, $want)
 		var_export($got, true), var_export($want, true));
 }
 
+// The dashboard's PHP and its page, which is a design on disk now
+// (designs/default/dashboard: page.html, style.css, script.js).
 $dash = file_get_contents(__DIR__ . '/../src/Q/WebServer/Dashboard.php');
+foreach (array('page.html', 'style.css', 'script.js') as $__f) $dash .= "\n" . file_get_contents(__DIR__ . '/../designs/default/dashboard/' . $__f);
 
 // ── Footer wording ──────────────────────────────────────────────
 
@@ -46,12 +49,12 @@ check('...and the lower-case form is gone',
 // "Documentation · Powered by ..." sits on its own line below both.
 
 check('the brand line carries only the brand and version',
-	strpos($dash, '<div class="foot">$brandName <span style="opacity:.6">$verLabel</span></div>') !== false, true);
+	strpos($dash, '<div class="foot">{{brandName}} <span style="opacity:.6">{{verLabel}}</span></div>') !== false, true);
 check('Documentation opens its own footer line',
 	strpos($dash, '<div class="foot-docs"><a href="/Q/docs">Documentation</a> &#183; Powered by the Qbix engine</div>') !== false, true);
 check('...which comes after the brand and maintainer lines',
-	strpos($dash, '$verLabel</span></div>') < strpos($dash, "\$maintainedBy\n<div class=\"foot-docs\">")
-	and strpos($dash, "\$maintainedBy\n<div class=\"foot-docs\">") !== false, true);
+	strpos($dash, '{{verLabel}}</span></div>') < strpos($dash, "{{maintainedBy}}\n<div class=\"foot-docs\">")
+	and strpos($dash, "{{maintainedBy}}\n<div class=\"foot-docs\">") !== false, true);
 check('...and is centred',
 	(bool) preg_match('/\.foot-docs\{[^}]*text-align:center/', $dash), true);
 check('...and wraps rather than scrolling at phone width',

@@ -43,6 +43,8 @@ function check($what, $got, $want)
 
 $src = __DIR__ . '/../src/Q/WebServer/Dashboard.php';
 $dash = file_get_contents($src);
+// Its page is a design on disk now (designs/default/dashboard).
+foreach (array('page.html', 'style.css', 'script.js') as $__f) $dash .= "\n" . file_get_contents(__DIR__ . '/../designs/default/dashboard/' . $__f);
 $pool = file_get_contents(__DIR__ . '/../src/Q/WebServer/Pool.php');
 $web = file_get_contents(__DIR__ . '/../src/Q/WebServer.php');
 

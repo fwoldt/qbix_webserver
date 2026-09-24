@@ -1,0 +1,14 @@
+{
+    "brand": "<i>brand</i> {{not a placeholder}} \\ $x",
+    "brandHead": "<i>brandHead</i> {{not a placeholder}} \\ $x",
+    "brandHeader": "<i>brandHeader</i> {{not a placeholder}} \\ $x",
+    "sysramHtml": "<i>sysramHtml</i> {{not a placeholder}} \\ $x",
+    "sysramDetailHtml": "<i>sysramDetailHtml</i> {{not a placeholder}} \\ $x",
+    "topPathsHtml": "<i>topPathsHtml</i> {{not a placeholder}} \\ $x",
+    "stats": "{\"a\":1,\"topPaths\":[]}",
+    "recent": "[{\"u\":\"\\/x\"}]",
+    "tokenParam": "?token=abc",
+    "brandName": "<i>brandName</i> {{not a placeholder}} \\ $x",
+    "verLabel": "<i>verLabel</i> {{not a placeholder}} \\ $x",
+    "maintainedBy": "<i>maintainedBy</i> {{not a placeholder}} \\ $x"
+}

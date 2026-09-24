@@ -1,0 +1,22 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{brand}} — Documentation</title>
+{{brandHead}}<script src="/Q/docs/marked.min.js"></script>
+<script>if(typeof marked==="undefined"){marked={parse:function(s){
+s=s.replace(/^### (.+)$/gm,"<h3>$1</h3>").replace(/^## (.+)$/gm,"<h2>$1</h2>").replace(/^# (.+)$/gm,"<h1>$1</h1>");
+s=s.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/`([^`]+)`/g,"<code>$1</code>");
+s=s.replace(/```[\s\S]*?```/g,function(m){return "<pre>"+m.slice(3,-3).replace(/^\w*\n/,"")+"</pre>"});
+s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,"<a href=\"$2\">$1</a>");
+s=s.replace(/^[-*] (.+)$/gm,"<li>$1</li>").replace(/(<li>[\s\S]+?<\/li>)/g,"<ul>$1</ul>");
+s=s.replace(/\n{2,}/g,"</p><p>");return "<p>"+s+"</p>"}}}</script>
+<style>{{@style.css}}</style></head><body>
+<nav>
+<a class="logo" href="/Q/docs">⚡ {{brand}}</a>
+<div id="nav-links"></div>
+<div style="margin-top:24px;padding-top:16px;border-top:1px solid #30363d">
+<a href="/Q/dashboard">Dashboard</a>
+<a href="/Q/panel">Control Panel</a>
+<a href="/Q/health">Health</a>
+</div>
+</nav>
+<main id="content"><p>Loading...</p></main>
+<script>{{@script.js}}</script></body></html>

@@ -33,7 +33,10 @@ function check($what, $got, $want)
 }
 
 $web = file_get_contents(__DIR__ . '/../src/Q/WebServer.php');
+// The dashboard's PHP and its page, which is a design on disk now
+// (designs/default/dashboard: page.html, style.css, script.js).
 $dash = file_get_contents(__DIR__ . '/../src/Q/WebServer/Dashboard.php');
+foreach (array('page.html', 'style.css', 'script.js') as $__f) $dash .= "\n" . file_get_contents(__DIR__ . '/../designs/default/dashboard/' . $__f);
 $panel = file_get_contents(__DIR__ . '/../src/Q/WebServer/Panel.php');
 
 // ── The accessor exists and defaults to the upstream name ───────
@@ -49,7 +52,7 @@ check('the dashboard heading is not a literal any more',
 // The heading links to the dashboard itself, so it carries $brandHeader --
 // the brand wrapped in that link -- rather than the bare name.
 check('the dashboard heading interpolates the brand',
-	strpos($dash, '$brandHeader</h1>') !== false
+	strpos($dash, '{{brandHeader}}</h1>') !== false
 	and (bool) preg_match('/\$brandHeader = .*\$brand\b/', $dash), true);
 check('the dashboard <title> is not a literal',
 	strpos($dash, '<title>Qbix Server Dashboard'), false);

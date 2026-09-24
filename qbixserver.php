@@ -628,6 +628,11 @@ if ($opts['conf-dir'] !== null and $opts['conf-dir'] !== 'none' and $confDir ===
 	fwrite(STDERR, "  config: no configuration directory at {$opts['conf-dir']}\n");
 }
 Q_WebServer_Layout::load($confDir);
+// Remembered for what reads the tree later: the server's own page designs
+// are looked up in its designs/ before the engine's (Q_WebServer_Design).
+if ($confDir !== null) {
+	Q_Config::set('Q', 'webserver', 'confDir', $confDir);
+}
 
 // User config file — loaded last so it overrides everything
 if ($opts['config']) {

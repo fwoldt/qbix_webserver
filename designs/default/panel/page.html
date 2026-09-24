@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{{brand}} Control Panel</title>
+{{brandHead}}
+<style>{{@style.css}}</style></head><body>
+<div class="top">
+  <h1><img src="/Q/logo.png" alt="" style="width:24px;height:auto;vertical-align:middle;margin-right:6px">Qbix Server</h1>
+  <div class="status"><span class="pulse"></span> Running</div>
+</div>
+<div class="tabs">
+  <div class="tab active" onclick="showTab('apps')">Apps</div>
+  <div class="tab" onclick="showTab('domains')">Domains</div>
+  <div class="tab" onclick="showTab('autohost')">Autohost</div>
+  <div class="tab" onclick="showTab('security')">Security</div>
+  <div class="tab" onclick="showTab('scripts')">Scripts</div>
+  <div class="tab" onclick="showTab('plugins')">Plugins</div>
+  <div class="tab" onclick="showTab('workers')">Workers</div>
+  <div class="tab" onclick="showTab('logs')">Logs</div>
+  <div class="tab" onclick="showTab('cron')">Cron</div>
+  <div class="tab" onclick="showTab('frameworks')">Frameworks</div>
+  <div class="tab" onclick="showTab('playground')">Playground</div>
+  <div class="tab" onclick="showTab('system')">System</div>
+  <div class="tab" onclick="showTab('servers')">Servers</div>
+</div>
+
+<!-- APPS TAB -->
+<div id="tab-apps" class="content">
+  <!-- Suggestions -->
+  <div id="suggestions" style="margin-bottom:16px"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="font-size:16px">Your Apps</h2>
+    <button class="btn btn-primary" onclick="showCreate()">+ New App</button>
+  </div>
+  <div id="apps-dir-row" style="font-size:12px;color:var(--dim);margin-bottom:14px">
+    Scanning: <span id="apps-dir-path" style="cursor:pointer;border-bottom:1px dashed var(--dim)" onclick="editAppsDir()"></span>
+    <span id="apps-dir-edit" class="hidden" style="margin-left:4px">
+      <input id="apps-dir-input" style="font-size:12px;padding:2px 6px;width:260px;background:var(--card);border:1px solid var(--border);color:var(--txt);border-radius:4px">
+      <button class="btn btn-sm btn-primary" onclick="saveAppsDir()" style="font-size:11px;padding:2px 8px">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="cancelAppsDir()" style="font-size:11px;padding:2px 8px">✕</button>
+    </span>
+  </div>
+  <div id="create-form" class="card hidden">
+    <h3>Create New App</h3>
+    <div class="form-row"><label>Name</label><input id="new-name" placeholder="MyNewApp (alphanumeric)"></div>
+    <div class="form-row"><label>Template</label>
+      <select id="new-template"><option>MyApp</option><option>SimpleHostedPHP</option></select>
+    </div>
+    <div class="btn-row"><button class="btn btn-primary" onclick="createApp()">Create</button>
+    <button class="btn btn-ghost" onclick="hideCreate()">Cancel</button></div>
+  </div>
+  <div id="apps-list"></div>
+</div>
+
+<!-- DOMAINS TAB -->
+<div id="tab-domains" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Domains &amp; Certificates</h2>
+  <div id="domains-list"></div>
+  <div class="card" style="margin-top:16px">
+    <h3 style="font-size:14px;margin-bottom:12px">Add Domain</h3>
+    <div class="form-row"><label>Domain</label><input id="dom-name" placeholder="example.com"></div>
+    <div class="form-row"><label>Root</label><input id="dom-root" placeholder="/var/www/myapp/web"></div>
+    <div class="form-row"><label>App dir</label><input id="dom-app" placeholder="/var/www/myapp (optional)"></div>
+    <div class="form-row"><label>TLS</label><select id="dom-tls"><option value="auto">Auto (ACME)</option><option value="manual">Manual (drop certs)</option><option value="self-signed">Self-signed</option><option value="">HTTP only</option></select></div>
+    <button onclick="addDomain()">Add Domain</button>
+  </div>
+  <div id="hosts-info"></div>
+</div>
+
+<!-- SECURITY TAB -->
+<div id="tab-security" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Security &amp; Attestation</h2>
+
+  <div id="sec-attestation"></div>
+
+  <div class="card" style="margin-top:16px">
+    <h3 style="font-size:14px;margin-bottom:12px">Sign Binary</h3>
+    <p style="font-size:12px;color:var(--dim);margin-bottom:12px">Paste a PEM private key to add your signature to this binary. Multiple signers can sign independently for M-of-N verification.</p>
+    <div class="form-row"><label>Signer name</label><input id="sec-signer" placeholder="alice@example.com"></div>
+    <div class="form-row"><label>Private key (PEM)</label><textarea id="sec-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;..." style="font-size:11px;font-family:monospace"></textarea></div>
+    <button class="btn btn-primary" onclick="signBinary()">Sign</button>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3 style="font-size:14px;margin-bottom:12px">Verify</h3>
+    <div class="form-row"><label>Required signatures (M)</label><input id="sec-m" type="number" min="1" value="1" style="width:60px"></div>
+    <button class="btn btn-primary" onclick="verifyBinary()">Verify</button>
+    <div id="sec-verify-result" style="margin-top:12px"></div>
+  </div>
+
+  <div id="sec-trust" style="margin-top:16px"></div>
+</div>
+
+<!-- AUTOHOST TAB -->
+<div id="tab-autohost" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Autohost</h2>
+  <p style="font-size:13px;color:var(--dim);margin-bottom:16px">Auto-provision domains when a new Host header arrives. Customer points DNS at your server, first request triggers cert provisioning and config setup.</p>
+  <div class="card" style="margin-bottom:16px">
+    <div class="form-row"><label>Enabled</label><select id="ah-enabled" onchange="saveAutohost()"><option value="0">Off</option><option value="1">On</option></select></div>
+    <div class="form-row"><label>Authorization</label><select id="ah-authorize" onchange="saveAutohost()"><option value="open">Open (any hostname)</option><option value="allowlist">Allowlist (patterns)</option></select></div>
+    <div class="form-row" id="ah-allowlist-row" style="display:none"><label>Allowlist</label><textarea id="ah-allowlist" rows="3" placeholder="*.example.com&#10;app.acme.com" style="font-size:12px"></textarea></div>
+    <div class="form-row"><label>DNS check</label><select id="ah-dns"><option value="1">Verify DNS points here</option><option value="0">Skip (trust all)</option></select></div>
+    <div class="form-row"><label>ACME email</label><input id="ah-email" placeholder="admin@example.com"></div>
+    <button class="btn btn-primary" onclick="saveAutohost()">Save</button>
+  </div>
+  <div id="ah-status"></div>
+  <div id="ah-log"></div>
+</div>
+
+<!-- SCRIPTS TAB -->
+<div id="tab-scripts" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Run Scripts</h2>
+  <div class="card">
+    <div class="form-row"><label>App</label><select id="script-app" onchange="loadScripts()"></select></div>
+    <div class="form-row"><label>Script</label><select id="script-name"></select></div>
+    <div class="form-row"><label>Args</label><input id="script-args" placeholder="--all or --plugins --composer"></div>
+    <button class="btn btn-primary" onclick="runScript()">Run</button>
+    <div id="script-output" class="output hidden"></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3>Common tasks</h3>
+    <div class="btn-row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
+      <button class="btn btn-ghost" onclick="quickScript('configure')">Configure</button>
+      <button class="btn btn-ghost" onclick="quickScript('install','--all')" id="btn-install-all">Install All</button>
+      <button class="btn btn-ghost" onclick="quickScript('install','--plugins --composer')">Install Plugins</button>
+      <button class="btn btn-ghost" onclick="quickScript('urls')">Rebuild URLs</button>
+      <button class="btn btn-ghost" id="btn-npm" onclick="requireNode(function(){quickScript('install','--npm')})">Install npm packages</button>
+      <button class="btn btn-ghost" id="btn-bundle" onclick="requireNode(function(){quickScript('bundle')})">Bundle JS/CSS</button>
+    </div>
+  </div>
+</div>
+
+<!-- PLUGINS TAB -->
+<div id="tab-plugins" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Qbix Plugins</h2>
+  <div id="qbix-plugins-info"></div>
+  <div id="qbix-plugins-list"></div>
+</div>
+
+<div id="tab-playground" class="content hidden">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="font-size:16px">PHP Playground</h2>
+    <div>
+      <button class="btn btn-primary" onclick="runPlayground()" id="pg-run">▶ Run</button>
+      <button class="btn btn-ghost" onclick="clearPlayground()">Clear</button>
+    </div>
+  </div>
+  <p style="font-size:12px;color:var(--dim);margin-bottom:10px">
+    Q classes are preloaded. Try <code style="font-size:11px">Q::app()</code>, <code style="font-size:11px">Q_Config::getAll()</code>, <code style="font-size:11px">Q_Request::url()</code>. Ctrl+Enter to run.
+  </p>
+  <div style="display:grid;grid-template-rows:1fr auto;gap:10px;min-height:400px">
+    <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
+      <div style="padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--border)">editor</div>
+      <textarea id="pg-code" spellcheck="false" style="
+        flex:1;width:100%;border:none;background:transparent;color:var(--txt);
+        font-family:'SF Mono',Monaco,Consolas,monospace;font-size:13px;line-height:1.5;
+        padding:12px;resize:none;outline:none;tab-size:4;
+      "></textarea>
+      <script>document.getElementById('pg-code').value="<?php\necho \"App: \" . Q::app() . \"\\n\";\necho \"Config: \" . json_encode(Q_Config::getAll(), JSON_PRETTY_PRINT) . \"\\n\";\n\n// Available classes:\n// Q, Q_Config, Q_Request, Q_Response, Q_Socket, Q_Room\necho \"\\nLoaded classes:\\n\";\nforeach (get_declared_classes() as $c) {\n    if (strpos($c, 'Q_') === 0) echo \"  $c\\n\";\n}";</script>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:120px">
+      <div style="padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--border)">
+        output <span id="pg-time" style="float:right"></span>
+      </div>
+      <pre id="pg-output" style="
+        flex:1;margin:0;padding:12px;font-size:13px;line-height:1.5;
+        background:transparent;color:var(--grn);overflow:auto;white-space:pre-wrap;
+      "></pre>
+    </div>
+  </div>
+</div>
+
+<!-- SYSTEM TAB -->
+<div id="tab-system" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">System Info</h2>
+  <div class="grid-2" id="system-info"></div>
+
+  <div style="margin-top:16px">
+    <button class="btn btn-ghost" style="font-size:12px" onclick="var f=document.getElementById('phpinfo-frame');f.style.display=f.style.display==='none'?'block':'none';if(f.style.display==='block')f.src='/Q/phpinfo'">Show phpinfo()</button>
+    <iframe id="phpinfo-frame" style="display:none;width:100%;height:500px;border:1px solid var(--brd);border-radius:6px;margin-top:8px;background:#fff"></iframe>
+  </div>
+
+  <div id="platform-install" style="margin-top:20px">
+    <h2 style="font-size:16px;margin-bottom:12px">Qbix Platform</h2>
+    <div id="platform-status" class="card"></div>
+  </div>
+</div>
+
+<!-- SERVERS TAB -->
+<div id="tab-servers" class="content hidden">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="font-size:16px">Remote Servers</h2>
+    <button class="btn btn-primary" onclick="showAddServer()">+ Add Server</button>
+  </div>
+  <p style="font-size:12px;color:var(--dim);margin-bottom:14px">
+    Deploy your app to remote Qbix servers, or federate events across nodes.
+  </p>
+  <div id="add-server-form" class="card hidden" style="margin-bottom:14px">
+    <h3>Add Server</h3>
+    <div class="form-row"><label>Name</label><input id="srv-name" placeholder="e.g. production, staging"></div>
+    <div class="form-row"><label>Host</label><input id="srv-host" placeholder="myserver.com"></div>
+    <div class="form-row"><label>User</label><input id="srv-user" placeholder="deploy" value="deploy"></div>
+    <div class="form-row"><label>Path</label><input id="srv-path" placeholder="/var/www/myapp"></div>
+    <div class="form-row"><label>SSH Key</label><input id="srv-key" placeholder="~/.ssh/deploy_key (optional)"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveServer()">Save</button>
+      <button class="btn btn-ghost" onclick="hideAddServer()">Cancel</button>
+    </div>
+  </div>
+  <div id="servers-list"></div>
+</div>
+
+<!-- FRAMEWORKS TAB -->
+<div id="tab-frameworks" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Framework Management</h2>
+  <div id="fw-list"><p style="color:var(--dim)">Detecting frameworks...</p></div>
+</div>
+
+<!-- WORKERS TAB -->
+<div id="tab-workers" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Worker Pool</h2>
+  <div id="workers-info"></div>
+  <div class="card" style="margin-top:16px">
+    <h3 style="font-size:14px;margin-bottom:12px">Resize Pool</h3>
+    <div class="form-row"><label>Workers</label><input id="worker-count" type="number" min="1" max="10000" placeholder="200"></div>
+    <button onclick="resizeWorkers()">Resize</button>
+    <p style="font-size:11px;color:var(--dim);margin-top:8px">Takes effect gradually as workers finish their current requests.</p>
+  </div>
+  <div id="worker-detail"></div>
+</div>
+
+<!-- LOGS TAB -->
+<div id="tab-logs" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Logs</h2>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn btn-primary" onclick="loadLogs('access')">Access Log</button>
+    <button class="btn btn-ghost" onclick="loadLogs('error')">Error Log</button>
+    <select id="log-lines" style="margin-left:auto;padding:6px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px">
+      <option value="50">50 lines</option>
+      <option value="100">100 lines</option>
+      <option value="200">200 lines</option>
+      <option value="500">500 lines</option>
+    </select>
+  </div>
+  <pre id="logs-output" style="max-height:500px;overflow:auto;font-size:11px;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;white-space:pre-wrap;word-break:break-all"></pre>
+</div>
+
+<!-- CRON TAB -->
+<div id="tab-cron" class="content hidden">
+  <h2 style="font-size:16px;margin-bottom:16px">Scheduled Tasks</h2>
+  <p style="font-size:12px;color:var(--dim);margin-bottom:14px">
+    Tasks configured in <code>Q.scheduler</code>. Each runs as a forked process via <code>Q::event()</code>.
+  </p>
+  <div id="cron-list"></div>
+</div>
+
+<script>{{@script.js}}</script></body></html>

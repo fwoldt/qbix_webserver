@@ -39,6 +39,8 @@ function check($what, $got, $want)
 $src = __DIR__ . '/../src/Q/WebServer/Dashboard.php';
 require_once $src;
 $dash = file_get_contents($src);
+// Its page is a design on disk now (designs/default/dashboard).
+foreach (array('page.html', 'style.css', 'script.js') as $__f) $dash .= "\n" . file_get_contents(__DIR__ . '/../designs/default/dashboard/' . $__f);
 $D = 'Q_WebServer_Dashboard';
 
 // ── Time formatting ─────────────────────────────────────────────
@@ -72,7 +74,7 @@ check('...escaped in text and title', substr_count($evil,
 	'GET /&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;&amp;y'), 2);
 
 check('the first paint fills the card server-side',
-	strpos($dash, '<div class="pb" id="paths">$topPathsHtml</div>') !== false, true);
+	strpos($dash, '<div class="pb" id="paths">{{topPathsHtml}}</div>') !== false, true);
 check('the live refresh uses the same row builder',
 	strpos($dash, 's.topPaths.map(tpRow)') !== false, true);
 check('the script escapes the path before writing it',
@@ -105,7 +107,7 @@ check('the detail text is unchanged, the swap part in its own span', $D::ramDeta
 check('no swap figures, no swap part',
 	$D::ramDetailHtml(array('totalMb' => 16384, 'usedMb' => 8192, 'percent' => 50)), '8 / 16 GB');
 check('the first paint fills the RAM card server-side',
-	strpos($dash, '<div class="v" id="sysram">$sysramHtml</div><div class="s" id="sysram-detail">$sysramDetailHtml</div>') !== false, true);
+	strpos($dash, '<div class="v" id="sysram">{{sysramHtml}}</div><div class="s" id="sysram-detail">{{sysramDetailHtml}}</div>') !== false, true);
 
 $rams = array(
 	$ram,

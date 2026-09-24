@@ -1,0 +1,6 @@
+{
+    "code": "<i>code</i> {{x}} \\ $y &amp;",
+    "title": "<i>title</i> {{x}} \\ $y &amp;",
+    "msg": "<i>msg</i> {{x}} \\ $y &amp;",
+    "brand": "<i>brand</i> {{x}} \\ $y &amp;"
+}

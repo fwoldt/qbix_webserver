@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Index of {{safePath}}</title>
+<style>{{@style.css}}</style>
+</head><body>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar">
+    <h2>Folders</h2>
+    <div id="tree"></div>
+  </div>
+  <div class="main">
+    <h1>Index of {{safePath}}</h1>
+    <div class="toolbar" id="toolbar">
+      <button onclick="setView('list')" id="btn-list">☰ List</button>
+      <button onclick="setView('grid')" id="btn-grid" class="active">▦ Grid</button>
+      <span class="spacer"></span>
+      <span style="font-size:12px;color:#868e96" id="count"></span>
+    </div>
+    <div id="list-view" class="listing" style="display:none">
+      {{listHtml}}
+    </div>
+    <div id="grid-view" class="grid"></div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox(event)">
+  <button class="close" onclick="closeLightbox()">&times;</button>
+  <img id="lb-img" src="">
+  <div class="meta">
+    <h3 id="lb-name"></h3>
+    <div class="dims" id="lb-dims"></div>
+    <div class="sizes" id="lb-sizes"></div>
+  </div>
+</div>
+
+<div class="action-bar" id="action-bar">
+  <span><span class="count" id="sel-count">0</span> selected</span>
+  <button onclick="selectAll()">Select All</button>
+  <button onclick="clearSelection()">Clear</button>
+  <button class="primary" onclick="openBulkPanel()">⬇ Download</button>
+</div>
+
+<div class="bulk-panel" id="bulk-panel">
+  <button class="bulk-close" onclick="closeBulkPanel()">&times;</button>
+  <div class="bulk-header">
+    <h3>Download <span id="bulk-count">0</span> images</h3>
+    <p style="color:#adb5bd;font-size:13px">Choose a size and format for all images</p>
+    <div class="bulk-options" id="bulk-sizes">
+      <button onclick="setBulkSize(320)">320px</button>
+      <button onclick="setBulkSize(640)" class="active">640px</button>
+      <button onclick="setBulkSize(1024)">1024px</button>
+      <button onclick="setBulkSize(1920)">1920px</button>
+      <button onclick="setBulkSize(0)" class="active">Original</button>
+    </div>
+    <div class="bulk-options" id="bulk-formats">
+      <button onclick="setBulkFormat('')" class="active">Keep format</button>
+      <button onclick="setBulkFormat('webp')">WebP</button>
+      <button onclick="setBulkFormat('jpg')">JPEG</button>
+      <button onclick="setBulkFormat('png')">PNG</button>
+    </div>
+    <label style="color:#adb5bd;font-size:13px;cursor:pointer;margin-top:4px;display:inline-flex;align-items:center;gap:6px">
+      <input type="checkbox" id="bulk-rename"> Include size in filenames (e.g. photo-640w.webp)
+    </label>
+    <button class="bulk-download" onclick="bulkDownload()">⬇ Download ZIP</button>
+  </div>
+  <div class="bulk-preview" id="bulk-preview"></div>
+</div>
+
+<script>{{@script.js}}</script>
+</body></html>

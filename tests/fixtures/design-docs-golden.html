@@ -1,0 +1,121 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title><i>brand</i> {{x}} \ $y &amp; — Documentation</title>
+<i>brandHead</i> {{x}} \ $y &amp;<script src="/Q/docs/marked.min.js"></script>
+<script>if(typeof marked==="undefined"){marked={parse:function(s){
+s=s.replace(/^### (.+)$/gm,"<h3>$1</h3>").replace(/^## (.+)$/gm,"<h2>$1</h2>").replace(/^# (.+)$/gm,"<h1>$1</h1>");
+s=s.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/`([^`]+)`/g,"<code>$1</code>");
+s=s.replace(/```[\s\S]*?```/g,function(m){return "<pre>"+m.slice(3,-3).replace(/^\w*\n/,"")+"</pre>"});
+s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,"<a href=\"$2\">$1</a>");
+s=s.replace(/^[-*] (.+)$/gm,"<li>$1</li>").replace(/(<li>[\s\S]+?<\/li>)/g,"<ul>$1</ul>");
+s=s.replace(/\n{2,}/g,"</p><p>");return "<p>"+s+"</p>"}}}</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;display:flex;min-height:100vh}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+nav{width:260px;min-width:260px;background:#161b22;border-right:1px solid #30363d;padding:20px 16px;overflow-y:auto;position:sticky;top:0;height:100vh}
+nav h2{font-size:14px;color:#8b949e;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px}
+nav a{display:block;padding:6px 10px;border-radius:6px;color:#c9d1d9;font-size:13px;margin:1px 0}
+nav a:hover,nav a.active{background:#21262d;text-decoration:none;color:#58a6ff}
+nav .logo{font-size:16px;font-weight:700;color:#fff;margin-bottom:16px;display:block}
+main{flex:1;max-width:820px;padding:32px 40px;line-height:1.7}
+main h1{font-size:28px;border-bottom:1px solid #30363d;padding-bottom:12px;margin-bottom:20px}
+main h2{font-size:22px;margin:28px 0 12px;border-bottom:1px solid #21262d;padding-bottom:8px}
+main h3{font-size:17px;margin:20px 0 8px}
+main p{margin:10px 0}
+main pre{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:14px;overflow-x:auto;font-size:13px;line-height:1.5;margin:12px 0}
+main code{background:#161b22;padding:2px 6px;border-radius:3px;font-size:87%}
+main pre code{background:none;padding:0}
+main table{border-collapse:collapse;width:100%;margin:12px 0}
+main th,main td{border:1px solid #30363d;padding:8px 12px;text-align:left;font-size:13px}
+main th{background:#161b22}
+main blockquote{border-left:3px solid #30363d;padding-left:16px;color:#8b949e;margin:12px 0}
+main img{max-width:100%}
+main ul,main ol{margin:8px 0 8px 24px}
+main li{margin:4px 0}
+main hr{border:none;border-top:1px solid #30363d;margin:24px 0}
+.back{display:inline-block;margin-bottom:16px;font-size:13px;color:#8b949e}
+@media(max-width:700px){nav{display:none}main{padding:20px 16px}}
+</style></head><body>
+<nav>
+<a class="logo" href="/Q/docs">⚡ <i>brand</i> {{x}} \ $y &amp;</a>
+<div id="nav-links"></div>
+<div style="margin-top:24px;padding-top:16px;border-top:1px solid #30363d">
+<a href="/Q/dashboard">Dashboard</a>
+<a href="/Q/panel">Control Panel</a>
+<a href="/Q/health">Health</a>
+</div>
+</nav>
+<main id="content"><p>Loading...</p></main>
+<script>
+var docTitles = {
+  "README.md": "Overview",
+  "why.md": "Why Not php-fpm?",
+  "headers.md": "Server Headers",
+  "http.md": "HTTP Mode",
+  "websocket.md": "WebSocket & Rooms",
+  "routing.md": "Routing",
+  "framework.md": "PHP Framework",
+  "configuration.md": "Configuration",
+  "running.md": "Running & Building",
+  "architecture.md": "Architecture",
+  "dashboard.md": "Dashboard & Panel",
+  "deploy.md": "Deploy & Federation",
+  "api-discovery.md": "API Discovery",
+  "compatibility.md": "Compatibility",
+  "BENCHMARKS.md": "Benchmarks",
+  "reset.md": "State Reset",
+  "TestResults.md": "Test Results",
+  "roadmap.md": "Roadmap",
+  "license.md": "License"
+};
+var order = Object.keys(docTitles);
+
+async function init() {
+  var r = await fetch("/Q/docs/index.json").then(function(x){return x.json()});
+  var nav = document.getElementById("nav-links");
+  var html = "";
+  if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
+  var sections = {"Getting Started":["why.md","running.md","configuration.md"],
+    "Features":["headers.md","http.md","websocket.md","routing.md","framework.md"],
+    "Operations":["architecture.md","dashboard.md","deploy.md","api-discovery.md"],
+    "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};
+  for (var sec in sections) {
+    html += "<h2>"+sec+"</h2>";
+    sections[sec].forEach(function(f) {
+      if (r.files.indexOf(f) !== -1 || f === "README.md") {
+        html += '<a href="#'+f+'" onclick="load(\''+f+'\');return false">' + (docTitles[f]||f) + "</a>";
+      }
+    });
+  }
+  nav.innerHTML = html;
+  var hash = location.hash.slice(1);
+  load(hash && (r.files.indexOf(hash)!==-1 || hash==="README.md") ? hash : "README.md");
+}
+
+async function load(file) {
+  var url = file === "README.md" ? "/Q/docs/raw/README.md" : "/Q/docs/raw/" + file;
+  var md = await fetch(url).then(function(r){return r.ok ? r.text() : "# Not found\n\nFile `"+file+"` not found."});
+  // Fix relative links: [text](docs/foo.md) -> onclick load
+  md = md.replace(/\]\(docs\/([^)]+\.md)\)/g, "](#$1)");
+  md = md.replace(/\]\(\.\.\/README\.md\)/g, "](#README.md)");
+  document.getElementById("content").innerHTML = marked.parse(md);
+  // Fix anchor clicks
+  document.querySelectorAll("#content a").forEach(function(a) {
+    var href = a.getAttribute("href") || "";
+    if (href.charAt(0)==="#" && href.endsWith(".md")) {
+      a.onclick = function(e){e.preventDefault();load(href.slice(1));};
+    }
+  });
+  location.hash = file;
+  // Highlight nav
+  document.querySelectorAll("nav a").forEach(function(a){a.classList.remove("active")});
+  var active = document.querySelector('nav a[href="#'+file+'"]');
+  if (active) active.classList.add("active");
+  window.scrollTo(0,0);
+}
+window.addEventListener("hashchange", function(){
+  var h = location.hash.slice(1);
+  if (h && h.endsWith(".md")) load(h);
+});
+init();
+</script></body></html>

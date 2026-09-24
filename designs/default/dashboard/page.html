@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{{brand}} Dashboard</title>
+{{brandHead}}<style>{{@style.css}}</style></head><body>
+<h1><span class="dot"></span>{{brandHeader}}</h1>
+<div class="sub" id="sub"></div>
+
+<div class="grid">
+<div class="card"><div class="l">Total requests</div><div class="v" id="sr">0</div><div class="s" id="srps">0 avg req/s</div></div>
+<div class="card"><div class="l">Current RPS</div><div class="v" id="crps" style="color:var(--cyn)">0</div><div class="s">last 5 sec</div></div>
+<div class="card"><div class="l">Avg response</div><div class="v" id="avg">0<span style="font-size:12px;font-weight:400">ms</span></div><div class="s">slowest: <span id="slow">0ms</span></div></div>
+<div class="card"><div class="l">Parent Memory</div><div class="v" id="sm">&#8212;</div><div class="s">peak <span id="smp">&#8212;</span></div></div>
+<div class="card"><div class="l">Workers</div><div class="v" id="sw">&#8212;</div><div class="s vl">
+<div><span>idle</span><b id="swi">&#8212;</b></div>
+<div><span>busy</span><b id="swb">&#8212;</b></div>
+<div><span>PHP requests served</span><b id="phpn">0</b></div>
+<div><span>static files served</span><b id="stn">0</b></div></div></div>
+<div class="card"><div class="l">System RAM</div><div class="v" id="sysram">{{sysramHtml}}</div><div class="s" id="sysram-detail">{{sysramDetailHtml}}</div></div>
+<div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s vl" id="cow-detail">&#8212;</div></div>
+<div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
+<div class="card"><div class="l">Data out</div><div class="v" id="bout">0</div><div class="s"><span id="conn">0</span> conn &#183; <span id="ka">0</span> keep-alive</div></div>
+<div class="card"><div class="l">Status codes</div><div class="vl">
+<div><span>ok</span><b class="s2" id="s2">0</b></div>
+<div><span>redir</span><b class="s3" id="s3">0</b></div>
+<div><span>4xx</span><b class="s4" id="s4">0</b></div>
+<div><span>5xx</span><b class="s5" id="s5">0</b></div></div></div>
+</div>
+
+<div class="panel" style="margin-bottom:16px"><div class="ph">Throughput <span style="font-size:11px;color:var(--dim)">last 60s</span></div>
+<div class="spark" id="spark"></div></div>
+
+<div class="row">
+<div class="panel"><div class="ph">Top paths</div><div class="pb" id="paths">{{topPathsHtml}}</div></div>
+<div class="panel"><div class="ph">Active rooms</div><div class="pb" id="rooms"><div style="color:var(--dim);padding:8px;font-size:12px">No active rooms</div></div></div>
+</div>
+
+<div class="panel"><div class="ph"><span>Live requests <span style="font-size:11px;color:var(--dim)" id="reqc">0 total</span></span>
+<div class="ph-btns">
+<select id="sc-filter" onchange="filterStatus()" title="Filter by status code" class="ph-sel">
+<option value="">All status codes</option>
+</select>
+<select id="sid-filter" onchange="filterSession()" title="Filter by session" class="ph-sel">
+<option value="">All sessions</option>
+</select>
+<button class="ph-btn" id="btn-pause" onclick="togglePause()" title="Pause/resume">&#9208;</button>
+<button class="ph-btn" onclick="clearLog()" title="Clear log">&#10005;</button>
+</div></div>
+<div class="le lh"><span class="lk"></span><span class="lt">Time</span><span class="ls">Sts</span><span class="lm">Verb</span><span class="lu">Path</span><span class="ld">ms</span><span class="lmem">Mem</span></div><div class="log-wrap" id="log-wrap"><div id="log"></div></div></div>
+
+<script>{{@script.js}}</script>
+<div class="foot">{{brandName}} <span style="opacity:.6">{{verLabel}}</span></div>
+{{maintainedBy}}
+<div class="foot-docs"><a href="/Q/docs">Documentation</a> &#183; Powered by the Qbix engine</div>
+</body></html>
