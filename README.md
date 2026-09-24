@@ -149,6 +149,17 @@ cd my-drupal-site
 php /path/to/qbixserver.php --root=web --preset=drupal --port=8080
 ```
 
+**Exponential** (the eZ Publish 4 legacy line):
+
+```bash
+cd my-exponential-site
+php /path/to/qbixserver.php --root=. --preset=exponential --port=8080
+```
+
+The `exponential` preset keeps the source-code transform on and preserves the
+kernel's type registries across requests — settings a modern framework does not
+need. See [Configuration](docs/configuration.md#framework-presets--the-one-flag-path).
+
 **Any PHP app with a front controller:**
 
 ```bash

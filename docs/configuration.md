@@ -237,6 +237,39 @@ The server auto-detects `php-cgi` on your system. Override with `cgi.binary`:
 { "Q": { "webserver": { "cgi": { "binary": "/usr/bin/php-cgi8.3" } } } }
 ```
 
+### Framework presets — the one-flag path
+
+Before the hand-configuration below, there are presets. `--preset=NAME` (or
+`Q.compat.preset` in config) loads the front-controller rewrite, the ini limits
+and any framework-specific settings that application needs, in one flag:
+
+```
+php bin/qbixserver.phar --root=public --preset=laravel
+php bin/qbixserver.phar --root=.      --preset=wordpress
+php bin/qbixserver.phar --root=.      --preset=exponential
+```
+
+| Preset | Rewrite | Notable |
+|---|---|---|
+| `laravel` | `index.php` | 60s execution, 256M |
+| `symfony` | `index.php` | 60s execution, 256M |
+| `wordpress` | `index.php` | 64M uploads, 300s execution |
+| `drupal` | `index.php` | `?q=` query rewriting, 32M uploads |
+| `exponential` | `index.php` | source-code transform kept ON; the eZ type registries kept across requests (`keepGlobals`) — see below |
+
+`exponential` is the one that carries settings a modern framework does not need
+and would otherwise be found the hard way: its kernel calls `header()` and
+`setcookie()` the SAPI-coupled way, so the source-code transform must stay on to
+carry them to the response under a persistent worker; and its datatype, workflow
+and notification registries are populated once via `include_once` and must be
+preserved between requests, or publishing fails with
+`Call to a member function initializeEvent() on null`. The preset sets both. It
+is also the one preset that writes under `Q.webserver` (for `keepGlobals`), not
+only `Q.compat`.
+
+An unknown preset name is refused and prints the available list, rather than
+starting misconfigured.
+
 ### Running legacy PHP — WordPress, Laravel, Symfony
 
 You can run existing PHP applications on Qbix Server without modifying their code. The key: put the framework's public directory as `web/`, and use CGI carveout patterns to match all PHP files.

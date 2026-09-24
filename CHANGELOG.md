@@ -78,12 +78,34 @@ edited down to what a reader actually needs.
 - The status-code filter offered only codes seen live after the page loaded;
   it now lists every code the server has recorded, from the stats it already
   sends.
+- **Reading the worker-memory card wedged the server at scale.** It read
+  `/proc/<pid>/smaps_rollup` for every worker to sum PSS, inside the single
+  event loop, every couple of seconds while a dashboard was open. That read
+  walks all of a process's mappings, so at hundreds of workers it stalled the
+  loop long enough that no connection could be accepted -- the front page timed
+  out, not just the dashboard. It now samples a bounded set of workers and
+  scales the average, at a fixed cost regardless of pool size.
 
 ### Added
 
 - Column headings on the live request log (Time, Sts, Verb, Path, ms, Mem).
 - The dashboard's own heading links to the dashboard; the footer's product name
   keeps its link to the repository.
+- Swap usage on the System RAM card. A box can read a comfortable RAM
+  percentage while it has pushed gigabytes to disk under earlier pressure; the
+  card now shows swap when any is in use and tints red then, so the reading is
+  not falsely reassuring.
+- An `exponential` framework preset (`--preset=exponential`), for the eZ
+  Publish 4 legacy line. Alongside the front controller and ini limits it keeps
+  the source-code transform on (the kernel calls `header()`/`setcookie()` the
+  SAPI-coupled way) and preserves the type registries across requests -- both
+  settings a modern framework does not need and would otherwise be found the
+  hard way. A preset can now carry a `_webserver` block that merges under
+  `Q.webserver`, which is how the preset reaches `keepGlobals`.
+- The product name across the served views is a parameter (`Q.webserver.brand`),
+  with optional links for it and a maintainer credit, and the shown version is
+  the fork's own release from `git describe`, stamped at build time, with the
+  upstream number kept as the engine it is built on.
 
 
 ### Added

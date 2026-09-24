@@ -44,6 +44,7 @@ Qbix Server's persistent-worker mode ("octane mode") keeps workers alive across 
 | **Stream contexts** | Custom SSL/proxy settings persist | Reset default context | Avoid `stream_context_set_default()` |
 | **Signal handlers** | Previous request's handlers persist | Restore server's handlers | Don't call `pcntl_signal()` in request code |
 | **cURL handles** | Cookies, auth headers persist | Close per request | Don't reuse `curl_init()` across requests |
+| **Framework registries in globals** | A registry filled once via `include_once` empties for the worker's life if its global is cleared | Preserve them by name in `Q.webserver.keepGlobals` | Name any global that holds an include-populated registry; clear everything else |
 
 Previously risky items **now handled automatically** by the compat layer:
 
@@ -65,7 +66,7 @@ Previously risky items **now handled automatically** by the compat layer:
 | Static properties | **Persist** — leak between requests | **Reset** via snapshot restore |
 | Globals | **Persist** — leak between requests | **Reset** via snapshot restore |
 | Superglobals | Reset by the SAPI | Reset by the server |
-| Memory per worker | ~50 MB (independent bootstrap) | ~5 MB (COW from parent) |
+| Memory per worker | ~50 MB (independent bootstrap) | ~5 MB warmed, up to full working set unwarmed (see *Warming the pool* below) |
 | DB connections | Persist (risk) | Persist (same risk, same mitigation) |
 | OPcache | Shared across workers | Shared via parent process |
 | `max_requests` recycling | Worker dies and respawns periodically | Not needed — statics are reset, not accumulated |
@@ -98,6 +99,44 @@ These are the same in all persistent-worker systems (fpm, Octane, Swoole):
 4. **State in external services** — Redis keys, database rows, message queues
 
 For (1) and (2), `pcntl_fork()` is the only bulletproof solution. For (3) and (4), no execution model helps — the developer must manage external state.
+
+## Warming the pool in the parent, and the one trap in it
+
+The reset above runs *between requests*, and its baseline is a snapshot taken
+after preload, when nothing has been served — so it is clean. There is a second,
+optional mechanism that shares far more memory, and it has a subtlety the
+between-request reset does not.
+
+A worker builds its whole working set — compiled templates, resolved routes, the
+object graph — on its first request and keeps it: tens to a couple hundred MB,
+private, once per worker. That set lives in the allocator's arena, which is
+anonymous memory, which `fork()` shares copy-on-write. So `Q.webserver.preload`
+names a script the pool runs **in the parent, before it forks**, typically one
+that renders a representative page. Every worker then inherits the warmed arena
+shared; measured on a heavy app, ~21 MB private per warm worker against ~209
+unwarmed.
+
+The trap: **the snapshot is taken after the preload, so whatever the render left
+becomes every worker's baseline.** The between-request reset then faithfully
+restores workers *to that dirtied baseline*. A render leaves a great deal — the
+parsed request, routing state, template-override caches, a framework's
+"assets already emitted" flag, the current node a breadcrumb reads — and any of
+it, frozen, serves something wrong to every worker at once.
+
+The fix is the same reflection this doc already relies on, applied once more
+before the snapshot: **the preload script resets every user-class static to its
+declared default and clears the request globals, keeping only the pure config
+and type registries** (the statics counterpart to `keepGlobals`). Naming the
+leaks instead does not converge — on one app, a fourth surfaced after three were
+fixed. The rule that keeps it correct and fast: keep *only* configuration and
+registries in the skip-list; resetting those too makes every request rebuild
+them (slow, and the memory returns), and keeping the template or content caches
+lets request state leak straight back.
+
+Verify a warm-up by behaviour, with the pair that exposes a frozen route or
+node: **several distinct URLs must return distinct content, each must carry a
+resolving stylesheet.** A single URL never shows a reset bug — it appears only on
+the second, different request.
 
 ## Configuration
 

@@ -22,6 +22,27 @@ Open `http://localhost/Q/dashboard` in your browser for a real-time server dashb
 
 The `/Q/stats` JSON includes everything the dashboard shows, plus `sparkline` (60 data points), `topPaths`, `activeRooms`, `statusCodes` breakdown, and `cache` stats. Feed it to Grafana, Datadog, or your own monitoring.
 
+**Reading the memory cards — they report what is true, not what is easy:**
+
+- **Worker Memory (COW)** is **PSS** (proportional set size), summed over the
+  parent and its workers, not each worker's RSS added up. Workers are forked, so
+  RSS counts every page shared after the fork once per worker — at a few hundred
+  workers that reads as *ten times* the real memory and does not fall on a
+  restart. PSS divides each shared page by the number sharing it, so the sum is
+  the actual resident memory. To keep it cheap the card **samples** a bounded set
+  of workers rather than reading `/proc` for every one, which at scale would
+  stall the event loop that serves the dashboard.
+- **System RAM** is used = Total − MemAvailable (reclaimable cache counts as
+  free, as `free` reports it), and it **also shows swap when any is in use** —
+  and tints red then, however low the RAM percentage looks. A box can sit at a
+  comfortable 42% while it has pushed gigabytes to disk under earlier pressure,
+  which the percentage alone hides.
+- **Durations** — the slowest-request figure and every row in the live log — are
+  rounded to one decimal; a `microtime()` difference is otherwise thirteen.
+- **The live log** carries column headings, and the **status filter** lists every
+  code the server has recorded since start, not only those that streamed past
+  after the page opened.
+
 ---
 
 ## ⚙️ Control Panel
