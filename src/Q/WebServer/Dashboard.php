@@ -412,6 +412,91 @@ class Q_WebServer_Dashboard
 		return "{$m}m ".($s%60).'s';
 	}
 
+	/**
+	 * A duration as a person reads it: "10.6 ms" under a second, "3.64 s"
+	 * from one. The script's fmtMs() is the same rule, so the rows served
+	 * first and the rows the live refresh writes cannot disagree.
+	 */
+	static function fmtMs($ms) {
+		$ms = (float) $ms;
+		$r = round($ms, 1);
+		if ($r < 1000) return $r . ' ms';
+		return number_format($ms / 1000, 2, '.', '') . ' s';
+	}
+
+	/**
+	 * One "Top paths" row: the path, truncated by CSS, then the request
+	 * count and the average time as separate labelled values. They used to
+	 * sit in bare adjacent spans and read as one string ("GET /643636.2ms").
+	 * The path is request data, so it is escaped for the text and the title
+	 * attribute. Mirrors tpRow() in the page script character for character:
+	 * ENT_COMPAT because esc() there leaves ' alone, which is safe inside a
+	 * double-quoted attribute.
+	 */
+	static function topPathRow($p) {
+		$path = htmlspecialchars((string) $p['path'], ENT_COMPAT | ENT_SUBSTITUTE, 'UTF-8');
+		return '<div class="tp"><span class="p" title="' . $path . '">' . $path
+			. '</span><span class="c">' . (int) $p['count'] . ' req</span>'
+			. '<span class="a">' . self::fmtMs($p['avgMs']) . ' avg</span></div>';
+	}
+
+	static function topPathsHtml($topPaths) {
+		$out = '';
+		foreach ((array) $topPaths as $p) $out .= self::topPathRow($p);
+		return $out;
+	}
+
+	/**
+	 * Severity of system RAM use: 'ok' under 70%, 'warn' from 70% to under
+	 * 90%, 'crit' from 90%. ramLevel() in the page script is the same rule.
+	 */
+	static function ramLevel($percent) {
+		$percent = (float) $percent;
+		if ($percent >= 90) return 'crit';
+		if ($percent >= 70) return 'warn';
+		return 'ok';
+	}
+
+	/**
+	 * Severity of swap: 'none' when nothing is swapped, 'warn' when any is,
+	 * 'crit' when more than half of a known swap total is in use.
+	 */
+	static function swapLevel($usedMb, $totalMb = 0) {
+		$usedMb = (float) $usedMb; $totalMb = (float) $totalMb;
+		if ($usedMb <= 0) return 'none';
+		if ($totalMb > 0 and $usedMb > $totalMb / 2) return 'crit';
+		return 'warn';
+	}
+
+	/** One decimal, trailing ".0" dropped, as JavaScript prints a number. */
+	private static function num1($v) {
+		$r = round((float) $v, 1);
+		return ($r == floor($r)) ? (string) (int) $r : (string) $r;
+	}
+
+	static function ramPercentHtml($ram) {
+		return '<span class="sev-' . self::ramLevel($ram['percent'] ?? 0) . '">'
+			. (int) ($ram['percent'] ?? 0) . '%</span>';
+	}
+
+	/**
+	 * "18.5 / 46.8 GB · 4.7 GB swap", with the swap part in its own span so
+	 * it takes its severity colour. Swap is shown whenever the host reports
+	 * any (Linux); a platform that sends no swap figures gets no swap part.
+	 * Mirrors ramDetail() in the page script.
+	 */
+	static function ramDetailHtml($ram) {
+		$out = self::num1(($ram['usedMb'] ?? 0) / 1024) . ' / '
+			. self::num1(($ram['totalMb'] ?? 0) / 1024) . ' GB';
+		$swTotal = (float) ($ram['swapTotalMb'] ?? 0);
+		$sw = (float) ($ram['swapUsedMb'] ?? 0);
+		if ($swTotal > 0 or $sw > 0) {
+			$amt = ($sw > 0 and $sw < 1024) ? ((int) round($sw)) . ' MB' : self::num1($sw / 1024) . ' GB';
+			$out .= ' &#183; <span class="sev-' . self::swapLevel($sw, $swTotal) . '">' . $amt . ' swap</span>';
+		}
+		return $out;
+	}
+
 	static function fmtBytes($b) {
 		if ($b < 1024) return $b . ' B';
 		if ($b < 1048576) return round($b/1024, 1) . ' KB';
@@ -456,7 +541,14 @@ class Q_WebServer_Dashboard
 			}
 			$maintainedBy = '<div class="foot-by">' . $inner . '</div>';
 		}
-		$stats = json_encode(self::getStats());
+		$statsArr = self::getStats();
+		$stats = json_encode($statsArr);
+		// Cards rendered here as well as by U(), from the same helpers the
+		// script mirrors, so the first paint already reads correctly.
+		$topPathsHtml = self::topPathsHtml($statsArr['topPaths'] ?? array());
+		$ramSrv = $statsArr['systemRam'] ?? null;
+		$sysramHtml = $ramSrv ? self::ramPercentHtml($ramSrv) : '&#8212;';
+		$sysramDetailHtml = $ramSrv ? self::ramDetailHtml($ramSrv) : '&#8212;';
 		$recent = json_encode(array_reverse(array_slice(self::$recentRequests, -50)));
 		$host = $parsed['headers']['host'] ?? 'localhost';
 
@@ -533,9 +625,10 @@ transition:background .1s}
 .le .ld{color:var(--dim);min-width:48px;text-align:right;flex-shrink:0}
 .le .lmem{color:var(--pur);min-width:56px;text-align:right;flex-shrink:0;font-size:11px}
 .s2{color:var(--grn)}.s3{color:var(--yel)}.s4,.s5{color:var(--red)}
-.tp{display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px solid rgba(255,255,255,.03)}
-.tp .p{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace}
-.tp .c{min-width:50px;text-align:right;color:var(--ac)}.tp .a{min-width:50px;text-align:right;color:var(--dim)}
+.sev-ok{color:var(--grn)}.sev-warn{color:var(--yel)}.sev-crit{color:var(--red)}.sev-none{color:var(--dim)}
+.tp{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:4px 0;font-size:12px;border-bottom:1px solid rgba(255,255,255,.03)}
+.tp .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',monospace}
+.tp .c{min-width:50px;text-align:right;color:var(--ac);white-space:nowrap;flex-shrink:0}.tp .a{min-width:72px;text-align:right;color:var(--dim);white-space:nowrap;flex-shrink:0}
 .ws{display:inline-flex;align-items:center;gap:6px;font-size:11px}
 .wd{width:6px;height:6px;border-radius:50%;background:var(--red)}.wd.on{background:var(--grn)}
 .room{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
@@ -555,7 +648,7 @@ transition:background .1s}
 <div><span>busy</span><b id="swb">&#8212;</b></div>
 <div><span>PHP requests served</span><b id="phpn">0</b></div>
 <div><span>static files served</span><b id="stn">0</b></div></div></div>
-<div class="card"><div class="l">System RAM</div><div class="v" id="sysram">&#8212;</div><div class="s" id="sysram-detail">&#8212;</div></div>
+<div class="card"><div class="l">System RAM</div><div class="v" id="sysram">$sysramHtml</div><div class="s" id="sysram-detail">$sysramDetailHtml</div></div>
 <div class="card"><div class="l">Worker Memory (COW)</div><div class="v" id="cow-total">&#8212;</div><div class="s vl" id="cow-detail">&#8212;</div></div>
 <div class="card"><div class="l">WebSocket</div><div class="v" id="wsc" style="color:var(--pur)">0</div><div class="s"><span id="wsr">0</span> rooms</div></div>
 <div class="card"><div class="l">Data out</div><div class="v" id="bout">0</div><div class="s"><span id="conn">0</span> conn &#183; <span id="ka">0</span> keep-alive</div></div>
@@ -570,7 +663,7 @@ transition:background .1s}
 <div class="spark" id="spark"></div></div>
 
 <div class="row">
-<div class="panel"><div class="ph">Top paths</div><div class="pb" id="paths"></div></div>
+<div class="panel"><div class="ph">Top paths</div><div class="pb" id="paths">$topPathsHtml</div></div>
 <div class="panel"><div class="ph">Active rooms</div><div class="pb" id="rooms"><div style="color:var(--dim);padding:8px;font-size:12px">No active rooms</div></div></div>
 </div>
 
@@ -639,13 +732,8 @@ if(w.length===2){var idle=+w[0],total=+w[1];el('sw',total+(s.workersSpare>0&&s.w
 else{el('sw',s.workers+(s.forkMode?' <span style="font-size:10px;color:var(--yel)">(fork mode)</span>':''));el('swi','\u2014');el('swb','\u2014')}})();el('wsc',s.wsConnections);el('wsr',s.wsRooms);
 // System RAM
 if(s.systemRam){
-  el('sysram',s.systemRam.percent+'%');
-  var _sw=s.systemRam.swapUsedMb||0;
-  var _det=Math.round(s.systemRam.usedMb/1024*10)/10+' / '+Math.round(s.systemRam.totalMb/1024*10)/10+' GB';
-  if(_sw>50){_det+=' \u00B7 <span style="color:var(--red)">'+(Math.round(_sw/1024*10)/10)+' GB swap</span>';}
-  el('sysram-detail',_det);
-  var re=document.getElementById('sysram');
-  if(re)re.style.color=(_sw>50||s.systemRam.percent>85)?'var(--red)':(s.systemRam.percent>70?'var(--yel)':'var(--grn)');
+  el('sysram',ramPct(s.systemRam));
+  el('sysram-detail',ramDetail(s.systemRam));
 }
 // Worker COW stats
 if(s.workerStats){
@@ -680,8 +768,7 @@ upSec=s.uptimeSec||0;
 if(s.sparkline){spData=s.sparkline.slice();renderSpark()}
 // Top paths
 var pp=document.getElementById('paths');
-if(s.topPaths&&s.topPaths.length){pp.innerHTML=s.topPaths.map(function(p){return'<div class="tp"><span class="p">'+esc(p.path)+
-'</span><span class="c">'+p.count+'</span><span class="a">'+p.avgMs+'ms</span></div>'}).join('')}
+if(s.topPaths&&s.topPaths.length){pp.innerHTML=s.topPaths.map(tpRow).join('')}
 // Rooms
 var rm=document.getElementById('rooms');
 if(s.activeRooms&&s.activeRooms.length){rm.innerHTML=s.activeRooms.map(function(r){
@@ -691,6 +778,21 @@ if(s.sessions&&s.sessions.length){updateSidDropdown(s.sessions)}}
 
 function el(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+// Top paths and System RAM helpers. Each mirrors a PHP method of the same
+// name in Q_WebServer_Dashboard, which renders the first paint, so the two
+// must stay in step: fmtMs, tpRow (topPathRow), ramLevel, swapLevel,
+// ramPct (ramPercentHtml), ramDetail (ramDetailHtml).
+function fmtMs(ms){ms=+ms||0;var r=Math.round(ms*10)/10;if(r<1000)return r+' ms';return(ms/1000).toFixed(2)+' s'}
+function tpRow(p){var h=esc(String(p.path));return'<div class="tp"><span class="p" title="'+h+'">'+h+
+'</span><span class="c">'+(parseInt(p.count,10)||0)+' req</span><span class="a">'+fmtMs(p.avgMs)+' avg</span></div>'}
+function ramLevel(pc){pc=+pc||0;return pc>=90?'crit':(pc>=70?'warn':'ok')}
+function swapLevel(u,t){u=+u||0;t=+t||0;if(u<=0)return'none';return(t>0&&u>t/2)?'crit':'warn'}
+function ramPct(r){return'<span class="sev-'+ramLevel(r.percent)+'">'+(parseInt(r.percent,10)||0)+'%</span>'}
+function ramDetail(r){
+var o=Math.round((r.usedMb||0)/1024*10)/10+' / '+Math.round((r.totalMb||0)/1024*10)/10+' GB';
+var st=+r.swapTotalMb||0,sw=+r.swapUsedMb||0;
+if(st>0||sw>0){o+=' &#183; <span class="sev-'+swapLevel(sw,st)+'">'+((sw>0&&sw<1024)?Math.round(sw)+' MB':Math.round(sw/1024*10)/10+' GB')+' swap</span>'}
+return o}
 
 function fmtMem(b){
 if(b<=0)return'\u2014';

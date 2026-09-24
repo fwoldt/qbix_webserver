@@ -98,6 +98,16 @@ check('the connections line separates its counts with the entity',
 check('...and so does the footer\'s documentation line',
 	strpos($dash, 'Documentation</a> &#183; Powered') !== false, true);
 check('the cards have a placeholder value', substr_count($dash, '&#8212;') >= 4, true);
+// The RAM detail separator is written by innerHTML and by the server-rendered
+// first paint alike, so it is the entity in both, not a script escape.
+check('the RAM detail separates used and swap with the entity, on both paths',
+	substr_count($dash, "' &#183; <span class=\"sev-'"), 2);
+
+// Top paths shows request data. The path is escaped on both render paths.
+check('the Top paths row escapes the path server-side',
+	strpos($dash, "htmlspecialchars((string) \$p['path'], ENT_COMPAT | ENT_SUBSTITUTE, 'UTF-8')") !== false, true);
+check('...and in the live refresh',
+	strpos($dash, 'var h=esc(String(p.path))') !== false, true);
 
 if ($fail) {
 	printf("\n  FAIL - %d of %d case(s)\n", $fail, $pass + $fail);
