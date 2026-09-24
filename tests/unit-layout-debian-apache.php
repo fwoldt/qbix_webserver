@@ -3,7 +3,7 @@
 /**
  * The configuration directory is read the way Debian's /etc/apache2 is.
  *
- *   DIR/vc.conf, ports.conf, envvars
+ *   DIR/<dir name>.conf (qbix.conf), ports.conf, envvars
  *   DIR/{mods,conf,sites}-available/*.conf, enabled by symlinks in *-enabled/
  *
  * merged base, ports.conf, mods-enabled, conf-enabled, then the site file
@@ -13,7 +13,7 @@
  *     because it exists;
  *   - the files, in apache2.conf order, *.conf and *.json only;
  *   - a disabled module (no symlink) and a dangling symlink are not loaded;
- *   - vc.conf and qbix.conf are both recognised, in /etc/vc and /etc/qbix alike;
+ *   - the base file is <dir name>.conf, and qbix.conf in any tree;
  *   - envvars is read, not executed;
  *   - the merged result, and the server's --layout report.
  *
@@ -34,12 +34,12 @@ function check($what, $got, $want)
 }
 
 $base = sys_get_temp_dir() . '/qbix-layout-' . getmypid();
-$dir = "$base/vc";
+$dir = "$base/qbix";
 foreach (array('', '/mods-available', '/mods-enabled', '/conf-available', '/conf-enabled', '/sites-available', '/sites-enabled') as $d) {
 	mkdir($dir . $d, 0755, true);
 }
 function put($f, $a) { file_put_contents($f, json_encode($a)); }
-put("$dir/vc.conf", array('Q' => array('web' => array('a' => 'base', 'b' => 'base', 'c' => 'base', 'd' => 'base'))));
+put("$dir/qbix.conf", array('Q' => array('web' => array('a' => 'base', 'b' => 'base', 'c' => 'base', 'd' => 'base'))));
 put("$dir/ports.conf", array('Q' => array('webserver' => array('port' => 8088))));
 put("$dir/mods-available/cache.conf", array('Q' => array('web' => array('b' => 'mod'))));
 put("$dir/mods-available/off.conf", array('Q' => array('web' => array('a' => 'DISABLED MODULE LOADED'))));
@@ -61,16 +61,16 @@ check('...and inside sites-available', $L::resolve(null, "$dir/sites-available/e
 check('--conf-dir wins', $L::resolve($dir . '/', null), $dir);
 check('--conf-dir=none turns it off', $L::resolve('none', "$dir/sites-enabled/example.conf"), null);
 check('a --conf-dir that does not exist is none, not a guess', $L::resolve("$base/missing", null), null);
-putenv("VC_CONF_DIR=$dir");
-check('VC_CONF_DIR is honoured', $L::resolve(null, null), $dir);
-putenv('VC_CONF_DIR');
+putenv("QBIX_CONF_DIR=$dir");
+check('QBIX_CONF_DIR is honoured', $L::resolve(null, null), $dir);
+putenv('QBIX_CONF_DIR');
 $L::$standardDirs = array("$base/etc-vc-absent", $dir);
 check('auto searches the standard places in order', $L::resolve('auto', null), $dir);
 
 // ── The files, in apache2.conf order ─────────────────────────────────────
 check('base, ports.conf, mods-enabled, conf-enabled -- nothing disabled, dangling or a backup',
 	array_map(function ($f) use ($dir) { return substr($f, strlen($dir) + 1); }, $L::files($dir)),
-	array('vc.conf', 'ports.conf', 'mods-enabled/cache.conf', 'conf-enabled/security.conf'));
+	array('qbix.conf', 'ports.conf', 'mods-enabled/cache.conf', 'conf-enabled/security.conf'));
 
 // ── Merged, then the site on top, as the server does ─────────────────────
 $L::load($dir);
@@ -80,12 +80,12 @@ check('each layer overrides the one before, the site last',
 check('ports.conf reaches the server settings', Q_Config::get('Q', 'webserver', 'port', null), 8088);
 
 // ── Base file names ──────────────────────────────────────────────────────
-$q = "$base/qbix";
+$q = "$base/example";
 mkdir($q, 0755, true);
-put("$q/vc.conf", array());
-check('a tree moved to /etc/qbix keeps its vc.conf', $L::mainFile($q), "$q/vc.conf");
 put("$q/qbix.conf", array());
-check('...and prefers the name matching its directory', $L::mainFile($q), "$q/qbix.conf");
+check('a tree moved to another directory keeps its qbix.conf', $L::mainFile($q), "$q/qbix.conf");
+put("$q/example.conf", array());
+check('...and prefers the name matching its directory', $L::mainFile($q), "$q/example.conf");
 
 // ── envvars ──────────────────────────────────────────────────────────────
 check('envvars: export and plain lines, quotes removed, nothing executed', $L::envvars($dir),

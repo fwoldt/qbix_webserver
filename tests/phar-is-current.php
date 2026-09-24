@@ -34,6 +34,7 @@ $add = function ($dir) use (&$expected, $base) {
 };
 $add($base . '/src');
 $expected['qbixserver.php'] = sha1_file($base . '/qbixserver.php');
+if (is_file($base . '/DISTRIBUTION')) $expected['DISTRIBUTION'] = sha1_file($base . '/DISTRIBUTION');
 $add($base . '/web');
 $add($base . '/designs');
 

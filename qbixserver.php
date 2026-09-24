@@ -110,7 +110,8 @@ $opts = array(
 	'open'    => null,  // --open[=/path] : open browser when server is ready
 	'debug'   => false,
 	'keep-globals' => null, // Globals the app keeps between requests
-	'conf-dir' => null, // Debian Apache-style configuration directory (/etc/vc, /etc/qbix), or auto
+	'conf-dir' => null, // Debian Apache-style configuration directory (/etc/qbix, plus overlays), or auto
+	'distribution' => null, // --distribution=NAME : a distribution's additions (Q_WebServer_Distribution_NAME)
 	'layout'  => false, // --layout : print the configuration files that would be loaded, and exit
 );
 
@@ -131,8 +132,10 @@ foreach ($argv as $i => $arg) {
 		echo "  --workers=N      Persistent workers (default: auto = nproc × 50)\n";
 		echo "  --config=FILE    JSON config file (usually DIR/sites-enabled/SITE.conf)\n";
 		echo "  --conf-dir=DIR   Configuration directory laid out like /etc/apache2:\n";
-		echo "                   vc.conf, ports.conf, mods-enabled/, conf-enabled/,\n";
-		echo "                   sites-enabled/ (auto = search /etc/vc, /etc/qbix)\n";
+		echo "                   qbix.conf, ports.conf, mods-enabled/, conf-enabled/,\n";
+		echo "                   sites-enabled/ (auto = /etc/qbix, with overlays on top)\n";
+		echo "  --distribution=NAME  Load Q_WebServer_Distribution_NAME's additions\n";
+		echo "                   (default: QBIX_DISTRIBUTION, then the DISTRIBUTION file)\n";
 		echo "  --layout         Print the configuration files that would be loaded, and exit\n";
 		echo "  --preset=NAME    Framework preset (laravel, symfony, wordpress, drupal, exponential)\n";
 		echo "  --pid=PATH       PID file path\n";
@@ -613,25 +616,51 @@ if (file_exists($appConfig)) {
 	Q_Config::load($appConfig);
 }
 
-// The configuration directory, laid out like Debian's /etc/apache2 -- vc.conf,
+// The configuration directory, laid out like Debian's /etc/apache2 -- qbix.conf,
 // ports.conf, mods-enabled/, conf-enabled/ -- below the site's own file. Only
 // when asked for (--conf-dir, QBIX_CONF_DIR/VC_CONF_DIR, or a --config inside
 // its sites-* directory); see Q_WebServer_Layout.
 require_once __DIR__ . '/src/Q/WebServer/Layout.php';
+// A distribution of the engine can add to it without changing it: named by
+// --distribution, QBIX_DISTRIBUTION or a DISTRIBUTION file in the source
+// tree, its class Q_WebServer_Distribution_<Name> is asked to register what
+// it adds -- another configuration tree stacked on /etc/qbix, for one. With
+// no distribution, or no such class, nothing changes.
+$distribution = $opts['distribution'] ?? (getenv('QBIX_DISTRIBUTION') ?: null);
+if ($distribution === null and is_file(__DIR__ . '/DISTRIBUTION')) {
+	$distribution = trim((string) file_get_contents(__DIR__ . '/DISTRIBUTION'));
+}
+if (is_string($distribution) and preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $distribution)) {
+	$distClass = 'Q_WebServer_Distribution_' . ucfirst(strtolower($distribution));
+	$distFile = __DIR__ . '/src/Q/WebServer/Distribution/' . ucfirst(strtolower($distribution)) . '.php';
+	if (!class_exists($distClass, false) and is_file($distFile)) require_once $distFile;
+	if (class_exists($distClass, false) and method_exists($distClass, 'register')) {
+		$distClass::register();
+		Q_Config::set('Q', 'webserver', 'distribution', strtolower($distribution));
+	}
+}
+// The base tree first, any overlays on top (Q_WebServer_Layout::stack()).
 $confDir = Q_WebServer_Layout::resolve($opts['conf-dir'], $opts['config']);
+$confDirs = Q_WebServer_Layout::stack($confDir);
 if ($opts['layout']) {
-	echo json_encode(Q_WebServer_Layout::describe($confDir, $opts['config']),
+	$described = array();
+	foreach ($confDirs ?: array(null) as $d) $described[] = Q_WebServer_Layout::describe($d, $opts['config']);
+	echo json_encode(count($described) === 1 ? $described[0] + array('stack' => $confDirs)
+		: array('stack' => $confDirs, 'trees' => $described),
 		JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
 	exit(0);
 }
 if ($opts['conf-dir'] !== null and $opts['conf-dir'] !== 'none' and $confDir === null) {
 	fwrite(STDERR, "  config: no configuration directory at {$opts['conf-dir']}\n");
 }
-Q_WebServer_Layout::load($confDir);
-// Remembered for what reads the tree later: the server's own page designs
-// are looked up in its designs/ before the engine's (Q_WebServer_Design).
-if ($confDir !== null) {
-	Q_Config::set('Q', 'webserver', 'confDir', $confDir);
+foreach ($confDirs as $d) {
+	Q_WebServer_Layout::load($d);
+}
+// Remembered for what reads the trees later: the server's own page designs
+// are looked up in their designs/, overlay first (Q_WebServer_Design).
+if ($confDirs) {
+	Q_Config::set('Q', 'webserver', 'confDirs', $confDirs);
+	Q_Config::set('Q', 'webserver', 'confDir', end($confDirs));
 }
 
 // User config file — loaded last so it overrides everything

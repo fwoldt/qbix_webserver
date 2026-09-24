@@ -13,12 +13,13 @@
  *   designs/<design>/<view>/style.css     included by {{@style.css}}
  *   designs/<design>/<view>/script.js     included by {{@script.js}}
  *
- * Files are looked up in the configuration directory's designs/ first
- * (/etc/vc/designs, laid out like the rest of that tree -- see
- * Q_WebServer_Layout), then in the engine's own designs/; and in the active
+ * Files are looked up in the configuration trees' designs/ first -- any
+ * overlay tree before the base /etc/qbix (see Q_WebServer_Layout::stack())
+ * -- then in the engine's own
+ * designs/; and in the active
  * design (Q.webserver.design) first, then in "default". So a design only has
  * to contain what it changes, and an operator can override one file of the
- * shipped design by putting that file in /etc/vc/designs/default/<view>/.
+ * shipped design by putting that file in <conf dir>/designs/default/<view>/.
  *
  * Rendering is plain substitution, never evaluation: {{@file}} includes a
  * file of the same view (one level), then every {{name}} is replaced by its
@@ -54,10 +55,17 @@ class Q_WebServer_Design
 	static function roots()
 	{
 		$roots = array();
-		$confDir = class_exists('Q_Config', false)
-			? Q_Config::get('Q', 'webserver', 'confDir', null) : null;
-		if (is_string($confDir) and $confDir !== '' and is_dir($confDir . '/designs')) {
-			$roots[] = $confDir . '/designs';
+		$dirs = class_exists('Q_Config', false)
+			? Q_Config::get('Q', 'webserver', 'confDirs', null) : null;
+		if (!is_array($dirs)) {
+			$one = class_exists('Q_Config', false) ? Q_Config::get('Q', 'webserver', 'confDir', null) : null;
+			$dirs = (is_string($one) and $one !== '') ? array($one) : array();
+		}
+		// Loaded base first, overlay last; looked up the other way round.
+		foreach (array_reverse($dirs) as $dir) {
+			if (is_string($dir) and $dir !== '' and is_dir($dir . '/designs')) {
+				$roots[] = $dir . '/designs';
+			}
 		}
 		$roots[] = self::engineDir();
 		return $roots;

@@ -5,20 +5,25 @@
 /**
  * Where the server's configuration lives on disk: the Debian Apache layout.
  *
- * A configuration directory -- /etc/vc for Velocity, /etc/qbix upstream,
- * each accepted wherever the other is -- is organised exactly like
+ * The configuration directory, /etc/qbix, is organised exactly like
  * /etc/apache2, because that is the structure organisations already run:
  *
- *   /etc/vc/vc.conf                base settings        (apache2.conf)
- *   /etc/vc/ports.conf             listen ports         (ports.conf)
- *   /etc/vc/envvars                process environment  (envvars)
- *   /etc/vc/conf-available/*.conf  shared snippets, enabled by a symlink
- *   /etc/vc/conf-enabled/          in conf-enabled
- *   /etc/vc/mods-available/*.conf  engine modules (http2, cache, compat...),
- *   /etc/vc/mods-enabled/          enabled by a symlink in mods-enabled
- *   /etc/vc/sites-available/*.conf one file per installation, enabled by
- *   /etc/vc/sites-enabled/         a symlink in sites-enabled
- *   /etc/vc/designs/               the server's own page designs
+ *   /etc/qbix/qbix.conf              base settings        (apache2.conf)
+ *   /etc/qbix/ports.conf             listen ports         (ports.conf)
+ *   /etc/qbix/envvars                process environment  (envvars)
+ *   /etc/qbix/conf-available/*.conf  shared snippets, enabled by a symlink
+ *   /etc/qbix/conf-enabled/          in conf-enabled
+ *   /etc/qbix/mods-available/*.conf  engine modules (http2, cache, compat...),
+ *   /etc/qbix/mods-enabled/          enabled by a symlink in mods-enabled
+ *   /etc/qbix/sites-available/*.conf one file per installation, enabled by
+ *   /etc/qbix/sites-enabled/         a symlink in sites-enabled
+ *   /etc/qbix/designs/               the server's own page designs
+ *
+ * Other trees laid out the same way can be stacked on top of it as
+ * overlays (addOverlay(), stack()): the base is loaded first and each
+ * overlay after it, so an overlay changes only what it sets. A distribution
+ * of the engine that keeps its own tree registers it that way (see
+ * qbixserver.php, --distribution).
  *
  * Files hold JSON objects -- the engine's configuration format -- under
  * Apache's names; envvars holds "export NAME=value" lines, as Apache's does.
@@ -26,9 +31,9 @@
  * the base file, ports.conf, mods-enabled, conf-enabled, and then the
  * --config file, which is normally a sites-enabled file.
  *
- * The directory is used only when asked for: --conf-dir, QBIX_CONF_DIR or
- * VC_CONF_DIR, or a --config file inside a sites-* directory of one. It is
- * never picked up just because it exists -- a machine's /etc/vc must not
+ * The directory is used only when asked for: --conf-dir, QBIX_CONF_DIR, or
+ * a --config file inside a sites-* directory of one. It is never picked up
+ * just because it exists -- a machine's /etc/qbix must not
  * change how an unrelated server, or a test suite, behaves. --conf-dir=auto
  * searches the standard places.
  *
@@ -38,14 +43,40 @@
 class Q_WebServer_Layout
 {
 	/**
-	 * Standard places, in search order. Velocity's own first: this fork
-	 * installs to /etc/vc, and still reads a tree left at /etc/qbix.
+	 * Standard places, in search order.
 	 * @property $standardDirs
 	 */
-	static $standardDirs = array('/etc/vc', '/etc/qbix');
+	static $standardDirs = array('/etc/qbix');
 
 	/** The available/enabled pairs, in load order (sites are loaded as --config). */
 	static $pairs = array('mods', 'conf', 'sites');
+
+	/** The variable that moves the base tree. */
+	const ENV = 'QBIX_CONF_DIR';
+
+	/**
+	 * Trees stacked on top of the base, in order, each laid out like it:
+	 * array(dir, environment variable that moves it). Empty unless something
+	 * registers one -- a distribution of the engine that keeps its own tree
+	 * beside /etc/qbix, say (see qbixserver.php, --distribution).
+	 * @property $overlays
+	 */
+	static $overlays = array();
+
+	/**
+	 * Stack another tree on top of the base one.
+	 * @method addOverlay
+	 * @static
+	 * @param {string} $dir its standard place, e.g. /etc/example
+	 * @param {string|null} $env a variable that, when set, moves it
+	 */
+	static function addOverlay($dir, $env = null)
+	{
+		foreach (self::$overlays as $o) {
+			if ($o[0] === $dir) return;
+		}
+		self::$overlays[] = array(rtrim($dir, '/'), $env);
+	}
 
 	/**
 	 * The configuration directory to use, or null for none.
@@ -63,7 +94,7 @@ class Q_WebServer_Layout
 		if ($explicit !== null and $explicit !== '') {
 			return is_dir($explicit) ? rtrim($explicit, '/') : null;
 		}
-		foreach (array('QBIX_CONF_DIR', 'VC_CONF_DIR') as $env) {
+		foreach (array_merge(array(self::ENV), array_filter(array_column(self::$overlays, 1))) as $env) {
 			$dir = getenv($env);
 			if (is_string($dir) and $dir !== '') {
 				return $dir === 'auto' ? self::search() : (is_dir($dir) ? rtrim($dir, '/') : null);
@@ -74,6 +105,43 @@ class Q_WebServer_Layout
 	}
 
 	/**
+	 * The trees to load, base first and overlays after it, for the directory
+	 * that was asked for. Only the base and its overlays stack: a directory
+	 * that is none of them is used alone, so a server pointed at its own tree
+	 * does not pick up the machine's because it happens to exist.
+	 *
+	 * @method stack
+	 * @static
+	 * @param {string|null} $asked what resolve() returned
+	 * @return {array}
+	 */
+	static function stack($asked)
+	{
+		if ($asked === null) return array();
+		$asked = rtrim($asked, '/');
+		$family = array(self::place(self::ENV, self::$standardDirs[0] ?? null));
+		foreach (self::$overlays as $o) {
+			$family[] = self::place($o[1], $o[0]);
+		}
+		if (!in_array($asked, $family, true)) return array($asked);
+		$stack = array();
+		foreach ($family as $dir) {
+			if ($dir !== null and ($dir === $asked or self::isConfDir($dir))) $stack[] = $dir;
+		}
+		return array_values(array_unique($stack));
+	}
+
+	/** A tree's directory: its variable when set to a directory, else its standard place. */
+	private static function place($env, $default)
+	{
+		$value = $env ? getenv($env) : false;
+		if (is_string($value) and $value !== '' and $value !== 'auto') {
+			return is_dir($value) ? rtrim($value, '/') : null;
+		}
+		return $default === null ? null : rtrim($default, '/');
+	}
+
+	/**
 	 * The first standard directory that holds a configuration.
 	 * @method search
 	 * @static
@@ -81,7 +149,7 @@ class Q_WebServer_Layout
 	 */
 	static function search()
 	{
-		foreach (self::$standardDirs as $dir) {
+		foreach (array_merge(self::$standardDirs, array_column(self::$overlays, 0)) as $dir) {
 			if (self::isConfDir($dir)) return $dir;
 		}
 		return null;
@@ -122,8 +190,9 @@ class Q_WebServer_Layout
 	}
 
 	/**
-	 * The base file: vc.conf in /etc/vc, qbix.conf in /etc/qbix, and either
-	 * name in either, so a tree moved from one to the other keeps working.
+	 * The base file: <dir name>.conf -- qbix.conf in /etc/qbix, and the same
+	 * rule for an overlay tree (/etc/example/example.conf) -- and qbix.conf
+	 * in any tree, so a tree moved from /etc/qbix keeps working.
 	 * @method mainFile
 	 * @static
 	 * @param {string} $dir
@@ -131,7 +200,7 @@ class Q_WebServer_Layout
 	 */
 	static function mainFile($dir)
 	{
-		foreach (array_unique(array(basename($dir) . '.conf', 'vc.conf', 'qbix.conf')) as $name) {
+		foreach (array_unique(array(basename($dir) . '.conf', 'qbix.conf')) as $name) {
 			if (is_file("$dir/$name")) return "$dir/$name";
 		}
 		return null;

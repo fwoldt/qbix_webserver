@@ -38,6 +38,8 @@ foreach ($it as $file) {
 
 // Add the main server file at root
 $phar->addFile(__DIR__ . '/qbixserver.php', 'qbixserver.php');
+// Which distribution of the engine this is (see qbixserver.php, --distribution).
+if (is_file(__DIR__ . '/DISTRIBUTION')) $phar->addFile(__DIR__ . '/DISTRIBUTION', 'DISTRIBUTION');
 
 // Add web/ directory for self-contained mode
 $webDir = __DIR__ . '/web';
