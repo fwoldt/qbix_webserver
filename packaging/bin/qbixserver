@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# qbixserver, as installed by the packages and the container image.
+# QBIX_HOME is where they put the server (default /usr/share/qbix-webserver);
+# PHP is the interpreter (default: php on PATH).
+QBIX_HOME="${QBIX_HOME:-/usr/share/qbix-webserver}"
+exec "${PHP:-php}" "$QBIX_HOME/bin/qbixserver.phar" "$@"

@@ -59,8 +59,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      distros: ${{ steps.plan.outputs.distros }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -76,6 +80,17 @@ jobs:
             '${{ github.event.inputs.php }}' \
             '${{ github.event.inputs.variants }}' >> "$GITHUB_OUTPUT"
           grep '^matrix=' "$GITHUB_OUTPUT" | cut -c1-2000
+          # The package distributions, and the version packages carry: the
+          # tag's, or for any other run the last tag plus ~dev and the commit
+          # (a version deb and rpm both sort before the next release).
+          echo "distros=$(php packaging/nfpm/render.php --list | awk '{print $1}' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then v="${GITHUB_REF_NAME#v}"; else
+            git fetch -q --tags origin || true
+            last=$(git tag -l 'v0.0.*' --sort=version:refname | tail -1); last="${last#v}"
+            v="${last:-0.0.0}~dev$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          grep -E '^(distros|version)=' "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -85,8 +100,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.platform }} php${{ matrix.php }} ${{ matrix.variant }}
-    # A leg marked experimental may fail without holding the others back.
-    # Only Windows is one; docs/binaries.md says why and what would change it.
+    # A leg marked experimental may fail without holding the others back:
+    # Windows (docs/binaries.md says why and what would change it) and the
+    # full variant, which is best effort everywhere.
     continue-on-error: ${{ matrix.experimental }}
     env:
       ART: qbixserver-${{ matrix.name }}
@@ -94,6 +110,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # The version the binary shows (--version, the dashboard). The phar is
+      # rebuilt here and stamps the nearest release tag -- but a checkout has
+      # no tags, so it fell back to the upstream engine's number, and spc's
+      # build directories made the tree look modified: v1.5.0+<commit>-dirty.
+      # The tag on a release build; the latest release tag on any other run.
+      - name: Name the version this build ships
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then v="${GITHUB_REF_NAME}"; else
+            v=$(git ls-remote --tags --refs origin 'v0.0.*' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          fi
+          echo "QBIX_SHIP_VERSION=$v" >> "$GITHUB_ENV"
+          printf '%s\n' buildroot/ downloads/ source/ spc spc-src/ log/ pkgroot/ win_exts.txt '*.obj' 'qbix_fork.*' \
+            'qbixserver-*' 'php-*' >> .git/info/exclude
+          echo "ships as $v"
 
       # ── Cache ────────────────────────────────────────────
       # The downloaded sources, per platform and PHP version: fetching them is
@@ -564,8 +596,43 @@ jobs:
           if-no-files-found: error
           path: qbixserver-source-kit-*.tar.gz
 
+  # deb and rpm, one per distribution, each installed in a clean container of
+  # that distribution and checked: dependencies resolve, the lite variant's
+  # extensions are all there, and the server serves a page as its user.
+  packages:
+    name: package ${{ matrix.distro }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ${{ fromJSON(needs.plan.outputs.distros) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Build
+        run: bash packaging/ci/build-packages.sh '${{ needs.plan.outputs.version }}' '${{ matrix.distro }}'
+
+      - name: Install and check in ${{ matrix.distro }}
+        run: bash packaging/ci/test-package.sh '${{ matrix.distro }}' dist/qbix-webserver*
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.distro }}
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+
   release:
-    needs: [build, source-kit, phar-is-current]
+    needs: [build, source-kit, packages, phar-is-current]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
