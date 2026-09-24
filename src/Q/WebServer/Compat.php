@@ -907,6 +907,10 @@ class Q_WebServer_Compat
 	{
 		$count = 0;
 		$dir = rtrim($dir, DIRECTORY_SEPARATOR);
+		// Nothing, or the filesystem root (which the trim turns into
+		// nothing): never a tree to walk. RecursiveDirectoryIterator throws a
+		// ValueError on '' and the server died at start.
+		if ($dir === '') return 0;
 		$root = realpath($dir) ?: $dir;
 
 		// A previous start already did this work. Nothing about a transform

@@ -1019,7 +1019,10 @@ if (!Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', false)) {
 	// src/ etc. are all cached. The web root is typically public/ or web/.
 	$prewarmDir = Q_Config::get('Q', 'compat', 'prewarmDir', null)
 		?: dirname($webDir);  // one level above --root
-	if (!is_dir($prewarmDir)) $prewarmDir = $webDir;
+	// A document root directly under / -- a container's /app -- has no
+	// project above it: one level up is the whole filesystem, which the walk
+	// tried to prewarm (and, trimmed to '', crashed on before it could).
+	if ($prewarmDir === DIRECTORY_SEPARATOR || !is_dir($prewarmDir)) $prewarmDir = $webDir;
 	$prewarmStarted = microtime(true);
 	$prewarmCount = Q_WebServer_Compat::prewarm($prewarmDir);
 	$prewarmMs = (microtime(true) - $prewarmStarted) * 1000;
