@@ -75,6 +75,7 @@ You can also package your entire app — code, assets, SQLite database — into 
 | 🧭 | [Lessons](docs/lessons.md) | What persists between requests, what workers inherit, memory, opcache, TLS in a forked child |
 | ⏳ | [Time-Consuming Lessons](docs/time-consuming-lessons.md) | The problems that took longest to diagnose: symptom, cause, how to recognise it, fix |
 | 📊 | [Dashboard & Panel](docs/dashboard.md) | Live stats, control panel tabs |
+| 🖥️ | [Q Shell](docs/shell.md) | Drop-down console on every server view: tiers, jobs, sudo, REST API |
 | 🎨 | [Designs](docs/designs.md) | Restyle the dashboard, panel, docs, listing and error pages from `designs/` |
 | 🚀 | [Deploy & Federation](docs/deploy.md) | Rsync deploy, cluster replication, inter-server trust |
 | 🔍 | [API Discovery](docs/api-discovery.md) | OpenAPI, MCP, qbix.json, HTTP/2 |
