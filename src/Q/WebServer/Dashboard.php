@@ -142,6 +142,17 @@ class Q_WebServer_Dashboard
 	}
 
 
+	/** Q_WebServer_Extensions::summary(), or null where the manifest is absent. */
+	static function extensionsSummary()
+	{
+		if (!class_exists('Q_WebServer_Extensions', false)) {
+			$f = __DIR__ . '/Extensions.php';
+			if (!is_file($f)) return null;
+			require_once $f;
+		}
+		return Q_WebServer_Extensions::summary();
+	}
+
 	static function getStats()
 	{
 		$up = time() - self::$stats['startTime'];
@@ -235,6 +246,9 @@ class Q_WebServer_Dashboard
 			'log' => Q_WebServer_Log::stats(),
 			'components' => Q_WebServer_Cache_Components::enabled()
 				? Q_WebServer_Cache_Components::stats() : null,
+			// The running PHP against the standard set of extensions: what is
+			// missing per tier, with the install commands. Computed once per process.
+			'extensions' => self::extensionsSummary(),
 			'php' => PHP_VERSION,
 			'os' => PHP_OS,
 			'sessions' => self::getSessionList(),

@@ -73,6 +73,16 @@ if(s.workerStats){
   el('cow-detail','<div>each request forks a fresh process (~120KB COW)</div>');
 }
 el('s2',s.status2xx);el('s3',s.status3xx);el('s4',s.status4xx);el('s5',s.status5xx);
+// PHP extensions against the standard set: the largest set this PHP provides,
+// what it lacks per tier, and the command that installs it.
+if(s.extensions&&!s.extensions.error){(function(){var x=s.extensions,mr=x.missing_required||[],mo=x.missing_recommended||[];
+el('extv',esc(String(x.variant_detected||'—')));var ve=document.getElementById('extv');if(ve)ve.className='v '+(mr.length?'sev-crit':(mo.length?'sev-warn':'sev-ok'));
+var d='<div>PHP '+esc(String(x.php))+' &#183; <span class="nw">'+esc(String(x.platform))+'</span></div>';
+if(mr.length)d+='<div class="sev-crit">required: '+esc(mr.join(', '))+'</div>';
+if(mo.length)d+='<div class="sev-warn">recommended: '+esc(mo.join(', '))+'</div>';
+if(!mr.length&&!mo.length)d+='<div class="sev-ok">nothing missing</div>';
+if(x.hints&&x.hints.length)d+='<div title="'+esc(x.hints.join('\n'))+'"><code>'+esc(x.hints[0]).split(' ').map(function(t){return '<span class="nw">'+t+'</span>'}).join(' ')+'</code></div>';
+el('extd',d)})()}
 el('bout',s.bytesFormatted);el('conn',s.connections);el('ka',s.keepAlive||0);
 el('srps',(s.rps)+' avg req/s');
 // Requests served, not workers: "5 PHP / 7 static" was read as a worker count.

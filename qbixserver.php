@@ -386,7 +386,8 @@ if ($opts['app']) {
 // When running as micro.sfx + phar (single binary), the phar contains
 // a web/ directory with the app's static files and PHP scripts.
 // If --root isn't specified, prefer the phar's web/ over the disk's.
-$pharRoot = Phar::running(false); // '' if not in a phar
+// Without the phar extension this cannot be running from a phar at all.
+$pharRoot = class_exists('Phar', false) ? Phar::running(false) : ''; // '' if not in a phar
 $servingFromPhar = false;
 $servingFromZip = false;
 $appendedZipPath = null;

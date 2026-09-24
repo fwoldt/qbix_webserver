@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 /**
  * Q_WebServer_Extensions and the ext:* commands: variants resolve to the

@@ -58,3 +58,5 @@ transition:background .1s}
 .qnav a{color:var(--dim);text-decoration:none;padding:2px 9px;border:1px solid var(--bdr);border-radius:10px;white-space:nowrap}
 .qnav a:hover,.qnav a:focus-visible{color:var(--txt);border-color:var(--ac)}
 .qnav a[aria-current=page]{color:var(--ac);background:var(--sfc)}
+.card code{font-size:10px;white-space:normal;overflow-wrap:break-word;background:none;padding:0}
+.card .nw{white-space:nowrap}

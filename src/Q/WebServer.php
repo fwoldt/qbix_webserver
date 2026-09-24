@@ -210,6 +210,44 @@ class Q_WebServer
 		exit(1);
 	}
 
+	/**
+	 * Refuse to start without an extension this configuration needs
+	 * (tokenizer for the source transform, openssl for HTTPS), printing the
+	 * install command; warn once, with the commands, about extensions missing
+	 * from the standard set. Q.webserver.extensionsCheck = false silences
+	 * the warning (never the refusal).
+	 * @method requireExtensions
+	 * @static
+	 * @param {boolean} $https whether HTTPS is configured
+	 */
+	static function requireExtensions($https)
+	{
+		if (!class_exists('Q_WebServer_Extensions', false)) {
+			$f = __DIR__ . '/WebServer/Extensions.php';
+			if (!is_file($f)) return;
+			require_once $f;
+		}
+		$transform = !Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', false);
+		$need = Q_WebServer_Extensions::hardNeeds(array('https' => (bool) $https, 'transform' => $transform));
+		if ($need) {
+			$msg = "\n  ERROR: this PHP lacks what the server needs to start:\n";
+			foreach ($need as $n) $msg .= "    $n[0]: $n[1]\n";
+			try {
+				$h = Q_WebServer_Extensions::installHints(array_column($need, 0));
+				foreach ($h['commands'] as $c) $msg .= "  fix: $c\n";
+			} catch (Throwable $e) {}
+			fwrite(STDERR, $msg . "\n");
+			exit(1);
+		}
+		if (Q_Config::get('Q', 'webserver', 'extensionsCheck', true) === false) return;
+		try {
+			$w = Q_WebServer_Extensions::startupWarning();
+		} catch (Throwable $e) {
+			$w = '  extensions: cannot check (' . $e->getMessage() . ")\n";
+		}
+		if ($w !== '') fwrite(STDERR, $w);
+	}
+
 	static function start($dir, $host = '0.0.0.0', $port = 80, $workers = 0)
 	{
 		self::requireIsolation();
@@ -288,6 +326,10 @@ class Q_WebServer
 				$explicitHttps = true; // certs found, enable HTTPS
 			}
 		}
+
+		// The extensions this configuration cannot run without stop the start
+		// here, with the fix; missing ones from the standard set are a warning.
+		self::requireExtensions($explicitHttps);
 
 		if ($explicitHttps) {
 			self::$httpsPort = $httpsPort;

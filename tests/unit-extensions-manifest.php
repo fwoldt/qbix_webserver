@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 /**
  * build/extensions.json is valid against build/extensions.schema.json, and
