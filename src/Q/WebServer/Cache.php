@@ -124,6 +124,74 @@ class Q_WebServer_Cache
 	static $dirModeExplicit = false;
 
 	/**
+	 * A file whose modification time invalidates every entry stored before it.
+	 *
+	 * The cache revalidates a page against what the application says about
+	 * it, and an application judges that by its content -- a template or a
+	 * stylesheet changed on disk moves nothing it looks at. So an entry made
+	 * from the old template kept being served and renewed, and a deploy had no
+	 * way to say "all of it". Touching this file says it, from the command
+	 * line or a deploy script, without a request to the server and without
+	 * reaching into APCu, which only the server's own processes can clear.
+	 *
+	 * Q.web.cache.generationFile; defaults to .generation in the cache dir.
+	 * '' when there is nowhere to keep it.
+	 * @property $generationFile
+	 */
+	static $generationFile = '';
+
+	/** @var int the marker's mtime as last read, 0 when there is none */
+	private static $generation = 0;
+
+	/** @var int when the marker was last read */
+	private static $generationChecked = -1;
+
+	/**
+	 * The current generation: the marker's mtime, read at most once a second.
+	 * @method generation
+	 * @static
+	 * @return {integer}
+	 */
+	static function generation()
+	{
+		if (self::$generationFile === '') return 0;
+		$now = time();
+		if ($now !== self::$generationChecked) {
+			self::$generationChecked = $now;
+			clearstatcache(true, self::$generationFile);
+			$mtime = @filemtime(self::$generationFile);
+			self::$generation = $mtime === false ? 0 : (int) $mtime;
+		}
+		return self::$generation;
+	}
+
+	/**
+	 * Start a new generation: every entry stored until now is a miss from the
+	 * next request on. The same as touching the marker, for callers in PHP.
+	 * @method bumpGeneration
+	 * @static
+	 * @return {boolean}
+	 */
+	static function bumpGeneration()
+	{
+		if (self::$generationFile === '') return false;
+		$ok = @touch(self::$generationFile);
+		self::$generationChecked = -1;
+		return $ok;
+	}
+
+	/**
+	 * Whether an entry (or index record) predates the current generation.
+	 * Stored in the same second as the bump counts as older: the safe side.
+	 */
+	private static function isOldGeneration($record)
+	{
+		$generation = self::generation();
+		if ($generation <= 0) return false;
+		return (int) ($record['stored'] ?? 0) <= $generation;
+	}
+
+	/**
 	 * Initialize cache from config.
 	 * @method init
 	 * @static
@@ -168,6 +236,9 @@ class Q_WebServer_Cache
 		self::$minifyHtml = (bool) Q::ifset($config, 'minifyHtml', false);
 		self::$middleOut = (bool) Q::ifset($config, 'middleOut', false);
 		self::$dictionary = null;   // reloaded lazily
+		self::$generationFile = (string) Q::ifset($config, 'generationFile',
+			self::$dir ? self::$dir . DIRECTORY_SEPARATOR . '.generation' : '');
+		self::$generationChecked = -1;
 	}
 
 	/**
@@ -309,6 +380,15 @@ class Q_WebServer_Cache
 		}
 
 		if ($entry === null) {
+			self::$misses++;
+			return null;
+		}
+
+		// Made before the last "clear everything": worthless, wherever it is.
+		if (self::isOldGeneration($entry)) {
+			if ($fromApcu) apcu_delete('qcache:' . $key);
+			if (self::$apcuEnabled) apcu_delete('qcache:v:' . $key);
+			if ($path) @unlink($path);
 			self::$misses++;
 			return null;
 		}
@@ -843,6 +923,7 @@ class Q_WebServer_Cache
 		apcu_store('qcache:v:' . $key, array(
 			'headers' => $headers,
 			'expires' => isset($entry['expires']) ? $entry['expires'] : 0,
+			'stored'  => isset($entry['stored']) ? (int) $entry['stored'] : time(),
 		), $ttl);
 	}
 
@@ -876,6 +957,12 @@ class Q_WebServer_Cache
 		// A stale index must not answer. Whether the page may still be served
 		// past its expiry is a decision made in get(), with the entry in hand.
 		if (!empty($index['expires']) and $index['expires'] < time()) return null;
+		// Nor one from before the last "clear everything": a 304 would keep the
+		// browser on the page that was cleared.
+		if (self::isOldGeneration($index)) {
+			apcu_delete('qcache:v:' . $key);
+			return null;
+		}
 
 		if (!isset($index['headers']) or !is_array($index['headers'])) return null;
 
