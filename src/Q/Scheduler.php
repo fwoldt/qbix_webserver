@@ -121,10 +121,14 @@ class Q_Scheduler
 			$autohostFile = dirname(__DIR__) . '/Q/WebServer/Autohost.php';
 			if (is_file($autohostFile)) {
 				require_once $autohostFile;
-				$result = Q_WebServer_Autohost::renewAll(30);
-				if (!empty($result['renewed'])) {
-					fwrite(STDERR, date('H:i:s') . " cert-renewal: renewed " . $result['renewed'] . " cert(s)\n");
-				}
+				// In the background: renewing asks the CA to fetch a file from
+				// this server, which the event loop must stay free to answer.
+				Q_WebServer_Certificate_Job::start('autohost-renewal',
+					Q_WebServer_Certificate_Store::defaultDir() . DIRECTORY_SEPARATOR . 'autohost-renewal.json',
+					function () {
+						$result = Q_WebServer_Autohost::renewAll(30);
+						return array('ok' => empty($result['errors']), 'error' => implode('; ', (array) ($result['errors'] ?? array())));
+					}, true);
 			}
 			return;
 		}

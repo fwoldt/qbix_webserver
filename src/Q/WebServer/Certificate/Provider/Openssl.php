@@ -64,7 +64,10 @@ abstract class Q_WebServer_Certificate_Provider_Openssl implements Q_WebServer_C
 	{
 		$san = array();
 		foreach ($hosts as $h) $san[] = (filter_var($h, FILTER_VALIDATE_IP) ? 'IP:' : 'DNS:') . $h;
-		$text = "[req]\ndistinguished_name = qbix_dn\nprompt = no\n[qbix_dn]\nCN = " . $hosts[0] . "\n"
+		// default_bits: PHP 8.3 checks a key length even for EC keys, and a
+		// configuration without one reads as 0 -- with no system openssl.cnf to
+		// fall back on (a minimal container) every key failed.
+		$text = "[req]\ndefault_bits = 2048\ndistinguished_name = qbix_dn\nprompt = no\n[qbix_dn]\nCN = " . $hosts[0] . "\n"
 			. "[qbix_ext]\nsubjectAltName = " . implode(',', $san) . "\n"
 			. "basicConstraints = critical,CA:FALSE\n"
 			. "keyUsage = critical,digitalSignature,keyEncipherment\n"

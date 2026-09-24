@@ -356,12 +356,22 @@ class Q_WebServer_Ctl
 			self::context($o);
 			$https = Q_Config::get('Q', 'web', 'https', array());
 			$rows = array();
-			if (!empty($https['cert'])) {
+			$mode = isset($https['mode']) ? $https['mode'] : 'manual';
+			$imported = Q_WebServer_Certificate_Store::defaultDir() . DIRECTORY_SEPARATOR . 'imported' . DIRECTORY_SEPARATOR;
+			$acmeState = null;
+			if ($mode === 'acme' or $mode === 'letsencrypt') {
+				if ($f = Q_WebServer_Acme::files($https)) { $rows['acme'] = array($f[0], $f[1]); $acmeState = Q_WebServer_Certificate_Job::state($f[2]); }
+			} elseif (in_array($mode, array('archive', 'pkcs12', 'remote'), true)) {
+				$rows[$mode] = array($imported . $mode . '.pem', $imported . $mode . '.key');
+			} elseif ($mode === 'certbot') {
+				$w = (new Q_WebServer_Certificate_Source_Certbot())->watched($https);
+				if ($w) $rows['certbot'] = $w;
+			} elseif (!empty($https['cert'])) {
 				$rows['configured'] = array($https['cert'], isset($https['key']) ? $https['key'] : '');
 			}
 			$store = new Q_WebServer_Certificate_Store();
 			$rows['self-signed'] = array($store->certFile(), $store->keyFile());
-			$report = array('mode' => isset($https['mode']) ? $https['mode'] : 'manual',
+			$report = array('mode' => $mode, 'acme' => $acmeState,
 				'fallback' => isset($https['fallback']) ? $https['fallback'] : 'self-signed', 'certificates' => array());
 			foreach ($rows as $label => $files) {
 				$c = Q_WebServer_Certificate::fromFiles($files[0], $files[1]);
@@ -372,6 +382,11 @@ class Q_WebServer_Ctl
 			}
 			if (!empty($o['json'])) { Q_Console::out(json_encode($report, JSON_UNESCAPED_SLASHES)); return 0; }
 			Q_Console::out('  mode       : ' . $report['mode'] . ' (fallback: ' . $report['fallback'] . ')');
+			if ($acmeState) {
+				Q_Console::out('  acme       : last attempt ' . (!empty($acmeState['lastAttempt']) ? date('Y-m-d H:i', $acmeState['lastAttempt']) : 'never')
+					. (!empty($acmeState['lastError']) ? ', last error: ' . $acmeState['lastError'] : '')
+					. (!empty($acmeState['nextAttempt']) ? ', next attempt ' . date('Y-m-d H:i', $acmeState['nextAttempt']) : ''));
+			}
 			foreach ($report['certificates'] as $label => $r) {
 				Q_Console::out(sprintf('  %-11s: %s', $label, $r['cert']));
 				Q_Console::out('               ' . (!$r['present'] ? 'not present'
@@ -394,6 +409,43 @@ class Q_WebServer_Ctl
 			return 0;
 		}, $ctxOpts + $verbosity + array('if-needed' => array('Only when it expires within 30 days, is unusable or the hosts changed', false)),
 			array(), '[host...]');
+		$C::add('ssl:check', 'Show what a certificate file, archive or bundle holds, and whether it would be served', function ($a, $o) {
+			if (!$a) { Q_Console::err('give one or more files: certificate, key, chain, archive or .p12'); return 1; }
+			$members = array();
+			$why = '';
+			foreach ($a as $file) {
+				if (!is_file($file)) { Q_Console::err("no such file: $file"); return 1; }
+				if (preg_match('/\.(zip|tar|tgz|tbz2?|txz|rar|7z|tar\.(gz|bz2|xz))$/i', $file)) {
+					$members += Q_WebServer_Certificate_Source_Archive::members($file, isset($o['password']) ? (string) $o['password'] : null, $why);
+				} else {
+					$members[basename($file)] = (string) file_get_contents($file);
+				}
+			}
+			$pw = isset($o['password']) ? (string) $o['password'] : null;
+			$c = Q_WebServer_Certificate_Source_Archive::fromMembers($members, isset($o['key-password']) ? (string) $o['key-password'] : $pw, $pw, $why);
+			if (!$c) { Q_Console::err('not usable: ' . $why); return 1; }
+			$chain = max(0, count(Q_WebServer_Certificate_Import::certificates($c->certPem)) - 1);
+			$p = openssl_x509_parse($c->certPem);
+			Q_Console::out('  usable     : yes (' . $c->keyType() . ' key)');
+			Q_Console::out('  hosts      : ' . implode(' ', $c->hosts()));
+			Q_Console::out('  issuer     : ' . ($p['issuer']['O'] ?? $p['issuer']['CN'] ?? '?'));
+			Q_Console::out('  expires    : ' . date('Y-m-d H:i', $c->expires()) . ' (' . $c->daysLeft() . ' days)');
+			Q_Console::out('  chain      : ' . $chain . ' certificate' . ($chain === 1 ? '' : 's') . ' after the leaf');
+			Q_Console::out('  fingerprint: ' . $c->fingerprint());
+			return 0;
+		}, array('password' => 'For an encrypted archive or .p12', 'key-password' => 'For an encrypted key'), array(), '<file>...');
+		$C::add('ssl:issue', 'Issue the ACME (Let\'s Encrypt) certificate now, in the foreground', function ($a, $o) {
+			self::context($o);
+			$config = Q_Config::get('Q', 'web', 'https', array());
+			if (!empty($o['staging'])) $config['acme']['directory'] = 'letsencrypt-staging';
+			if ($a) $config['acme']['domains'] = $a;
+			Q_Console::out('  issuing for ' . implode(' ', Q_WebServer_Acme::domains($config)) . ' from '
+				. Q_WebServer_Acme::directoryUrl($config['acme']['directory'] ?? null) . ' ...');
+			$r = (new Q_WebServer_Certificate_Source_Acme())->issueNow($config);
+			if (!$r['ok']) { Q_Console::err('failed: ' . $r['error']); return 1; }
+			Q_Console::out('  issued: ' . $r['cert'] . ' (expires ' . date('Y-m-d', $r['expires']) . '); a running server swaps it in within a minute');
+			return 0;
+		}, $ctxOpts + array('staging' => array('Use Let\'s Encrypt\'s staging server (for trying things out)', false)), array(), '[domain...]');
 		$C::add('cache:clear', 'Invalidate every page in the response cache', function ($a, $o) use ($say) {
 			self::context($o);
 			$dir = isset($o['cache-dir']) ? (string) $o['cache-dir'] : Q_Config::get('Q', 'web', 'cache', 'dir', null);

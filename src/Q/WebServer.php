@@ -366,23 +366,29 @@ class Q_WebServer
 				if (!Q_WebServer_Acme::needsRenewal($certPath)) continue;
 
 				$action = is_file($certPath) ? 'Renewing' : 'Provisioning';
-				fwrite(STDERR, "  [ACME] {$action} certificate for {$domainName}...\n");
-
 				$alts = $domainConf['aliases'] ?? [];
 				$allDomains = array_merge([$domainName], $alts);
-				$result = Q_WebServer_Acme::provision($allDomains, $certDir, $acmeEmail, $acmeStaging);
-
-				if ($result['success']) {
-					fwrite(STDERR, "  [ACME] ✓ Certificate ready for {$domainName}\n");
-					// If HTTPS wasn't started yet, start it now
-					if (!self::$tlsSocket && is_file($result['cert']) && is_file($result['key'])) {
-						Q_WebServer_Certs::init($domainName);
-						self::$httpsPort = $httpsPort ?: 443;
-						self::startTls($host, self::$httpsPort);
-					}
-				} else {
-					fwrite(STDERR, "  [ACME] ✗ Failed for {$domainName}: {$result['error']}\n");
-				}
+				// In the background: the CA validates by requesting a file from
+				// this server, which a blocked event loop could never answer.
+				$started = Q_WebServer_Certificate_Job::start('domain:' . $domainName,
+					rtrim($certDir, '/') . '/' . $domainName . '/state.json',
+					function () use ($allDomains, $certDir, $acmeEmail, $acmeStaging) {
+						$r = Q_WebServer_Acme::provision($allDomains, $certDir, $acmeEmail, $acmeStaging);
+						return array('ok' => !empty($r['success']), 'error' => $r['error'] ?? null);
+					});
+				if ($started) fwrite(STDERR, "  [ACME] {$action} certificate for {$domainName} in the background\n");
+				// Start HTTPS once it is there, if nothing else started it.
+				$keyPath = rtrim($certDir, '/') . '/' . $domainName . '/privkey.pem';
+				$timer = null;
+				$timer = Q_Evented::repeat(10.0, function () use (&$timer, $certPath, $keyPath, $domainName, $host, $httpsPort) {
+					if (self::$tlsSocket) { Q_Evented::cancel($timer); return; }
+					if (!Q_WebServer_Certs::pairUsable($certPath, $keyPath)) return;
+					Q_Evented::cancel($timer);
+					fwrite(STDERR, "  [ACME] Certificate ready for {$domainName}\n");
+					Q_WebServer_Certs::init($domainName);
+					self::$httpsPort = $httpsPort ?: 443;
+					self::startTls($host, self::$httpsPort);
+				});
 			}
 		}
 

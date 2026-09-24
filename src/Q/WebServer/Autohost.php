@@ -347,10 +347,16 @@ class Q_WebServer_Autohost
 		// Provision cert if ACME email is set
 		$certResult = null;
 		if ($email && class_exists('Q_WebServer_Acme')) {
-			$certResult = Q_WebServer_Acme::provision([$hostname], $certDir, $email, $staging);
-			if (empty($certResult['success'])) {
-				return ['success' => false, 'error' => $certResult['error'] ?? 'ACME failed'];
-			}
+			// In the background: the CA validates by fetching a file from this
+			// server, which cannot answer while it waits here. The domain's
+			// configuration is written now; the certificate follows.
+			Q_WebServer_Certificate_Job::start('autohost:' . $hostname,
+				rtrim($certDir, '/') . '/' . $hostname . '/state.json',
+				function () use ($hostname, $certDir, $email, $staging) {
+					$r = Q_WebServer_Acme::provision([$hostname], $certDir, $email, $staging);
+					return array('ok' => !empty($r['success']), 'error' => $r['error'] ?? null);
+				}, true);
+			$certResult = ['success' => true, 'pending' => true];
 		}
 
 		// Write domain config

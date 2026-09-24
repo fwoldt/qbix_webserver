@@ -13,7 +13,8 @@
  *     one after one interval to settle, and the configured one comes back as
  *     soon as it is usable again;
  *   - a server with no usable certificate at all comes up on a self-signed one
- *     in its ssl directory, instead of without HTTPS.
+ *     in its ssl directory, instead of without HTTPS;
+ *   - an archive (zip) is served, and a new one dropped in place is swapped in.
  * And without a server: an empty identity left by a failed signing is made
  * again, and a good one is never replaced.
  *
@@ -92,6 +93,26 @@ check('with no usable certificate, HTTPS comes up on a self-signed one', $until(
 check('...and the console says so on one line', substr_count(rh_log('bare'), 'tls: certificate ready'), 1);
 rh_stop($GLOBALS['rh']['servers']['bare']);
 
+
+// ── An archive dropped in place ──────────────────────────────────────────
+if (class_exists('ZipArchive')) {
+	$zip = function ($file, $c) {
+		@unlink("$file.tmp");
+		$z = new ZipArchive(); $z->open("$file.tmp", ZipArchive::CREATE);
+		$z->addFromString('certificate.crt', $c->certPem); $z->addFromString('private.key', $c->keyPem);
+		$z->close();
+		rename("$file.tmp", $file);
+	};
+	$zip("$base/site.zip", $make('lifecycle-zip-1'));
+	$tls3 = rh_free_port();
+	$GLOBALS['rh_extra_args'] = array("--https-port=$tls3");
+	rh_start('zip', array('Q' => array('web' => array('https' => array('mode' => 'archive',
+		'archive' => "$base/site.zip", 'watchInterval' => 1, 'selfSigned' => array('dir' => "$base/ssl3"))))), 1);
+	check('an archive\'s certificate is served', $until($tls3, 'lifecycle-zip-1', 10), 'lifecycle-zip-1');
+	$zip("$base/site.zip", $make('lifecycle-zip-2'));
+	check('...and a new archive dropped in place reaches the next connection', $until($tls3, 'lifecycle-zip-2', 8), 'lifecycle-zip-2');
+	rh_stop($GLOBALS['rh']['servers']['zip']);
+}
 // ── Identity ─────────────────────────────────────────────────────────────
 if (!defined('APP_DIR')) define('APP_DIR', "$base/app");
 @mkdir("$base/app/local", 0700, true);

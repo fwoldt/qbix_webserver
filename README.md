@@ -54,6 +54,7 @@ You can also package your entire app — code, assets, SQLite database — into 
 |---|---|---|
 | 📋 | [Changelog](CHANGELOG.md) | Every change worth reading, newest first. A release links here rather than repeating itself |
 | 🏎️ | [Why Not php-fpm?](docs/why.md) | COW memory model, comparison with Swoole and FrankenPHP |
+| 🔐 | [HTTPS & Certificates](docs/https.md) | Your own certificates (files, archives, .p12), Let's Encrypt built in, self-signed fallback, live renewal |
 | 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Cache-Tree, X-Accel-Redirect, ETag |
 | 🛡️ | [Security](docs/security.md) | What is refused and why: document-root containment, request framing, HTTP/2 frame validation, header injection |
 | 🌐 | [HTTP](docs/http.md) | Fork-per-request mode, request lifecycle |

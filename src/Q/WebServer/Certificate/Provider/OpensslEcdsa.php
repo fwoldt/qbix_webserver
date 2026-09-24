@@ -28,6 +28,8 @@ class Q_WebServer_Certificate_Provider_OpensslEcdsa extends Q_WebServer_Certific
 
 	protected function keyOptions()
 	{
-		return array('private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1');
+		// private_key_bits is ignored for EC, but PHP 8.3 refuses a key whose
+		// configured length reads as 0.
+		return array('private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1', 'private_key_bits' => 2048);
 	}
 }

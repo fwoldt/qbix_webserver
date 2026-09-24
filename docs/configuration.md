@@ -126,6 +126,19 @@ See [deploy.md](deploy.md) for what those two do and the order to set them up in
 
 Each host's files rotate, archive and prune on the same terms as the server's own, and the dashboard's log viewer takes `?host=` to show one of them.
 
+### HTTPS
+
+`Q.web.https` chooses where the certificate comes from — your own files, an
+archive or `.p12` from your CA, Let's Encrypt (built in), certbot, a URL, or a
+self-signed certificate — and the server checks, renews and swaps it by itself:
+
+```json
+"https": { "port": 443, "mode": "letsencrypt", "acme": { "email": "admin@example.com", "domains": ["example.com"] } }
+```
+
+Every setting, Let's Encrypt in depth, the supported file formats and
+troubleshooting: [HTTPS and Certificates](https.md).
+
 ### Hot reload
 
 Watch `classes/`, `handlers/`, and `config/` for file changes:
