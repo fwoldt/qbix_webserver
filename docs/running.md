@@ -41,6 +41,25 @@ The binary bundles PHP 8.3 + SQLite + OpenSSL + curl into a single ~15MB executa
 
 ---
 
+### Option styles
+
+Every command line here — `qbixserver.php`, `qbixconsole`, `qbixctl` and the small C
+server — takes GNU and BSD spellings alike:
+
+| Form | Meaning |
+|---|---|
+| `--name=V`, `--name V`, `-name=V`, `-name V` | an option that takes a value |
+| `--name`, `-name` | a flag |
+| `--no-name` | a flag turned off (the last spelling wins) |
+| `-abc` | one-letter flags bundled (`qbixconsole`) |
+| `--` | ends the options; the rest is passed on as plain arguments |
+
+A single-dash word is read as a long option only when it is a known option name, so
+one-letter options (`-t`, `-h`, `-v`) keep their meaning. A value option takes the next
+argument only when that does not start with a dash, so `--open` (whose value is
+optional) and `--root --debug` mean what they always did: give an optional value with
+`=`, as in `--open=/admin`.
+
 ## 🔨 Building
 
 ### Build the PHAR

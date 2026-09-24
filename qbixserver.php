@@ -121,9 +121,11 @@ $opts = array(
 //   --name value, -name value, -name=value   for options that take a value
 //   -name                                    for a long flag (-debug, -layout)
 //   --no-name                                turns a flag off
-// One-letter options (-t, -h, -v) are left alone, and so is everything after
-// "--". A value option only takes the next argument when it does not start
-// with a dash, so "--open" and "--root --debug" still mean what they did.
+// One-letter flags (-t, -h, -v) are left alone; the one-letter value option
+// -m (--verify-binary's threshold) also takes -m 2 and --m 2. Everything after
+// "--" is left alone too. A value option only takes the next argument when it
+// does not start with a dash, so "--open" and "--root --debug" still mean what
+// they did.
 if (!function_exists('qbix_normalize_argv')) {
 	function qbix_normalize_argv(array $argv, array $valued, array $flags)
 	{
@@ -132,7 +134,7 @@ if (!function_exists('qbix_normalize_argv')) {
 		for ($i = 0, $n = count($argv); $i < $n; $i++) {
 			$arg = (string) $argv[$i];
 			if ($arg === '--') { while (++$i < $n) $out[] = $argv[$i]; break; }
-			if (!preg_match('/^(--?)([A-Za-z][\w-]+)(=.*)?$/s', $arg, $m)) { $out[] = $arg; continue; }
+			if (!preg_match('/^(--?)([A-Za-z][\w-]*)(=.*)?$/s', $arg, $m)) { $out[] = $arg; continue; }
 			$name = $m[2]; $eq = isset($m[3]) ? $m[3] : '';
 			$known = in_array($name, $valued, true) || in_array($name, $flags, true);
 			if ($m[1] === '-' && !$known) { $out[] = $arg; continue; }
@@ -149,7 +151,7 @@ if (!function_exists('qbix_normalize_argv')) {
 $argv = qbix_normalize_argv($argv,
 	array('root', 'app', 'host', 'port', 'https-port', 'socket', 'socket-mode', 'workers', 'config',
 		'preset', 'sign', 'verify', 'key', 'key-id', 'generate-key', 'policy', 'pid', 'pack', 'output',
-		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer'),
+		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer', 'm'),
 	array('help', 'version', 'stop', 'reload', 'debug', 'hotreload', 'layout', 'gui', 'open', 'watchdog',
 		'sign-binary', 'verify-binary', 'publish-rekor'));
 
