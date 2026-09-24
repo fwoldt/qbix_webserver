@@ -96,7 +96,7 @@ class Q_WebServer_Compat
 	static function _clearstatcache($clearRealpathCache = false, $filename = '')
 	{
 		if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
-			Q_WebServer_CompatFileWrapper::forgetStats();
+			Q_WebServer_CompatFileWrapper::dropStats();
 		}
 		\clearstatcache((bool) $clearRealpathCache, (string) $filename);
 	}
@@ -2816,15 +2816,66 @@ class Q_WebServer_CompatFileWrapper
 	}
 
 	/**
-	 * Forget every remembered stat. Called at the end of each request and on
-	 * every change made through the wrapper.
+	 * Forget every remembered stat, at a request boundary: the end of a
+	 * request, or a worker's first one after a fork.
+	 *
+	 * When the opcode cache does not check timestamps on every include
+	 * (revalidate_freq above 0, or validate_timestamps off), it answers an
+	 * include of a script it holds without opening the file, so this wrapper
+	 * never sees the include and noteServed() never runs. A file another
+	 * process regenerated then kept running its old compile for as long as
+	 * revalidate_freq, which in a persistent worker is the rest of its life:
+	 * the cache reads its clock only at request startup. So here, once per
+	 * request, every path served so far is looked at again and the compile
+	 * of any whose mtime moved is dropped. With revalidate_freq=0 the cache
+	 * checks for itself and this costs nothing.
 	 * @method forgetStats
 	 * @static
 	 */
 	static function forgetStats()
 	{
+		self::dropStats();
+		if (!self::$servedMtime or !self::opcacheTrustsItsCopy()) {
+			return;
+		}
+		foreach (self::$servedMtime as $path => $mtime) {
+			$stat = self::includeStat($path);
+			$now = $stat === false ? -1 : (int) $stat['mtime'];
+			if ($now !== $mtime) {
+				@opcache_invalidate($path, true);
+				if ($now === -1) unset(self::$servedMtime[$path]);
+				else self::$servedMtime[$path] = $now;
+			}
+		}
+		// Those stats were taken between requests; the next request takes its own.
+		self::dropStats();
+	}
+
+	/**
+	 * Forget every remembered stat, for a change made through the wrapper or
+	 * a clearstatcache() inside a request.
+	 * @method dropStats
+	 * @static
+	 */
+	static function dropStats()
+	{
 		self::$statMemo = array();
 		self::$includeMemo = array();
+	}
+
+	/** @var bool|null whether the opcode cache serves includes without checking the file */
+	private static $opcacheTrusts = null;
+
+	/** Whether the opcode cache is on and answers includes without a stat. */
+	private static function opcacheTrustsItsCopy()
+	{
+		if (self::$opcacheTrusts === null) {
+			$on = function_exists('opcache_invalidate') && function_exists('opcache_get_status')
+				&& ($s = @opcache_get_status(false)) && !empty($s['opcache_enabled']);
+			self::$opcacheTrusts = $on && !(ini_get('opcache.validate_timestamps')
+				&& (int) ini_get('opcache.revalidate_freq') === 0);
+		}
+		return self::$opcacheTrusts;
 	}
 
 	/**
@@ -2839,13 +2890,18 @@ class Q_WebServer_CompatFileWrapper
 	 */
 	static function forgetFile($path)
 	{
-		self::forgetStats();
+		self::dropStats();
 		$path = preg_replace('/^file:\/\//', '', (string) $path);
 		if (isset(self::$contentCache[$path])) {
 			self::$contentBytes -= self::$contentCache[$path][1];
 			unset(self::$contentCache[$path]);
 		}
 		Q_WebServer_Compat::forgetTransform($path);
+		// The opcode cache may answer the next include of it without looking,
+		// so its compile goes too; see forgetStats().
+		if (self::opcacheTrustsItsCopy()) {
+			@opcache_invalidate($path, true);
+		}
 	}
 	/** @var string Buffered transformed content for reading */
 	private $buffer = '';
@@ -3314,7 +3370,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function mkdir($path, $mode, $options)
 	{
-		self::forgetStats();
+		self::dropStats();
 		self::unwrap($path);
 		$result = mkdir(preg_replace('/^file:\/\//', '', $path), $mode,
 			$options & STREAM_MKDIR_RECURSIVE);
@@ -3324,7 +3380,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function rmdir($path, $options)
 	{
-		self::forgetStats();
+		self::dropStats();
 		self::unwrap($path);
 		$result = rmdir(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
