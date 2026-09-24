@@ -47,7 +47,12 @@ At release time:
    its sources.
 3. Move everything under `## Unreleased` into a new `## vX.Y.Z.N` heading.
 4. Write the one-line summary on that heading. It becomes the release title.
-5. Commit, then tag that commit.
+5. Rebuild the phar stamped with the version being cut. It is built before
+   the tag exists, so without this it names the previous release:
+   ```bash
+   QBIX_SHIP_VERSION=vX.Y.Z.N php -d phar.readonly=0 build-phar.php
+   ```
+6. Commit, then tag that commit.
 
 Only the last position increments: `0.0.4.9` → `0.0.4.10` → `0.0.4.11`, never
 `0.0.5.0`. The last position is an integer and keeps counting; moving anything
@@ -61,6 +66,115 @@ edited down to what a reader actually needs.
 ---
 
 ## Unreleased
+
+Nothing yet.
+
+---
+
+## v0.0.4.27 — HTTPS that looks after itself, a worker pool that sizes itself, and workers that stay the size they started
+
+2026-09-24
+
+`v0.0.4.26` was tagged on 2026-09-23 but never released: it had no section
+here, so the workflow built it and stopped, as designed. It is still a
+version on Packagist. Everything it contained is described below, so a
+reader moving from `v0.0.4.25` needs only this section.
+
+### Added
+
+- **HTTPS that needs no setup and no attention.** With no certificate
+  configured the server makes its own self-signed one, through a chain of
+  providers tried in order (ECDSA, then SHA-256 RSA, then the `openssl`
+  command, then the system's snakeoil pair), so it works where one of them is
+  missing or refused. It follows the host names it is reached by, renews
+  before expiry, and swaps a new certificate into the running server without
+  a restart or a dropped connection. HTTPS comes up before HTTP. Every step is
+  reported through events, so the log says what was tried and why it failed.
+- **Certificates from wherever you keep them, and Let's Encrypt built in.**
+  PEM or DER files with their chain, a directory, a `.zip`, `.tar.gz`,
+  `.tar.bz2` or `.rar` archive, or a PKCS#12 bundle; and an RFC 8555 ACME
+  client for Let's Encrypt or any other ACME CA, run as a background job with
+  backoff so a CA outage never touches serving. See `docs/https.md`.
+- **A worker pool that runs only the workers it needs.** It grows with load
+  up to `Q.webserver.workers` and retires idle ones down to
+  `Q.webserver.spareWorkers` (measured on an Exponential install: 7,094 MB held
+  by a fixed pool of 590, 626 MB dynamic). A worker's
+  death never costs a request that could still be served: a GET, HEAD or
+  OPTIONS it had not started answering runs once more on another worker; a
+  POST is never run twice and gets a 502.
+- **A configuration directory laid out like Debian's `/etc/apache2`**:
+  `qbix.conf`, `ports.conf`, `envvars`, and `conf-`, `mods-` and
+  `sites-available` with `-enabled` symlinks. Overlay trees can be stacked on
+  `/etc/qbix`, and a distribution option lets an engine built on this one add
+  its own. See `docs/layout.md`.
+- **`qbixconsole` and `qbixctl`**: a console with commands, aliases,
+  abbreviations and help that needs no library, and apache2ctl-style control
+  (`start`, `stop`, `restart`, `status`, `configtest`) for the server.
+- **Every command line accepts GNU and BSD option spellings**: `--name=value`,
+  `--name value`, `-name=value`, `-name value`, bundled one-letter flags and
+  `--no-flag`.
+- **Designs on disk for the server's own pages**, so the dashboard, panel,
+  documentation, directory listing and error pages can be restyled without
+  editing the engine. See `docs/designs.md`.
+- **A toolbar linking the server's own views**, and documentation pages on
+  the layout, the console, designs, the response cache and workers.
+- **A generation marker for the response cache**: a deploy invalidates every
+  cached page by touching one file.
+- The exception class, file, line and a short trace in the log when a
+  script's exception reaches the worker.
+- Icons, a web app manifest and link previews for the server's own pages.
+- A pooled request is told the port it arrived on and the address it came
+  from.
+- `QBIX_SHIP_VERSION=vX.Y.Z.N` for `build-phar.php`, so a release's phar
+  shows the version being released. It is built before its tag exists, and
+  every release phar until now named the release before it.
+
+### Fixed
+
+- **A file rewritten after start could keep running its old code.** Three
+  separate paths, all closed: files the parent warm-up had included were
+  served as the warm-up saw them until a restart; a regenerated script ran its
+  previous compile when the opcode cache does not check timestamps on every
+  include; and a file rewritten while a worker sat idle was served once more
+  from the old compile. File stats and included files no longer go stale
+  within a request or within the same second either.
+- **Under PHP 8.2 and 8.3's function JIT (`opcache.jit=1235`) the source
+  transform wrote a script's code twice.** Once the transform loop turned hot
+  the JIT compiled it mid-call and the compiled loop restarted from the first
+  token while keeping its output. PHP 8.4 and later, tracing mode, and no JIT
+  were unaffected. The loop is now written so the JIT compiles it correctly,
+  and the test suite runs under 1235 again.
+- **The admin surface and cluster join were open to anyone who could reach
+  the port**, and a set of lower-severity issues from an audit are closed:
+  request framing (bare LF and obs-fold), log injection, response-cache
+  personalisation, dashboard injection through the Host header, and HPACK
+  decoded-size amplification. The HPACK check first applied to every header
+  block and broke every browser's HTTP/2 connection; it now applies only to
+  table-size updates.
+- **HTTP/2:** browsers that cancel streams across many reloads were cut off as
+  a rapid-reset attack (and every GOAWAY now logs why it was sent); requests
+  could be left unread in the TLS buffer; a pooled response cancelled the
+  reader of its whole connection; in fork-per-request mode a script's answer
+  closed the connection, leaving signed-in pages without their header and
+  styles; and one request for an unknown `/Q/` path hung the whole server.
+- **A newly forked worker ended every TLS connection open at that moment.**
+- **Request bodies of 0–47 and 58–255 bytes were refused** as
+  "Content-Length is not a number".
+- **An application's session name and cookie lifetime were ignored**, and
+  cached rewrites outlived a change to the rewrite rules.
+- A pooled script answered `HEAD` with its body and saw no `PATH_INFO`.
+- `php://input` in a worker printed a PHP 8.2+ deprecation for a dynamic
+  `$context` property into the response where `display_errors` is on.
+- The server's own certificate, and the test certificates, were refused where
+  the system will not sign with SHA-1.
+- `--verify-binary` printed PHP warnings for an unsigned file instead of
+  saying so, and `--sign-binary` exited 0 when it could not sign.
+- The dashboard: Top paths ran the count and the average time together,
+  System RAM is coloured by severity, the Live requests memory column was
+  empty with the newest entries hidden at the bottom, and TLS visitors were
+  recorded as `0.0.0.0`.
+- One hanging test hung the whole unit run and left the servers it had
+  started behind; the runner now times each test out.
 
 ### Fixed
 
