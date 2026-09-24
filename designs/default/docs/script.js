@@ -13,6 +13,7 @@ var docTitles = {
   "running.md": "Running & Building",
   "https.md": "HTTPS & Certificates",
   "security.md": "Security",
+  "passwords.md": "Panel Passwords",
   "cache.md": "Response Cache",
   "workers.md": "Workers & Pool",
   "lessons.md": "Lessons",
@@ -42,7 +43,7 @@ async function init() {
   if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
   var sections = {"Getting Started":["why.md","running.md","configuration.md","layout.md","console.md"],
     "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
-    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","deploy.md","binaries.md","api-discovery.md"],
+    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","api-discovery.md"],
     "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
     "Lessons":["lessons.md","time-consuming-lessons.md"],
     "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};

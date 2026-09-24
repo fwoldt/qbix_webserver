@@ -60,7 +60,7 @@ The `/Q/stats` JSON includes everything the dashboard shows, plus `sparkline` (6
 
 ## ⚙️ Control Panel
 
-Password-protected admin panel at `/Q/panel`. The first visit from this machine sets the password, or set it with `qbixctl panel:password` (below).
+Password-protected admin panel at `/Q/panel`. Until a password is chosen it signs in with the default key `panel` and asks for a new one straight away; or set one with `qbixctl panel:password` (below).
 
 **Apps tab** — discovers sibling app directories (any folder with `web/` or `config/app.json`). Create new apps, serve them (hot-switches the document root), open in VS Code, run configure scripts. Editable apps directory path.
 
@@ -79,11 +79,20 @@ The same rule on HTTP/1.1 and HTTP/2, for `/Q/panel` and everything under `/Q/ap
 | From | Allowed when |
 |---|---|
 | This machine | always |
-| Anywhere else | a panel password is set (the page shows its login form, and every API call but `auth/login` needs the session it gives), **or** the request carries the dashboard token or a panel session, **or** `Q.panel.remote` or `Q.dashboard.remote` is `true` |
+| Anywhere else | a password is set, or the default key is in force (the page shows its login form; every API call but `auth/login` needs the session it gives), **or** the request carries the dashboard token or a panel session, **or** `Q.panel.remote` or `Q.dashboard.remote` is `true` |
 
 Anything else gets the server's own 403 page, which says how to set a password.
 
-The **first** password can be set in the page only from this machine, with the
+Until a password is chosen, the **default key `panel`** signs in -- from anywhere,
+so a server can be set up from outside -- and the session it gives can only change
+it: the page shows nothing but a change form until a password that passes the rules
+in [passwords.md](passwords.md) is set. While the default is unchanged, anyone who
+knows it can sign in first; set `Q.panel.defaultLocalOnly` to accept it only from
+this machine (or with the dashboard token), or set `Q.panel.defaultPassword` to
+`null` to switch it off, in which case the first password is set from this machine,
+with the dashboard token, or on the command line.
+
+With the default switched off, the **first** password can be set in the page only from this machine, with the
 dashboard token, or where `Q.panel.remote` is `true` -- never by whoever happens to
 reach the page first. A remote visitor who reaches a panel with no password yet is
 told how to set it instead of being offered the form.
@@ -94,11 +103,15 @@ told how to set it instead of being offered the form.
 qbixctl panel:password --root=/path/to/web          # asks twice, without echo
 echo 'a new password' | qbixctl panel:password --root=/path/to/web
 qbixctl panel:password --root=/path/to/web --password='a new password'
+qbixctl panel:password --root=/path/to/web --generate     # makes a strong one, prints it once
 ```
 
 Pass the same `--root` the server runs with (or `--app=DIR` for a server run with
 `--app`): the password goes where the server keeps it, `local/panel.json` in the
-directory above the document root, stored as the page stores it. Changing it signs
+directory above the document root -- for `--root=/srv/site/web`, that is
+`/srv/site/local/panel.json` -- stored as the page stores it (bcrypt). It must pass
+the rules in [passwords.md](passwords.md); `--generate` makes one that does, sets it
+and prints it once. Changing it signs
 out every existing session. A running server uses it on the next request; nothing
 needs restarting. `qbixconsole panel:password` is the same command.
 
