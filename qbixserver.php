@@ -115,6 +115,44 @@ $opts = array(
 	'layout'  => false, // --layout : print the configuration files that would be loaded, and exit
 );
 
+
+// Accept GNU and BSD spellings of every option, by rewriting them into the one
+// form the loop below reads (--name=value, --name):
+//   --name value, -name value, -name=value   for options that take a value
+//   -name                                    for a long flag (-debug, -layout)
+//   --no-name                                turns a flag off
+// One-letter options (-t, -h, -v) are left alone, and so is everything after
+// "--". A value option only takes the next argument when it does not start
+// with a dash, so "--open" and "--root --debug" still mean what they did.
+if (!function_exists('qbix_normalize_argv')) {
+	function qbix_normalize_argv(array $argv, array $valued, array $flags)
+	{
+		$out = array(array_shift($argv));
+		$argv = array_values($argv);
+		for ($i = 0, $n = count($argv); $i < $n; $i++) {
+			$arg = (string) $argv[$i];
+			if ($arg === '--') { while (++$i < $n) $out[] = $argv[$i]; break; }
+			if (!preg_match('/^(--?)([A-Za-z][\w-]+)(=.*)?$/s', $arg, $m)) { $out[] = $arg; continue; }
+			$name = $m[2]; $eq = isset($m[3]) ? $m[3] : '';
+			$known = in_array($name, $valued, true) || in_array($name, $flags, true);
+			if ($m[1] === '-' && !$known) { $out[] = $arg; continue; }
+			if ($eq === '' && in_array($name, $valued, true) && $i + 1 < $n
+				&& ((string) $argv[$i + 1] === '' || ((string) $argv[$i + 1])[0] !== '-')) {
+				$out[] = '--' . $name . '=' . $argv[++$i];
+				continue;
+			}
+			$out[] = '--' . $name . $eq;
+		}
+		return $out;
+	}
+}
+$argv = qbix_normalize_argv($argv,
+	array('root', 'app', 'host', 'port', 'https-port', 'socket', 'socket-mode', 'workers', 'config',
+		'preset', 'sign', 'verify', 'key', 'key-id', 'generate-key', 'policy', 'pid', 'pack', 'output',
+		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer'),
+	array('help', 'version', 'stop', 'reload', 'debug', 'hotreload', 'layout', 'gui', 'open', 'watchdog',
+		'sign-binary', 'verify-binary', 'publish-rekor'));
+
 foreach ($argv as $i => $arg) {
 	if ($i === 0) continue;
 	if ($arg === '--help' || $arg === '-h') {
@@ -156,6 +194,8 @@ foreach ($argv as $i => $arg) {
 		echo "  --gui            With --pack: mark binary as GUI app (no console on Windows)\n";
 		echo "  --open[=/path]   Open browser when server is ready (default: /)\n";
 		echo "  --version        Print version\n";
+		echo "\nValues may be given as --name=V, --name V, -name=V or -name V;\n";
+		echo "flags as --name or -name, and turned off with --no-name.\n";
 		echo "\nQuick start:\n";
 		echo "  mkdir -p web && echo '<?php echo \"Hello!\";' > web/index.php\n";
 		echo "  $me\n";
@@ -220,6 +260,10 @@ foreach ($argv as $i => $arg) {
 	}
 	if ($arg === '--publish-rekor') {
 		$opts['publishRekor'] = true;
+		continue;
+	}
+	if (preg_match('/^--no-([\w-]+)$/', $arg, $m)) {
+		$opts[$m[1]] = false;
 		continue;
 	}
 	if (preg_match('/^--([\w-]+)=(.+)$/', $arg, $m)) {

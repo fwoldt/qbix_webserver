@@ -57,36 +57,81 @@ class Q_Console
 	}
 
 	/**
-	 * Split argv into positional arguments and options. `--` ends options.
-	 * --name=value, --name value is NOT taken (ambiguous), --flag is true,
-	 * -abc is three true flags, --no-name is false.
+	 * Split argv into positional arguments and options, GNU or BSD style:
+	 *
+	 *   --name=value   --name value    GNU long option (value options only
+	 *                                   take the next argument)
+	 *   -name=value    -name value     BSD single-dash long option, for any
+	 *                                   name longer than one letter that is
+	 *                                   a known option
+	 *   --flag  -flag  --no-flag       flags (true / true / false)
+	 *   -abc                            bundled one-letter flags
+	 *   --                              ends options; the rest is positional
 	 *
 	 * @method parse
 	 * @static
 	 * @param {array} $argv without the program name
+	 * @param {array} $valued names of options that take a value
+	 * @param {array} $known names of every known option (values and flags);
+	 *   a single-dash word is a long option only if it is one of these
 	 * @return {array} array($positional, $options)
 	 */
-	static function parse(array $argv)
+	static function parse(array $argv, array $valued = null, array $known = null)
 	{
+		if ($valued === null) $valued = self::valueOptions();
+		if ($known === null) $known = self::knownOptions();
 		$positional = array(); $options = array(); $done = false;
-		foreach ($argv as $arg) {
-			$arg = (string) $arg;
+		$argv = array_values($argv);
+		for ($i = 0, $n = count($argv); $i < $n; $i++) {
+			$arg = (string) $argv[$i];
 			if ($done or $arg === '' or $arg[0] !== '-' or $arg === '-') { $positional[] = $arg; continue; }
 			if ($arg === '--') { $done = true; continue; }
-			if (strncmp($arg, '--', 2) === 0) {
-				$eq = strpos($arg, '=');
-				if ($eq !== false) {
-					$options[substr($arg, 2, $eq - 2)] = substr($arg, $eq + 1);
-				} elseif (strncmp($arg, '--no-', 5) === 0) {
-					$options[substr($arg, 5)] = false;
-				} else {
-					$options[substr($arg, 2)] = true;
-				}
+			$long = strncmp($arg, '--', 2) === 0;
+			$body = substr($arg, $long ? 2 : 1);
+			$eq = strpos($body, '=');
+			$name = $eq === false ? $body : substr($body, 0, $eq);
+			// A single dash is a long option only for a known word (BSD style,
+			// -config /path); otherwise it is bundled letters (-abc).
+			if (!$long and (strlen($name) === 1 or !in_array($name, $known, true))) {
+				if ($eq !== false and strlen($name) === 1) { $options[$name] = substr($body, $eq + 1); continue; }
+				foreach (str_split($body) as $flag) $options[$flag] = true;
 				continue;
 			}
-			foreach (str_split(substr($arg, 1)) as $flag) $options[$flag] = true;
+			if ($eq !== false) { $options[$name] = substr($body, $eq + 1); continue; }
+			if (in_array($name, $valued, true) and $i + 1 < $n
+				and ((string) $argv[$i + 1] === '' or ((string) $argv[$i + 1])[0] !== '-')) {
+				$options[$name] = (string) $argv[++$i];
+				continue;
+			}
+			if (strncmp($name, 'no-', 3) === 0 and !in_array($name, $known, true)) { $options[substr($name, 3)] = false; continue; }
+			$options[$name] = true;
 		}
 		return array($positional, $options);
+	}
+
+	/**
+	 * Names of options that take a value, across every command: an option is
+	 * declared as a flag by giving its description as array(description, false).
+	 */
+	static function valueOptions()
+	{
+		$out = array();
+		foreach (self::$commands as $c) {
+			foreach ($c['options'] as $name => $d) {
+				if (!(is_array($d) and isset($d[1]) and $d[1] === false)) $out[$name] = true;
+			}
+		}
+		return array_keys($out);
+	}
+
+	/** Names of every declared option, and help. */
+	static function knownOptions()
+	{
+		$out = array('help' => true);
+		foreach (self::$commands as $c) {
+			foreach ($c['options'] as $name => $d) $out[$name] = true;
+		}
+		return array_keys($out);
 	}
 
 	/**
@@ -200,7 +245,13 @@ class Q_Console
 			self::out('');
 			self::out(self::style('Options:', 'head'));
 			$w = max(array_map('strlen', array_keys($c['options']))) + 4;
-			foreach ($c['options'] as $o => $d) self::out('  ' . self::style(str_pad('--' . $o, $w), 'name') . $d);
+			foreach ($c['options'] as $o => $d) {
+				$flag = is_array($d) && isset($d[1]) && $d[1] === false;
+				$text = is_array($d) ? $d[0] : $d;
+				self::out('  ' . self::style(str_pad('--' . $o . ($flag ? '' : '=V'), $w + 2), 'name') . $text);
+			}
+			self::out('');
+			self::out('  Values: --name=V, --name V, -name=V or -name V. Flags: --name, -name, --no-name.');
 		}
 	}
 

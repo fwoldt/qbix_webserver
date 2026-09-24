@@ -1273,12 +1273,27 @@ int main(int argc, char** argv) {
     int port = 8080, tls_port = 0;
     const char *cert = NULL, *key = NULL;
 
+    /* GNU and BSD spellings alike: --name=V, --name V, -name=V, -name V. */
     for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "--port=", 7) == 0) port = atoi(argv[i]+7);
-        else if (strncmp(argv[i], "--tls-port=", 11) == 0) tls_port = atoi(argv[i]+11);
-        else if (strncmp(argv[i], "--cert=", 7) == 0) cert = argv[i]+7;
-        else if (strncmp(argv[i], "--key=", 6) == 0) key = argv[i]+6;
-        else if (argv[i][0] != '-') port = atoi(argv[i]);
+        const char *a = argv[i], *val = NULL;
+        static const char *names[] = { "port", "tls-port", "cert", "key" };
+        int which = -1;
+        if (a[0] != '-') { port = atoi(a); continue; }
+        a += (a[1] == '-') ? 2 : 1;
+        for (int n = 0; n < 4; n++) {
+            size_t len = strlen(names[n]);
+            if (strncmp(a, names[n], len) == 0 && (a[len] == '=' || a[len] == '\0')) {
+                which = n;
+                if (a[len] == '=') val = a + len + 1;
+                else if (i + 1 < argc && argv[i + 1][0] != '-') val = argv[++i];
+                break;
+            }
+        }
+        if (which < 0 || !val) continue;
+        if (which == 0) port = atoi(val);
+        else if (which == 1) tls_port = atoi(val);
+        else if (which == 2) cert = val;
+        else key = val;
     }
 
     /* TLS setup */

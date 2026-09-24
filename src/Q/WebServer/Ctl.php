@@ -312,7 +312,7 @@ class Q_WebServer_Ctl
 			Q_Console::out('  pid file   : ' . $s['pidFile']);
 			Q_Console::out('  listening  : ' . ($s['listening'] ? implode(', ', $s['listening']) : 'nothing'));
 			return $s['running'] ? 0 : 3; // as LSB init scripts report "not running"
-		}, $srvOpts + array('json' => 'Report as JSON'), array('status'));
+		}, $srvOpts + array('json' => array('Report as JSON', false)), array('status'));
 		$C::add('server:configtest', 'Check that every configuration file parses', function ($a, $o) {
 			$ctx = self::context($o);
 			list($ok, $lines) = self::configTest($ctx['files']);
