@@ -45,6 +45,11 @@ if (!preg_match('/\n\tstatic function closeInheritedDescriptors\(\).*?\n\t\}\n/s
 	fwrite(STDERR, "  FAIL - closeInheritedDescriptors() not found in src/Q/WebServer.php\n");
 	exit(1);
 }
+// ...and the helper it releases each stream through (which keeps TLS streams
+// open rather than sending close_notify on the parent's connection).
+if (preg_match('/\n\tstatic function releaseInherited\(.*?\n\t\}\n/s', $src, $r)) {
+	$m[0] .= $r[0];
+}
 
 eval('class T {
 	private static $socket = null;

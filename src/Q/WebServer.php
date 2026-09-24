@@ -5342,7 +5342,7 @@ HTML;
 
 		foreach (array('socket', 'tlsSocket', 'udsSocket') as $name) {
 			if (isset(self::$$name) and is_resource(self::$$name)) {
-				@fclose(self::$$name);
+				self::releaseInherited(self::$$name);
 				$closed++;
 			}
 			self::$$name = null;
@@ -5353,7 +5353,7 @@ HTML;
 		// to read.
 		foreach (self::$clients as $key => $client) {
 			if (is_resource($client)) {
-				@fclose($client);
+				self::releaseInherited($client);
 				$closed++;
 			}
 		}
@@ -5363,13 +5363,60 @@ HTML;
 		// HTTP/2 connections wrap a client socket of their own.
 		foreach (self::$http2 as $key => $conn) {
 			if (is_object($conn) and isset($conn->socket) and is_resource($conn->socket)) {
-				@fclose($conn->socket);
+				self::releaseInherited($conn->socket);
 				$closed++;
 			}
 		}
 		self::$http2 = array();
 
 		return $closed;
+	}
+
+	/**
+	 * Let go of a stream a forked worker inherited, without touching the
+	 * connection it belongs to.
+	 *
+	 * A plain socket is closed: on Linux that only drops this process's
+	 * reference. A TLS stream must NOT be: PHP closes one with SSL_shutdown(),
+	 * which WRITES a close_notify alert onto the socket -- the same socket the
+	 * parent is still using for that visitor. Every worker forked while TLS
+	 * connections were open therefore ended them: the visitor saw "connection
+	 * closed without response". Rare while workers were only forked to
+	 * replace one; constant once a dynamic pool forked under load (239 of 360
+	 * requests in a burst on alpha).
+	 *
+	 * So a TLS stream is parked in a function-level static (outside anything
+	 * the per-request snapshot restores) and never destroyed by PHP. The
+	 * worker, once it has parked any, ends with SIGKILL after its shutdown
+	 * functions have run, so the kernel closes those descriptors silently.
+	 * The parent's own close of the connection still sends close_notify, so
+	 * the visitor still sees it end.
+	 *
+	 * @method releaseInherited
+	 * @static
+	 * @param {resource} $stream
+	 * @return {boolean} true if closed, false if parked (or not a resource)
+	 */
+	static function releaseInherited($stream)
+	{
+		static $parked = array();
+		if (!is_resource($stream)) return false;
+		$meta = @stream_get_meta_data($stream);
+		if (empty($meta['crypto'])) {
+			@fclose($stream);
+			return true;
+		}
+		if (!$parked and function_exists('posix_kill') and defined('SIGKILL')) {
+			// Registered from inside a shutdown function so it runs after
+			// every other one, including any the worker adds later.
+			register_shutdown_function(function () {
+				register_shutdown_function(function () {
+					posix_kill(getmypid(), SIGKILL);
+				});
+			});
+		}
+		$parked[] = $stream;
+		return false;
 	}
 
 	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array())
