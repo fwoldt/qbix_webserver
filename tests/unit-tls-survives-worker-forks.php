@@ -37,8 +37,11 @@ echo "ok ", getmypid();
 
 // A throwaway self-signed certificate.
 $key = openssl_pkey_new(array('private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA));
-$csr = openssl_csr_new(array('commonName' => '127.0.0.1'), $key);
-$crt = openssl_csr_sign($csr, null, $key, 2);
+// sha256, because PHP's default is SHA-1, which a system crypto policy may
+// refuse to sign with (RHEL's DEFAULT does); the server then never gets a
+// certificate and this test waits for a TLS connection that never comes.
+$csr = openssl_csr_new(array('commonName' => '127.0.0.1'), $key, array('digest_alg' => 'sha256'));
+$crt = openssl_csr_sign($csr, null, $key, 2, array('digest_alg' => 'sha256'));
 openssl_x509_export($crt, $crtPem);
 openssl_pkey_export($key, $keyPem);
 file_put_contents("$base/cert.pem", $crtPem);

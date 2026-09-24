@@ -161,14 +161,22 @@ class Q_Utils
 			'private_key_bits' => 2048,
 			'private_key_type' => OPENSSL_KEYTYPE_RSA,
 		));
-		$csr = openssl_csr_new(array(
+		// The digest is named because PHP's default is SHA-1, which a system
+		// crypto policy may refuse to sign with -- RHEL's DEFAULT does. Both
+		// calls then fail, and what came back was a certificate of nothing,
+		// which the identity stored and kept using on every start.
+		$options = array('digest_alg' => 'sha256');
+		$csr = $key ? openssl_csr_new(array(
 			'commonName' => $cn,
 			'organizationName' => 'Qbix Server',
-		), $key);
-		$cert = openssl_csr_sign($csr, null, $key, 3650); // 10 years
+		), $key, $options) : false;
+		$cert = $csr ? openssl_csr_sign($csr, null, $key, 3650, $options) : false; // 10 years
 
-		openssl_x509_export($cert, $certPem);
-		openssl_pkey_export($key, $keyPem);
+		if (!$cert
+			or !openssl_x509_export($cert, $certPem)
+			or !openssl_pkey_export($key, $keyPem)) {
+			return null;
+		}
 
 		// Fingerprint
 		$der = openssl_x509_fingerprint($cert, 'sha256');

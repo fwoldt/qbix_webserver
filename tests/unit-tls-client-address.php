@@ -18,7 +18,10 @@ list($base, $root) = rh_setup('tls-address');
 file_put_contents($root . DS . 'index.php', '<?php echo "addr=", $_SERVER["REMOTE_ADDR"] ?? "none";');
 
 $key = openssl_pkey_new(array('private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA));
-$crt = openssl_csr_sign(openssl_csr_new(array('commonName' => '127.0.0.1'), $key), null, $key, 2);
+// sha256, because PHP's default is SHA-1, which a system crypto policy may
+// refuse to sign with (RHEL's DEFAULT does).
+$sha256 = array('digest_alg' => 'sha256');
+$crt = openssl_csr_sign(openssl_csr_new(array('commonName' => '127.0.0.1'), $key, $sha256), null, $key, 2, $sha256);
 openssl_x509_export($crt, $crtPem); openssl_pkey_export($key, $keyPem);
 file_put_contents("$base/cert.pem", $crtPem); file_put_contents("$base/key.pem", $keyPem);
 
