@@ -1585,6 +1585,10 @@ class Q_WebServer
 			return 'conflicting Content-Length values';
 		}
 		foreach (array_keys($lengths) as $one) {
+			// A numeric key comes back as an int, and ctype_digit() reads an
+			// int from -128 to 255 as an ASCII code: Content-Length: 100 would
+			// be chr(100), "d", and refused. Compare the text that was sent.
+			$one = (string) $one;
 			if ($one === '' or !ctype_digit($one)) {
 				return 'Content-Length is not a number';
 			}
