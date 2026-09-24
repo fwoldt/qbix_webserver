@@ -398,6 +398,16 @@ class Q_WebServer_Pool
 				}
 			}
 
+			// Cycles the request left behind. Everything it built is now
+			// unreachable, but objects that point at each other are freed
+			// only by the cycle collector, and PHP runs that on its own only
+			// when its root buffer fills -- raising the threshold each time a
+			// run finds little, which in a process that never ends a request
+			// means garbage piles up: measured at ~47 KB a request on an
+			// Exponential install, flat with a collection here. Cheap now,
+			// because the buffer only ever holds one request's candidates.
+			gc_collect_cycles();
+
 			// Superglobals: overwritten by executeScript() on next iteration.
 			// Output buffers: the one capture buffer, emptied by Capture::end().
 			// Error state: clear it.

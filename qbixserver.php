@@ -1022,7 +1022,17 @@ if (!empty($opts['test'])) {
 
 if ($opts['pid']) {
 	file_put_contents($opts['pid'], getmypid());
-	register_shutdown_function(function () use ($opts) {
+	$pidOwner = getmypid();
+	register_shutdown_function(function () use ($opts, $pidOwner) {
+		// Only the process that wrote the file cleans up after itself.
+		// Workers are forked from this one and inherit this function, so
+		// every worker that exited -- replaced after hitting its memory
+		// ceiling, retired at the application's request, or crashed --
+		// deleted the running server's pid file and killed its watchdog.
+		// The server kept serving, but status could no longer find it.
+		if (getmypid() !== $pidOwner) {
+			return;
+		}
 		@unlink($opts['pid']);
 		// Kill the watchdog if it's running
 		$watchdogPid = 'local/watchdog.pid';

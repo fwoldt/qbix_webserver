@@ -139,6 +139,17 @@ The request is answered normally; the parent retires the worker before its
 next request, forks a clean one, and logs
 `worker N replaced after M requests: asked by the application: ...`.
 
+## Cycles are collected between requests
+
+Objects that point at each other are freed only by PHP's cycle collector,
+which runs on its own when its root buffer fills -- and raises that threshold
+each time a run finds little. A normal request ends before that matters; a
+worker never ends one, so a request's cyclic garbage outlived it (~47 KB a
+request on one application). The between-request reset calls
+`gc_collect_cycles()`, which is cheap there because the buffer only ever holds
+one request's candidates. `tests/unit-worker-memory-bounded.php` makes ~96 MB
+of cyclic garbage over 150 requests and requires the worker not to keep it.
+
 ## A worker that grows is replaced
 
 Memory that grows per request is not something to find by watching a graph. So

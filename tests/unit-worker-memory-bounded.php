@@ -66,6 +66,16 @@ if ($a === "retire") {
 	echo "RETIRING";
 	return;
 }
+if ($a === "cycles") {
+	// Garbage the way real applications make it: objects that point at each
+	// other, unreachable once the request is over, carrying some weight.
+	for ($k = 0; $k < 20; ++$k) {
+		$x = new stdClass; $y = new stdClass;
+		$x->other = $y; $y->other = $x; $x->payload = str_repeat("c", 32768);
+	}
+	echo "C";
+	return;
+}
 if ($a === "endall") { echo "lost"; while (@ob_end_clean()); echo "kept"; return; }
 echo str_repeat("<p>content</p>", 5000);
 if (isset($_GET["i"]) and $_GET["i"] % 3 == 0) { ob_start(); echo "tail"; }
@@ -109,7 +119,8 @@ function startServer($name, $config, &$servers)
 	file_put_contents("$base/$name.json", json_encode($config));
 	$cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($serverScript)
 		. ' --config=' . escapeshellarg("$base/$name.json")
-		. ' --root=' . escapeshellarg($root) . ' --port=' . $port . ' --workers=1';
+		. ' --root=' . escapeshellarg($root) . ' --port=' . $port . ' --workers=1'
+		. ' --pid=' . escapeshellarg("$base/$name.pid");
 	$proc = proc_open($cmd, array(
 		0 => array('file', '/dev/null', 'r'),
 		1 => array('file', "$base/$name.log", 'w'),
@@ -189,6 +200,17 @@ $grewH = (($afterH['mem'] ?? 0) - ($before['mem'] ?? 0)) / 1048576;
 check(sprintf('handlers holding 2 MB each were released (%.1f MB over 120 requests)', $grewH),
 	$grewH < 5.0, true);
 
+// ── Cyclic garbage is collected between requests ────────────────
+
+list(, $b) = fetch('/index.php?a=probe', $port);
+$beforeC = json_decode($b, true);
+for ($i = 0; $i < 150; ++$i) fetch('/index.php?a=cycles', $port);
+list(, $b) = fetch('/index.php?a=probe', $port);
+$afterC = json_decode($b, true);
+$grewC = (($afterC['mem'] ?? 0) - ($beforeC['mem'] ?? 0)) / 1048576;
+check(sprintf('cycles left by 150 requests are collected (%.1f MB grown; ~96 MB of garbage made)', $grewC),
+	$grewC < 5.0, true);
+
 // ── The application can ask for its worker to be replaced ───────
 
 list(, $b) = fetch('/index.php?a=probe', $port);
@@ -225,6 +247,15 @@ for ($i = 0; $i < 4; ++$i) {
 }
 check('every request over the ceiling is still answered', $codes, array(200, 200, 200, 200));
 check('...each by a fresh worker', count(array_unique($pids)), 4);
+// Workers inherit the parent's shutdown functions. A replaced worker used to
+// run the pid-file cleanup as it exited, deleting the running server's pid
+// file -- after which status and stop could not find it.
+clearstatcache();
+check('the server\'s pid file survives its workers being replaced',
+	is_file("$base/ceiling.pid"), true);
+$ownerPid = (int) @file_get_contents("$base/ceiling.pid");
+check('...and still names the parent, not a worker',
+	$ownerPid > 0 and !in_array($ownerPid, $pids, true) and posix_kill($ownerPid, 0), true);
 $log = (string) @file_get_contents("$base/ceiling.log");
 check('...and the replacement is logged with its reason',
 	(bool) preg_match('/worker \d+ replaced after \d+ requests: heap .* MB over the 1 MB ceiling/', $log), true);
