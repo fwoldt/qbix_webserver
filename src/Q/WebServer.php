@@ -631,6 +631,16 @@ class Q_WebServer
 			$client,
 			function ($c) { Q_WebServer::onHttp2Data($c); }
 		);
+
+		// Read now, not only when the socket next says it is readable. With
+		// TLS 1.3 the browser sends its last handshake message and its first
+		// requests in one flight, and the handshake that just finished read
+		// them off the socket into OpenSSL's buffer. The socket then has
+		// nothing to report, so those requests waited until the browser sent
+		// something else -- over real latency, until it gave up and reported
+		// the stylesheets, header images and scripts as aborted. On an empty
+		// read this simply returns.
+		self::onHttp2Data($client);
 	}
 
 	/**
@@ -656,13 +666,21 @@ class Q_WebServer
 		// over HTTP/2 against 2ms for the same page over HTTP/1.1 on the same
 		// server, which is the whole of the difference.
 		$data = '';
-		while (true) {
+		for ($reads = 0; $reads < 1024; ++$reads) {
 			$chunk = @fread($client, 65536);
 			if ($chunk === false or $chunk === '') break;
 			$data .= $chunk;
-			// A short read means the buffer is empty; anything more would
-			// block, and this socket is not blocking.
-			if (strlen($chunk) < 65536) break;
+			// Only an EMPTY read means the buffer is drained. A short read
+			// used to stop this too, but over TLS fread() returns at most one
+			// record -- 16KB -- whatever is waiting, so a burst of requests
+			// spanning several records left all but the first unread, with
+			// nothing on the socket to wake the loop for them. A browser that
+			// sends a page's worth of requests at once (a hard reload, over
+			// real latency) then waited on them until it gave up: stylesheets,
+			// header images and scripts aborted, an admin page with no header
+			// and no sub-items in Firefox. The socket is non-blocking, so the
+			// last read returns '' rather than waiting; the bound keeps one
+			// fast sender from holding the loop.
 		}
 
 		if ($data === '') {
@@ -1687,6 +1705,16 @@ class Q_WebServer
 				return;
 			}
 			self::$buffers[$key] .= $chunk;
+			// Drain what TLS has already decrypted: fread() returns at most
+			// one record (16KB), and records after it sit in OpenSSL's buffer
+			// where stream_select() cannot see them -- a body spanning several
+			// records stopped arriving after the first. Non-blocking, so the
+			// read that finds nothing returns '' at once.
+			for ($reads = 0; $reads < 1024; ++$reads) {
+				$more = @fread($client, 65536);
+				if ($more === false or $more === '') break;
+				self::$buffers[$key] .= $more;
+			}
 			$buf = self::$buffers[$key];
 		}
 
@@ -6247,6 +6275,11 @@ init();
 
 	static function closeClient($key)
 	{
+		// A live HTTP/2 connection is closed by closeHttp2(), never here: the
+		// watcher under its key reads every stream on the connection, and
+		// cancelling it on one request's behalf left the rest unread.
+		if (isset(self::$http2[$key])) return;
+
 		if (isset(self::$clientWatchers[$key])) {
 			Q_Evented::cancel(self::$clientWatchers[$key]);
 			unset(self::$clientWatchers[$key]);
