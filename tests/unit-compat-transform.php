@@ -167,6 +167,24 @@ check('formatting around a rewritten call survives',
 check('and the blank lines survive, so line numbers hold',
 	substr_count($result, "\n"), substr_count($spaced, "\n"));
 
+// ── exit and die after a keyword or an operator ─────────────────────────
+// "=" binds tighter than "and" in PHP; the member test was written without
+// parentheses and assigned is_array($prev) alone, so any exit or die whose
+// previous token was a keyword or operator counted as a method call and was
+// left as a real exit -- ending the worker. "$db or die(...)" is the classic.
+foreach (array(
+	'$db or die("no db");'           => 'or die',
+	'if ($a) { f(); } else exit;'    => 'else exit',
+	'$ok || exit(1);'                => '|| exit',
+	'f() or exit;'                   => 'or exit',
+	'return $x ?: die("none");'      => '?: die',
+) as $code => $label) {
+	check("$label is rewritten", strpos(t($code), 'Q_WebServer_Compat::_exit') !== false, true);
+}
+check('a method named exit is still left alone',
+	strpos(t('$o->exit();'), 'Q_WebServer_Compat::_exit'), false);
+check('...and a static one', strpos(t('A::exit();'), 'Q_WebServer_Compat::_exit'), false);
+
 // ── Idempotence ──────────────────────────────────────────────────────────
 // A file may be transformed twice -- once warmed, once on a cache miss. The
 // second pass must not rewrite the rewrite.

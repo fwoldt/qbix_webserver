@@ -56,8 +56,8 @@ function check($what, $got, $want)
 		var_export($got, true), var_export($want, true));
 }
 
-$opcache = function_exists('opcache_get_status') and ($s = @opcache_get_status(false))
-	and !empty($s['opcache_enabled']);
+$opcache = (function_exists('opcache_get_status') and ($s = @opcache_get_status(false))
+	and !empty($s['opcache_enabled']));
 if (!$opcache) { printf("  skip  the opcode cache is not available\n"); exit(0); }
 
 $dir = sys_get_temp_dir() . DS . 'qbix-regen-' . getmypid();
@@ -162,8 +162,14 @@ for ($req = 0; $req < 50; ++$req) {
 	for ($i = 0; $i < 4; ++$i) $sum += strlen(include $t);
 }
 check('200 includes over 50 requests all ran', $sum, 200 * strlen('v2, from another worker'));
-check('...leaving at most one wrapper registration per request',
-	$factories() - $before <= 50, true);
+$curlFile = (function_exists('curl_version') and in_array('file', (array) (curl_version()['protocols'] ?? array()), true));
+if ($curlFile) {
+	// Stats for includes go through libcurl's file://, so no registration.
+	check('...leaving no wrapper registration at all', $factories() - $before, 0);
+} else {
+	check('...leaving at most one wrapper registration per request',
+		$factories() - $before <= 50, true);
+}
 
 stream_wrapper_restore('file');
 @unlink($t); @unlink($x);

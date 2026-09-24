@@ -67,6 +67,10 @@ class Q_WebServer_Compat
 		'file_exists'          => 'Q_WebServer_Compat::_file_exists',
 		'is_dir'               => 'Q_WebServer_Compat::_is_dir',
 		'is_file'              => 'Q_WebServer_Compat::_is_file',
+		// Each returns one number, so it can be answered without the file
+		// wrapper and without a partial stat reaching PHP's stat cache.
+		'filemtime'            => 'Q_WebServer_Compat::_filemtime',
+		'filesize'             => 'Q_WebServer_Compat::_filesize',
 	);
 
 	/** @var bool Whether the phar:// scheme is currently wrapped for transforms. */
@@ -408,11 +412,16 @@ class Q_WebServer_Compat
 				// error, so a file using a nullsafe call to a method sharing a
 				// name with any rewritten function would not load at all.
 				// Guarded by defined() so this still runs on PHP 7.
-				$isMember = is_array($prev)
+				// Parenthesised: "=" binds tighter than "and", so without
+				// them this assigned is_array($prev) alone, and every exit or
+				// die after a keyword -- "$db or die(...)", "else exit;",
+				// "$ok || exit(1)" -- counted as a method and was left as a
+				// real exit, ending the worker.
+				$isMember = (is_array($prev)
 					and ($prev[0] === T_OBJECT_OPERATOR or $prev[0] === T_DOUBLE_COLON
 						or (defined('T_NULLSAFE_OBJECT_OPERATOR')
 							and $prev[0] === T_NULLSAFE_OBJECT_OPERATOR)
-						or $prev[0] === T_FUNCTION or $prev[0] === T_CONST);
+						or $prev[0] === T_FUNCTION or $prev[0] === T_CONST));
 
 				if ($isMember) {
 					$out .= $token[1];
@@ -641,7 +650,7 @@ class Q_WebServer_Compat
 	 * cache has to be able to say "I was written by a different transformer"
 	 * and be ignored wholesale.
 	 */
-	const PREWARM_FORMAT = 2;
+	const PREWARM_FORMAT = 4;
 
 	/** Resolved path of the persisted pre-warm file, or null. */
 	private static $persistPath = false;
@@ -1517,6 +1526,42 @@ class Q_WebServer_Compat
 		if (strncmp($path, '/dev/', 5) === 0 or strncmp($path, '/proc/', 6) === 0
 			or strncmp($path, '/sys/', 5) === 0) return 'native';
 		return Q_WebServer_CompatFileWrapper::existsAndIsDir($path);
+	}
+
+	/**
+	 * A plain file's mtime and size without the file wrapper, or null when
+	 * the native function should answer: a missing path (for its warning),
+	 * a directory, another stream wrapper's URL, a device tree.
+	 */
+	private static function fileTimes($filename)
+	{
+		$t = self::pathType($filename);
+		if ($t !== false) return null;
+		$path = strncmp($filename, 'file://', 7) === 0 ? substr($filename, 7) : $filename;
+		$info = Q_WebServer_CompatFileWrapper::includeStat($path);
+		return $info ?: null;
+	}
+
+	/**
+	 * Replacement for filemtime().
+	 * @method _filemtime
+	 * @static
+	 */
+	static function _filemtime($filename)
+	{
+		$i = self::fileTimes($filename);
+		return $i ? (int) $i['mtime'] : \filemtime($filename);
+	}
+
+	/**
+	 * Replacement for filesize().
+	 * @method _filesize
+	 * @static
+	 */
+	static function _filesize($filename)
+	{
+		$i = self::fileTimes($filename);
+		return $i ? (int) $i['size'] : \filesize($filename);
 	}
 
 	/**
@@ -2432,7 +2477,7 @@ class Q_WebServer_CompatFileWrapper
 		if (self::existsAndIsDir($realPath) === null) {
 			return false;
 		}
-		self::unwrap();
+		self::unwrap($realPath);
 		$stat = @stat($realPath);
 		self::rewrap();
 		if (!$stat) return false;
@@ -2440,6 +2485,79 @@ class Q_WebServer_CompatFileWrapper
 			self::$statMemo = array();
 		}
 		return self::$statMemo[$realPath] = $stat;
+	}
+
+	/**
+	 * The mtime and size of a file, without the real wrapper.
+	 *
+	 * libcurl reads file:// itself, never through PHP's stream wrappers, and
+	 * reports a file's modification time and length. That is all an include
+	 * needs, and all filemtime() and filesize() return, so those cost no
+	 * unwrap (see self::unwrap()). The answer goes only to them and never
+	 * into PHP's own stat cache, so no stat() or is_writable() elsewhere can
+	 * be handed an incomplete one. Where curl, or its file protocol, is not available, or
+	 * the path is not a plain file, it is the real stat.
+	 *
+	 * @method includeStat
+	 * @static
+	 * @param {string} $realPath
+	 * @return {array|false} array('mtime' => ..., 'size' => ...) or false
+	 */
+	static function includeStat($realPath)
+	{
+		if (isset(self::$statMemo[$realPath])) {
+			return self::$statMemo[$realPath];
+		}
+		if (isset(self::$includeMemo[$realPath])) {
+			return self::$includeMemo[$realPath];
+		}
+		$curl = self::curlHandle();
+		if ($curl === null or strncmp($realPath, 'phar://', 7) === 0) {
+			return self::realStat($realPath);
+		}
+		$type = self::existsAndIsDir($realPath);
+		if ($type === null) return false;
+		if ($type === true) return self::realStat($realPath);
+		$abs = $realPath;
+		if ($abs[0] !== '/' and !preg_match('~^[A-Za-z]:[\\\\/]~', $abs)) {
+			clearstatcache(true, $abs);
+			$abs = realpath($abs);
+			if ($abs === false) return false;
+		}
+		curl_setopt($curl, CURLOPT_URL, 'file://' . str_replace('%2F', '/', rawurlencode($abs)));
+		if (curl_exec($curl) === false) return self::realStat($realPath);
+		$mtime = (int) curl_getinfo($curl, CURLINFO_FILETIME);
+		$size = curl_getinfo($curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+		if ($mtime <= 0 or $size === false or $size < 0) return self::realStat($realPath);
+		$stat = array('mtime' => $mtime, 'size' => (int) $size);
+		if (count(self::$includeMemo) >= self::STAT_MEMO_MAX) {
+			self::$includeMemo = array();
+		}
+		// Kept apart from full stats: url_stat() must never answer from it.
+		return self::$includeMemo[$realPath] = $stat;
+	}
+
+	/** @var array mtime/size answers from includeStat(), for this request */
+	private static $includeMemo = array();
+
+	/** @var CurlHandle|resource|false|null reused for includeStat() */
+	private static $curl = null;
+
+	private static function curlHandle()
+	{
+		if (self::$curl === null) {
+			self::$curl = false;
+			if (function_exists('curl_init') and function_exists('curl_version')) {
+				$v = curl_version();
+				if (!empty($v['protocols']) and in_array('file', $v['protocols'], true)) {
+					$h = curl_init();
+					curl_setopt_array($h, array(CURLOPT_NOBODY => true, CURLOPT_FILETIME => true,
+						CURLOPT_RETURNTRANSFER => true, CURLOPT_PROTOCOLS => CURLPROTO_FILE));
+					self::$curl = $h;
+				}
+			}
+		}
+		return self::$curl === false ? null : self::$curl;
 	}
 
 	/**
@@ -2504,6 +2622,7 @@ class Q_WebServer_CompatFileWrapper
 	static function forgetStats()
 	{
 		self::$statMemo = array();
+		self::$includeMemo = array();
 	}
 	/** @var string Buffered transformed content for reading */
 	private $buffer = '';
@@ -2535,10 +2654,18 @@ class Q_WebServer_CompatFileWrapper
 	// regenerated template with a new mtime), it compiles whatever the
 	// stream holds, and pages silently lost the templates that came back
 	// empty. An optimisation that can blank part of a page is not one.
-	private static function unwrap()
+	//
+	// phar:// is swapped out only for an operation on a phar path. It used to
+	// be swapped out -- and back in, one more registration -- around every
+	// operation whenever an engine archive was in use, which doubled the cost
+	// above for plain files that never touch an archive.
+	private static $pharOut = false;
+	private static function unwrap($path = null)
 	{
 		stream_wrapper_restore('file');
-		if (Q_WebServer_Compat::pharWrapped()) {
+		self::$pharOut = (Q_WebServer_Compat::pharWrapped()
+			and is_string($path) and strncmp($path, 'phar://', 7) === 0);
+		if (self::$pharOut) {
 			stream_wrapper_restore('phar');
 		}
 	}
@@ -2546,9 +2673,10 @@ class Q_WebServer_CompatFileWrapper
 	{
 		stream_wrapper_unregister('file');
 		stream_wrapper_register('file', __CLASS__);
-		if (Q_WebServer_Compat::pharWrapped()) {
+		if (self::$pharOut) {
 			stream_wrapper_unregister('phar');
 			stream_wrapper_register('phar', __CLASS__);
+			self::$pharOut = false;
 		}
 	}
 
@@ -2570,10 +2698,10 @@ class Q_WebServer_CompatFileWrapper
 
 		// Includes: one real stat per path per request, then the bytes from
 		// memory while that stat says the file has not changed.
-		$include = ($options & self::OPEN_FOR_INCLUDE) and ($mode === 'r' or $mode === 'rb');
+		$include = (($options & self::OPEN_FOR_INCLUDE) and ($mode === 'r' or $mode === 'rb'));
 		$stat = false;
 		if ($include) {
-			$stat = self::realStat($realPath);
+			$stat = self::includeStat($realPath);
 			if ($stat === false) {
 				return false;
 			}
@@ -2603,7 +2731,7 @@ class Q_WebServer_CompatFileWrapper
 					// Sentinel: this file doesn't need transforms.
 					// Open it normally — no tokenization, no transform --
 					// or, for an include, read it once and keep its bytes.
-					self::unwrap();
+					self::unwrap($realPath);
 					if ($include) {
 						$ok = $this->readAndServe($realPath, $stat, $opened_path);
 						self::rewrap();
@@ -2623,7 +2751,7 @@ class Q_WebServer_CompatFileWrapper
 			}
 		}
 
-		self::unwrap();
+		self::unwrap($realPath);
 
 		if ($shouldTransform && is_file($realPath)) {
 			// Runtime trust check — reject files that fail integrity verification
@@ -2813,7 +2941,7 @@ class Q_WebServer_CompatFileWrapper
 		// used to be answered with stat(), so is_link() was false for every
 		// link under the wrapper.
 		if ($flags & STREAM_URL_STAT_LINK) {
-			self::unwrap();
+			self::unwrap($realPath);
 			$stat = @lstat($realPath);
 			self::rewrap();
 			return $stat ?: false;
@@ -2925,7 +3053,7 @@ class Q_WebServer_CompatFileWrapper
 	public function rename($from, $to)
 	{
 		self::forgetStats();
-		self::unwrap();
+		self::unwrap(strncmp($from, 'phar://', 7) === 0 ? $from : $to);
 		$result = rename(preg_replace('/^file:\/\//', '', $from),
 		                 preg_replace('/^file:\/\//', '', $to));
 		self::rewrap();
@@ -2935,7 +3063,7 @@ class Q_WebServer_CompatFileWrapper
 	public function unlink($path)
 	{
 		self::forgetStats();
-		self::unwrap();
+		self::unwrap($path);
 		$result = unlink(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
 		return $result;
@@ -2944,7 +3072,7 @@ class Q_WebServer_CompatFileWrapper
 	public function mkdir($path, $mode, $options)
 	{
 		self::forgetStats();
-		self::unwrap();
+		self::unwrap($path);
 		$result = mkdir(preg_replace('/^file:\/\//', '', $path), $mode,
 			$options & STREAM_MKDIR_RECURSIVE);
 		self::rewrap();
@@ -2954,7 +3082,7 @@ class Q_WebServer_CompatFileWrapper
 	public function rmdir($path, $options)
 	{
 		self::forgetStats();
-		self::unwrap();
+		self::unwrap($path);
 		$result = rmdir(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
 		return $result;
@@ -2964,7 +3092,7 @@ class Q_WebServer_CompatFileWrapper
 	{
 		$realPath = preg_replace('/^file:\/\//', '', $path);
 		self::forgetStats();
-		self::unwrap();
+		self::unwrap($realPath);
 		switch ($option) {
 			case STREAM_META_TOUCH:
 				$result = touch($realPath, $value[0] ?? time(), $value[1] ?? time());

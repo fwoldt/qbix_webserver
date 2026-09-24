@@ -44,7 +44,7 @@ file_put_contents($base . DS . 'dir' . DS . 'file.txt', 'x');
 file_put_contents($base . DS . 'dir' . DS . '.hidden', 'x');
 file_put_contents($base . DS . 'we[ird]*?dir' . DS . 'a{b}c.php', 'x');
 file_put_contents($base . DS . 'star*.txt', 'x');
-$links = DS === '/' and @symlink($base . DS . 'nowhere', $base . DS . 'dangling');
+$links = (DS === '/' and @symlink($base . DS . 'nowhere', $base . DS . 'dangling'));
 @symlink($base . DS . 'dir', $base . DS . 'dirlink');
 
 $paths = array(
@@ -106,6 +106,20 @@ check('forgetStats() leaves real answers', filesize($mf), 14);
 file_put_contents($mf, 'x');
 touch($mf, $native[$mf][3]);
 clearstatcache();
+// filemtime() and filesize() through their shims: the same answers as native,
+// for every kind of path, and a change made through the wrapper shows at once.
+foreach ($paths as $p) {
+	clearstatcache();
+	check('filemtime/filesize shims match native for ' . substr($p, strlen($base)),
+		array(@Q_WebServer_Compat::_filemtime($p), @Q_WebServer_Compat::_filesize($p)),
+		array($native[$p][3], $native[$p][4]));
+}
+$sf = $base . DS . 'dir' . DS . 'file.txt';
+$m0 = Q_WebServer_Compat::_filemtime($sf);
+touch($sf, $m0 + 50);
+check('the filemtime shim sees a touch() made through the wrapper',
+	Q_WebServer_Compat::_filemtime($sf), $m0 + 50);
+touch($sf, $native[$sf][3]);
 $wrapList = array($listing($base . DS . 'dir'), $listing($base . DS . 'we[ird]*?dir'),
 	$listing($base . DS . 'missing'));
 check('directory listings match native', $wrapList, $nativeList);
@@ -127,6 +141,17 @@ for ($i = 0; $i < 1000; ++$i) {
 }
 check('5000 existence and type checks allocate no wrapper resources',
 	$factories() - $before, 0);
+$curlFile = (function_exists('curl_version') and in_array('file', (array) (curl_version()['protocols'] ?? array()), true));
+if ($curlFile) {
+	$before = $factories();
+	for ($i = 0; $i < 500; ++$i) {
+		Q_WebServer_CompatFileWrapper::forgetStats();   // a new request each time
+		Q_WebServer_Compat::_filemtime($base . DS . 'dir' . DS . 'file.txt');
+		Q_WebServer_Compat::_filesize($base . DS . 'dir' . DS . 'file.txt');
+	}
+	check('1000 filemtime/filesize calls over 500 requests allocate no wrapper resources',
+		$factories() - $before, 0);
+}
 $before = $factories();
 for ($i = 0; $i < 1000; ++$i) {
 	clearstatcache();
@@ -138,6 +163,27 @@ check('2000 native probes of missing paths allocate no wrapper resources',
 $before = $factories();
 for ($i = 0; $i < 200; ++$i) scandir($base . DS . 'dir');
 check('200 directory listings allocate no wrapper resources', $factories() - $before, 0);
+
+// With an engine archive in use the wrapper covers phar:// as well. A real
+// operation on a plain file must still cost one registration, not two: phar://
+// is only swapped out for an operation on a phar path.
+if (in_array('phar', stream_get_wrappers(), true)) {
+	$pw = new ReflectionProperty('Q_WebServer_Compat', 'pharWrapped');
+	$pw->setAccessible(true);
+	$pw->setValue(null, true);
+	stream_wrapper_unregister('phar');
+	stream_wrapper_register('phar', 'Q_WebServer_CompatFileWrapper');
+	$before = $factories();
+	for ($i = 0; $i < 100; ++$i) {
+		Q_WebServer_CompatFileWrapper::forgetStats();
+		clearstatcache();
+		filemtime($base . DS . 'dir' . DS . 'file.txt');   // one real stat each
+	}
+	check('100 real stats of a plain file cost 100 registrations, not 200',
+		$factories() - $before, 100);
+	stream_wrapper_restore('phar');
+	$pw->setValue(null, false);
+}
 
 stream_wrapper_restore('file');
 

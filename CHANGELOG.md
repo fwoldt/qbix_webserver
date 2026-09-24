@@ -105,6 +105,32 @@ edited down to what a reader actually needs.
   4 MB per process), served while a real stat taken in the same request
   still matches their mtime and size -- so what runs is always the file as
   it is on disk. Mixed traffic now grows a worker ~0.1 MB a request.
+- **`$db or die(...)`, `else exit;` and `$ok || exit(1)` ended the worker.**
+  The source transform's member test was written `$isMember = is_array($prev)
+  and (...)`; `=` binds tighter than `and`, so it assigned `is_array($prev)`
+  alone, and any `exit` or `die` after a keyword or operator counted as a
+  method call and stayed a real exit. Every such exit in an application killed
+  the worker serving it.
+- **A worker that exited deleted the server's pid file and killed its
+  watchdog.** The cleanup is a shutdown function registered in the parent,
+  and every forked worker inherited it -- so a worker replaced at its memory
+  ceiling, retired at the application's request, or crashed, ran it on the
+  way out. The server kept serving, but `status` and `stop` could no longer
+  find it. It now acts only in the process that registered it.
+- **Cyclic garbage piled up in workers.** PHP runs its cycle collector only
+  when the root buffer fills, and raises that threshold whenever a run finds
+  little, so in a process that never ends a request, one request's
+  self-referencing objects outlived it: ~47 KB a request on an Exponential
+  install. The between-request reset now collects cycles; the buffer only
+  ever holds one request's candidates, so it is cheap.
+- **Fewer wrapper registrations still.** With an engine archive in use the
+  wrapper also swapped out `phar://` -- one more registration -- around every
+  operation, even on plain files; it now does so only for phar paths. And
+  `filemtime()` and `filesize()`, which return one number each, are sent by
+  the transform to shims that ask libcurl's `file://` (which bypasses PHP's
+  stream wrappers) and never put a partial stat in PHP's stat cache; includes
+  use the same. A worker now makes ~12 registrations a request where it made
+  12 600.
 - **Edited and regenerated files are picked up without a restart.** The
   opcode cache reads its clock only at request startup, which a persistent
   worker never repeats, so it never revalidated a cached script: a
@@ -115,8 +141,8 @@ edited down to what a reader actually needs.
   and now re-transforms on a changed mtime.
 
 Together: a worker that grew ~2 MB a request (1.1 GB after 600 on an
-Exponential install) now grows ~0.1 MB a request on mixed traffic, bounded
-by the worker memory ceiling below.
+Exponential install) now holds a flat heap -- ~2 KB a request, the few
+registrations left -- bounded in any case by the worker memory ceiling below.
 
 - **The "Worker Memory (COW)" card reported several times the real memory.** It
   summed each worker's RSS, and RSS counts a shared copy-on-write page in full
