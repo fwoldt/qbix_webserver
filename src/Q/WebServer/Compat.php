@@ -71,7 +71,32 @@ class Q_WebServer_Compat
 		// wrapper and without a partial stat reaching PHP's stat cache.
 		'filemtime'            => 'Q_WebServer_Compat::_filemtime',
 		'filesize'             => 'Q_WebServer_Compat::_filesize',
+		// The answers above are remembered for the rest of the request, so
+		// "forget what you know about files" has to reach that memory too.
+		'clearstatcache'       => 'Q_WebServer_Compat::_clearstatcache',
 	);
+
+	/**
+	 * Replacement for clearstatcache(): PHP's stat cache and the wrapper's
+	 * per-request memory of stats and includes.
+	 *
+	 * Without it, filemtime()/filesize()/stat() kept their first answer for
+	 * the whole request whatever the application did: a file another process
+	 * rewrote every 50ms showed one or two sizes to a worker and thirty to
+	 * plain PHP. Exponential's eZFSFileHandler::loadMetaData($force) is
+	 * exactly clearstatcache() followed by a stat, to see a cache file that
+	 * another request has just regenerated.
+	 *
+	 * @method _clearstatcache
+	 * @static
+	 */
+	static function _clearstatcache($clearRealpathCache = false, $filename = '')
+	{
+		if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
+			Q_WebServer_CompatFileWrapper::forgetStats();
+		}
+		\clearstatcache((bool) $clearRealpathCache, (string) $filename);
+	}
 
 	/** @var bool Whether the phar:// scheme is currently wrapped for transforms. */
 	private static $pharWrapped = false;
@@ -380,7 +405,8 @@ class Q_WebServer_Compat
 		// Check cache first
 		if ($filePath) {
 			$cached = self::getCachedTransform($filePath);
-			if ($cached !== null) return $cached;
+			// false is the "needs no transform" sentinel, not source code.
+			if ($cached !== null) return $cached === false ? $source : $cached;
 		}
 
 		$tokens = token_get_all($source);
@@ -633,12 +659,46 @@ class Q_WebServer_Compat
 	 * @param string|false $transformed transformed source, or false to record
 	 *                                  that the file needs no transform
 	 */
-	static function saveCache($filePath, $transformed)
+	static function saveCache($filePath, $transformed, $mtime = null)
 	{
+		// The mtime of the version that was read, taken BEFORE reading it.
+		// Taken afterwards, a rewrite landing in between paired the old
+		// transform with the new file's mtime, and it was served for good.
+		if ($mtime === null) $mtime = @filemtime($filePath);
+		// Not kept while the file is this new: a rewrite within the same
+		// second would leave the mtime unchanged and the entry would look
+		// current. Such a file is read again next time; once it is older
+		// than that, its entry can be trusted.
+		if ($mtime === false or self::isRacy((int) $mtime)) {
+			unset(self::$transformCache[$filePath]);
+			return;
+		}
 		self::$transformCache[$filePath] = array(
 			'source' => $transformed,
-			'mtime' => filemtime($filePath),
+			'mtime' => (int) $mtime,
 		);
+	}
+
+	/**
+	 * Seconds for which a file's mtime cannot tell two versions apart.
+	 *
+	 * A stat's mtime is whole seconds, so a file rewritten within the second
+	 * it was cached in looks unchanged. The same problem, and the same
+	 * answer, as git's "racy" index entries: nothing modified this recently
+	 * is served from or stored into a cache keyed on its mtime.
+	 */
+	const RACY_SECONDS = 2;
+
+	/**
+	 * Whether a file with this mtime is too recent to cache by mtime.
+	 * @method isRacy
+	 * @static
+	 * @param {integer} $mtime
+	 * @return {boolean}
+	 */
+	static function isRacy($mtime)
+	{
+		return $mtime > 0 and time() - (int) $mtime < self::RACY_SECONDS;
 	}
 
 	/**
@@ -650,7 +710,7 @@ class Q_WebServer_Compat
 	 * cache has to be able to say "I was written by a different transformer"
 	 * and be ignored wholesale.
 	 */
-	const PREWARM_FORMAT = 4;
+	const PREWARM_FORMAT = 5;
 
 	/** Resolved path of the persisted pre-warm file, or null. */
 	private static $persistPath = false;
@@ -2598,8 +2658,11 @@ class Q_WebServer_CompatFileWrapper
 		if ($bytes === false) return false;
 		$size = strlen($bytes);
 		// Only kept when the bytes are the size the stat said: a file being
-		// rewritten under us is served, not remembered.
-		if ($stat and $size === (int) $stat['size'] and $size <= self::CONTENT_FILE_MAX) {
+		// rewritten under us is served, not remembered. Nor while it is new
+		// enough that a same-second rewrite of the same size would match the
+		// entry (Q_WebServer_Compat::isRacy()).
+		if ($stat and $size === (int) $stat['size'] and $size <= self::CONTENT_FILE_MAX
+			and !Q_WebServer_Compat::isRacy((int) $stat['mtime'])) {
 			if (self::$contentBytes + $size > self::CONTENT_CACHE_MAX) {
 				self::$contentCache = array();
 				self::$contentBytes = 0;
@@ -2623,6 +2686,27 @@ class Q_WebServer_CompatFileWrapper
 	{
 		self::$statMemo = array();
 		self::$includeMemo = array();
+	}
+
+	/**
+	 * Forget everything held about one file: remembered stats, its kept
+	 * bytes and its cached transform. For a change made through the wrapper
+	 * -- a write, rename, unlink or touch -- where only the stats used to be
+	 * dropped, so a request that regenerated a file and then included it
+	 * could be handed the previous contents.
+	 * @method forgetFile
+	 * @static
+	 * @param {string} $path
+	 */
+	static function forgetFile($path)
+	{
+		self::forgetStats();
+		$path = preg_replace('/^file:\/\//', '', (string) $path);
+		if (isset(self::$contentCache[$path])) {
+			self::$contentBytes -= self::$contentCache[$path][1];
+			unset(self::$contentCache[$path]);
+		}
+		Q_WebServer_Compat::forgetTransform($path);
 	}
 	/** @var string Buffered transformed content for reading */
 	private $buffer = '';
@@ -2691,9 +2775,10 @@ class Q_WebServer_CompatFileWrapper
 		) && preg_match('/\.php$/i', $realPath)
 		  && Q_WebServer_Compat::isEnabled();
 
-		// Any change made through the wrapper can make a remembered stat wrong.
+		// Any change made through the wrapper can make a remembered stat --
+		// or this file's cached bytes or transform -- wrong.
 		if (strpbrk($mode, 'waxc+') !== false) {
-			self::forgetStats();
+			self::forgetFile($realPath);
 		}
 
 		// Includes: one real stat per path per request, then the bytes from
@@ -2706,9 +2791,15 @@ class Q_WebServer_CompatFileWrapper
 				return false;
 			}
 			$mtime = (int) $stat['mtime'];
+			$racy = Q_WebServer_Compat::isRacy($mtime);
+			// The opcode cache keys on the same whole-second mtime, so a
+			// same-second rewrite would run the previous compile.
+			if ($racy and function_exists('opcache_invalidate')) {
+				@opcache_invalidate($realPath, true);
+			}
 			self::noteServed($realPath, $mtime);
 			$kept = isset(self::$contentCache[$realPath]) ? self::$contentCache[$realPath] : null;
-			if ($kept and $kept[0] === $mtime and $kept[1] === (int) $stat['size']) {
+			if (!$racy and $kept and $kept[0] === $mtime and $kept[1] === (int) $stat['size']) {
 				return $this->serveBytes($kept[2], $mtime, $opened_path, $realPath);
 			}
 		}
@@ -2719,8 +2810,15 @@ class Q_WebServer_CompatFileWrapper
 			// A transform of an older version of the file is not the file.
 			// The cache used to be trusted without looking, so an edited
 			// file that needs the transform kept its old code until restart.
-			if (is_string($cached) and $stat
-				and Q_WebServer_Compat::cachedMtime($realPath) !== (int) $stat['mtime']) {
+			//
+			// The sentinel too: a file rewritten so that it now needs the
+			// transform (it gained an exit() or a header() call) kept being
+			// served untransformed, and its exit() ended the worker. And
+			// nothing is trusted while the file is new enough that its mtime
+			// cannot tell versions apart.
+			if ($cached !== null and $stat
+				and (Q_WebServer_Compat::isRacy((int) $stat['mtime'])
+					or Q_WebServer_Compat::cachedMtime($realPath) !== (int) $stat['mtime'])) {
 				// Dropped, not just skipped: transformSource() below looks in
 				// the same cache first and would hand the old transform back.
 				Q_WebServer_Compat::forgetTransform($realPath);
@@ -2763,16 +2861,21 @@ class Q_WebServer_CompatFileWrapper
 				}
 			}
 
-			// Cache miss (file added after prewarm) — read, transform, cache
+			// Cache miss (file added after prewarm) — read, transform, cache.
+			// The mtime is the one seen before reading, so an entry can never
+			// claim a newer version than the bytes it holds; and the
+			// transform is computed without its cache side-effects, stored
+			// here once with that mtime.
+			$mtimeBefore = $stat ? (int) $stat['mtime'] : (int) @filemtime($realPath);
 			$source = file_get_contents($realPath);
 			if ($source !== false) {
-				$transformed = Q_WebServer_Compat::transformSource($source, $realPath);
+				$transformed = Q_WebServer_Compat::transformSource($source, '');
 				if ($transformed !== $source) {
-					Q_WebServer_Compat::saveCache($realPath, $transformed);
+					Q_WebServer_Compat::saveCache($realPath, $transformed, $mtimeBefore);
 					$this->buffer = $transformed;
 					$this->position = 0;
 					$this->transformed = true;
-					$this->mtime = Q_WebServer_Compat::cachedMtime($realPath);
+					$this->mtime = $mtimeBefore;
 					self::rewrap();
 					$opened_path = $realPath;
 					return true;
@@ -2794,7 +2897,7 @@ class Q_WebServer_CompatFileWrapper
 				// Those files are compiled templates and configuration caches:
 				// they never need a transform, and they were the bulk of the
 				// work.
-				Q_WebServer_Compat::saveCache($realPath, false);
+				Q_WebServer_Compat::saveCache($realPath, false, $mtimeBefore);
 			}
 		}
 
@@ -3052,7 +3155,8 @@ class Q_WebServer_CompatFileWrapper
 
 	public function rename($from, $to)
 	{
-		self::forgetStats();
+		self::forgetFile($from);
+		self::forgetFile($to);
 		self::unwrap(strncmp($from, 'phar://', 7) === 0 ? $from : $to);
 		$result = rename(preg_replace('/^file:\/\//', '', $from),
 		                 preg_replace('/^file:\/\//', '', $to));
@@ -3062,7 +3166,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function unlink($path)
 	{
-		self::forgetStats();
+		self::forgetFile($path);
 		self::unwrap($path);
 		$result = unlink(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
@@ -3091,7 +3195,7 @@ class Q_WebServer_CompatFileWrapper
 	public function stream_metadata($path, $option, $value)
 	{
 		$realPath = preg_replace('/^file:\/\//', '', $path);
-		self::forgetStats();
+		self::forgetFile($realPath);
 		self::unwrap($realPath);
 		switch ($option) {
 			case STREAM_META_TOUCH:
