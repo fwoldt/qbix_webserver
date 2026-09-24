@@ -1506,6 +1506,8 @@ class Q_Request
  */
 class Q_PhpInputStream
 {
+	/** Set by PHP on every stream wrapper instance; declared (see Q_WebServer_PhpInputStream). */
+	public $context;
 	static $data = '';
 	private $pos = 0;
 	private $path = '';

@@ -875,6 +875,15 @@ class Q_WebServer_Pool
 			self::$inputWrapperRegistered = true;
 		}
 
+		// Look at the files served so far again before this request runs, not
+		// only after the last one ended: a file rewritten while the worker sat
+		// idle was otherwise served once more from the opcode cache's old
+		// compile, which with opcache.revalidate_freq > 0 does not look at the
+		// file itself for that long. See CompatFileWrapper::forgetStats().
+		if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
+			Q_WebServer_CompatFileWrapper::forgetStats();
+		}
+
 		// One capture buffer for the life of the worker, reused per request --
 		// see Q_WebServer_Capture for why it is not opened afresh each time.
 		Q_WebServer_Capture::begin();
@@ -2050,6 +2059,14 @@ class Q_WebServer_Pool
  */
 class Q_WebServer_PhpInputStream
 {
+	/**
+	 * Set by PHP on every stream wrapper instance. Declared, because PHP 8.2
+	 * deprecated dynamic properties: undeclared, each php://input read printed
+	 * "Creation of dynamic property ...::$context is deprecated" -- into the
+	 * response body, wherever notices are displayed.
+	 * @var resource|null
+	 */
+	public $context;
 	protected $data = '';
 	protected $pos = 0;
 	protected $path = '';
