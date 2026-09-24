@@ -157,6 +157,27 @@ else
     FAILED=1
 fi
 
+# The baseline, on this PHP. The phar runs on whatever PHP the host has, so
+# it cannot provide extensions -- only report them. What the server itself
+# needs (the mini variant, or CHECK_VARIANT) must all be there; lite and
+# standard are shown, not required, with the host's own install command.
+CTL="$(dirname "$PHAR")/../qbixctl.php"
+if [ -f "$CTL" ]; then
+    CHECK_VARIANT="${CHECK_VARIANT:-mini}"
+    if "$PHP" "$CTL" ext:check --variant="$CHECK_VARIANT" >"$TMP/check" 2>&1; then
+        echo "  ok    this PHP has every extension the $CHECK_VARIANT variant lists"
+    else
+        echo "  FAIL  this PHP lacks extensions the $CHECK_VARIANT variant needs:"
+        sed -n '/^missing:/,$p' "$TMP/check" | sed 's/^/        /'
+        FAILED=1
+    fi
+    for v in lite standard; do
+        "$PHP" "$CTL" ext:check --variant="$v" >"$TMP/check" 2>&1 \
+            && echo "  info  $v: complete" \
+            || echo "  info  $v: $(grep '^missing:' "$TMP/check" | cut -c1-160)"
+    done
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "  PASS - $(uname -s) $(uname -m) can run Exponential Velocity"
