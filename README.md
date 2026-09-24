@@ -54,6 +54,8 @@ You can also package your entire app — code, assets, SQLite database — into 
 |---|---|---|
 | 📋 | [Changelog](CHANGELOG.md) | Every change worth reading, newest first. A release links here rather than repeating itself |
 | 🏎️ | [Why Not php-fpm?](docs/why.md) | COW memory model, comparison with Swoole and FrankenPHP |
+| 📋 | [Requirements & Extensions](docs/requirements.md) | The PHP versions built, every extension the server provides by tier and variant, databases, and each form of distribution's exceptions |
+| 🧩 | [Extensions: Check & Build](docs/extensions.md) | `qbixctl ext:check`, install hints per system, database add-ons, planning and building a variant, the source kit |
 | 🔐 | [HTTPS & Certificates](docs/https.md) | Your own certificates (files, archives, .p12), Let's Encrypt built in, self-signed fallback, live renewal |
 | 🔒 | [Server Headers](docs/headers.md) | Cache-Control, X-Q-Cache-Tree, X-Accel-Redirect, ETag |
 | 🗃️ | [Response Cache](docs/cache.md) | What is kept and for how long, the generation marker, every setting |

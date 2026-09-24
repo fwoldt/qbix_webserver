@@ -11,6 +11,8 @@ var docTitles = {
   "layout.md": "Configuration Layout",
   "console.md": "Console & Command Line",
   "running.md": "Running & Building",
+  "requirements.md": "Requirements & Extensions",
+  "extensions.md": "Extensions: Check & Build",
   "https.md": "HTTPS & Certificates",
   "security.md": "Security",
   "passwords.md": "Panel Passwords",
@@ -41,7 +43,7 @@ async function init() {
   var nav = document.getElementById("nav-links");
   var html = "";
   if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
-  var sections = {"Getting Started":["why.md","running.md","configuration.md","layout.md","console.md"],
+  var sections = {"Getting Started":["why.md","running.md","requirements.md","extensions.md","configuration.md","layout.md","console.md"],
     "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
     "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","api-discovery.md"],
     "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
