@@ -110,6 +110,8 @@ $opts = array(
 	'open'    => null,  // --open[=/path] : open browser when server is ready
 	'debug'   => false,
 	'keep-globals' => null, // Globals the app keeps between requests
+	'conf-dir' => null, // Debian Apache-style configuration directory (/etc/vc, /etc/qbix), or auto
+	'layout'  => false, // --layout : print the configuration files that would be loaded, and exit
 );
 
 foreach ($argv as $i => $arg) {
@@ -127,7 +129,11 @@ foreach ($argv as $i => $arg) {
 		echo "  --socket=PATH    Unix domain socket (e.g. /run/qbix/app.sock)\n";
 		echo "  --socket-mode=MODE  Permissions on socket file (default: 0660)\n";
 		echo "  --workers=N      Persistent workers (default: auto = nproc × 50)\n";
-		echo "  --config=FILE    JSON config file\n";
+		echo "  --config=FILE    JSON config file (usually DIR/sites-enabled/SITE.conf)\n";
+		echo "  --conf-dir=DIR   Configuration directory laid out like /etc/apache2:\n";
+		echo "                   vc.conf, ports.conf, mods-enabled/, conf-enabled/,\n";
+		echo "                   sites-enabled/ (auto = search /etc/vc, /etc/qbix)\n";
+		echo "  --layout         Print the configuration files that would be loaded, and exit\n";
 		echo "  --preset=NAME    Framework preset (laravel, symfony, wordpress, drupal, exponential)\n";
 		echo "  --pid=PATH       PID file path\n";
 		echo "  --hotreload      Watch files, auto-restart on changes\n";
@@ -175,6 +181,10 @@ foreach ($argv as $i => $arg) {
 	}
 	if ($arg === '--hotreload') {
 		$opts['hotreload'] = true;
+		continue;
+	}
+	if ($arg === '--layout') {
+		$opts['layout'] = true;
 		continue;
 	}
 	if ($arg === '--gui') {
@@ -602,6 +612,22 @@ $appConfig = dirname($webDir) . '/config/server.json';
 if (file_exists($appConfig)) {
 	Q_Config::load($appConfig);
 }
+
+// The configuration directory, laid out like Debian's /etc/apache2 -- vc.conf,
+// ports.conf, mods-enabled/, conf-enabled/ -- below the site's own file. Only
+// when asked for (--conf-dir, QBIX_CONF_DIR/VC_CONF_DIR, or a --config inside
+// its sites-* directory); see Q_WebServer_Layout.
+require_once __DIR__ . '/src/Q/WebServer/Layout.php';
+$confDir = Q_WebServer_Layout::resolve($opts['conf-dir'], $opts['config']);
+if ($opts['layout']) {
+	echo json_encode(Q_WebServer_Layout::describe($confDir, $opts['config']),
+		JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
+	exit(0);
+}
+if ($opts['conf-dir'] !== null and $opts['conf-dir'] !== 'none' and $confDir === null) {
+	fwrite(STDERR, "  config: no configuration directory at {$opts['conf-dir']}\n");
+}
+Q_WebServer_Layout::load($confDir);
 
 // User config file — loaded last so it overrides everything
 if ($opts['config']) {
