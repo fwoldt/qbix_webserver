@@ -514,6 +514,7 @@ class Q_WebServer_Pool
 		$_SERVER['SERVER_NAME'] = $host;
 		$_SERVER['SERVER_PORT'] = $req['serverPort'] ?? '8080';
 		$_SERVER['REMOTE_ADDR'] = $req['remoteAddr'] ?? '127.0.0.1';
+		$_SERVER['REMOTE_PORT'] = (string) ($req['remotePort'] ?? 0);
 		$_SERVER['SERVER_SOFTWARE'] = 'QbixServer/' . (defined('QBIX_SERVER_VERSION') ? QBIX_SERVER_VERSION : '1.0');
 		$_SERVER['GATEWAY_INTERFACE'] = 'CGI/1.1';
 		$_SERVER['SERVER_PROTOCOL'] = 'HTTP/1.1';
@@ -891,7 +892,15 @@ class Q_WebServer_Pool
 			'scriptName'     => self::scriptName($scriptPath),
 			'documentRoot'   => rtrim(Q_WebServer::$rootDir ?? '', '/\\'),
 			'serverPort'     => (string)($_SERVER['SERVER_PORT'] ?? '8080'),
-			'remoteAddr'     => '127.0.0.1',
+			// Who is asking. The parent has already worked it out -- the
+			// connection's address, or a forwarded one from a trusted proxy --
+			// and this sent 127.0.0.1 instead, so every application behind
+			// the pool saw every visitor as the server itself: its address
+			// checks, its logs and anything it limited by address.
+			'remoteAddr'     => (string) ($parsed['_remoteAddr']
+				?? $parsed['clientIp'] ?? self::peerAddressOf($client, false)),
+			'remotePort'     => (int) ($parsed['_remotePort']
+				?? self::peerAddressOf($client, true)),
 			// Whether this connection is TLS. The worker already looks for
 			// this and reports HTTPS and REQUEST_SCHEME from it, but nothing
 			// ever sent it -- so every request looked like plain HTTP no
@@ -1183,6 +1192,27 @@ class Q_WebServer_Pool
 		if (!is_resource($client)) return false;
 		$meta = @stream_get_meta_data($client);
 		return !empty($meta['crypto']);
+	}
+
+	/**
+	 * The far end of a client connection, for when the parsed request does
+	 * not already say.
+	 *
+	 * @method peerAddressOf
+	 * @static
+	 * @param {resource} $client
+	 * @param {boolean} $port true for the port, false for the address
+	 * @return {string|integer}
+	 */
+	static function peerAddressOf($client, $port)
+	{
+		$name = is_resource($client) ? @stream_socket_get_name($client, true) : false;
+		if (!is_string($name) or ($colon = strrpos($name, ':')) === false) {
+			return $port ? 0 : '127.0.0.1';
+		}
+		if ($port) return (int) substr($name, $colon + 1);
+		// "[::1]:52000" carries the address in brackets.
+		return trim(substr($name, 0, $colon), '[]');
 	}
 
 	protected function findIdle()

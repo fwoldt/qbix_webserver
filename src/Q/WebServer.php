@@ -947,6 +947,23 @@ class Q_WebServer
 			);
 		}
 
+		// Who is asking, worked out the way the HTTP/1.1 path works it out:
+		// the address of the connection, replaced by a forwarded one only
+		// when the connection comes from a configured trusted proxy.
+		//
+		// This used to take X-Real-IP from the request, from anyone, and
+		// fall back to 127.0.0.1. So any client speaking HTTP/2 could name
+		// its own address -- to the rate limiter, the panel's address rules,
+		// the access log and the application -- and every client that did
+		// not was reported as the server itself.
+		//
+		// The address comes off the socket: clientInfo is filled in when a
+		// plain connection is accepted, and a TLS one never passes there.
+		$peer = @stream_socket_get_name($conn->socket, true);
+		$directIp = self::$clientInfo[$key]['ip']
+			?? ($peer ? trim(substr($peer, 0, strrpos($peer, ':')), '[]') : '0.0.0.0');
+		$clientIp = Q_WebServer_Proxy::clientIp($directIp, $request['headers']);
+
 		$parsed = array(
 			'method' => $request['method'],
 			'uri' => $request['path'],
@@ -957,9 +974,10 @@ class Q_WebServer
 			'body' => $request['body'],
 			'httpVersion' => '2',
 			// Carried so the worker and the log see what the HTTP/1.1 path
-			// gives them. The address is the connection's, not a guess.
-			'clientIp' => isset($request['headers']['x-real-ip'])
-				? $request['headers']['x-real-ip'] : '127.0.0.1',
+			// gives them.
+			'clientIp' => $clientIp,
+			'_remoteAddr' => $clientIp,
+			'_remotePort' => $peer ? (int) substr(strrchr($peer, ':'), 1) : 0,
 			'cookies' => isset($request['headers']['cookie'])
 				? self::parseCookieHeader($request['headers']['cookie']) : array(),
 		);
