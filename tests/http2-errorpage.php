@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 /**
  * The fallback page renders, and is configurable.

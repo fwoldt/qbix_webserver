@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 /**
  * End-to-end HTTP probe. Drives a RUNNING server over a real socket and

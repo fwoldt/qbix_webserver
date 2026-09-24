@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env sh
 # Does the phar serve a page on this platform?
 #
 # The static binaries exist for five targets, because that is what the build

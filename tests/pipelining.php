@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 /**
  * HTTP pipelining regression tests for bin/uwebserver.c

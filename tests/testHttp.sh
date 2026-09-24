@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Comprehensive HTTP protocol tests for Qbix Server.
 # Tests keep-alive, HTTP/1.0, path traversal, encoding, ETag/304,
