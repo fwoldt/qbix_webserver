@@ -324,11 +324,20 @@ class Q_WebServer_Dashboard
 			$total = ($info['MemTotal'] ?? 0) / 1024;
 			$available = ($info['MemAvailable'] ?? 0) / 1024;
 			$used = $total - $available;
+			// Swap in use is the signal a RAM percentage hides: a box can read
+			// a comfortable 42% while it has pushed gigabytes to disk under
+			// earlier pressure, which is the opposite of comfortable.
+			$swapTotal = ($info['SwapTotal'] ?? 0) / 1024;
+			$swapFree = ($info['SwapFree'] ?? 0) / 1024;
+			$swapUsed = max(0, $swapTotal - $swapFree);
 			return array(
 				'totalMb' => round($total),
 				'usedMb' => round($used),
 				'availableMb' => round($available),
 				'percent' => $total > 0 ? round($used / $total * 100) : 0,
+				'swapTotalMb' => round($swapTotal),
+				'swapUsedMb' => round($swapUsed),
+				'swapPercent' => $swapTotal > 0 ? round($swapUsed / $swapTotal * 100) : 0,
 			);
 		}
 		// macOS: sysctl + vm_stat
@@ -610,9 +619,12 @@ el('sw',s.workers+(s.forkMode?' <span style="font-size:10px;color:var(--yel)">(f
 // System RAM
 if(s.systemRam){
   el('sysram',s.systemRam.percent+'%');
-  el('sysram-detail',Math.round(s.systemRam.usedMb/1024*10)/10+' / '+Math.round(s.systemRam.totalMb/1024*10)/10+' GB');
+  var _sw=s.systemRam.swapUsedMb||0;
+  var _det=Math.round(s.systemRam.usedMb/1024*10)/10+' / '+Math.round(s.systemRam.totalMb/1024*10)/10+' GB';
+  if(_sw>50){_det+=' \u00B7 <span style="color:var(--red)">'+(Math.round(_sw/1024*10)/10)+' GB swap</span>';}
+  el('sysram-detail',_det);
   var re=document.getElementById('sysram');
-  if(re)re.style.color=s.systemRam.percent>85?'var(--red)':(s.systemRam.percent>70?'var(--yel)':'var(--grn)');
+  if(re)re.style.color=(_sw>50||s.systemRam.percent>85)?'var(--red)':(s.systemRam.percent>70?'var(--yel)':'var(--grn)');
 }
 // Worker COW stats
 if(s.workerStats){
