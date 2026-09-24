@@ -2816,6 +2816,7 @@ class Q_WebServer_Panel
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>%%BRAND%% Control Panel</title>
+%%BRANDHEAD%%
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0a0b14;--sfc:rgba(22,24,40,.7);--sfc-solid:#161828;--bdr:rgba(255,255,255,.06);
@@ -4454,6 +4455,9 @@ checkAuthAndInit();
 HTML;
 		$brand = class_exists('Q_WebServer', false)
 			? Q_WebServer::brand() : 'Qbix';
+		// Icons, manifest and link-preview tags; escaped by headTags().
+		$html = str_replace('%%BRANDHEAD%%',
+			Q_WebServer_Brand::headTags($brand . ' Control Panel', '/Q/panel'), $html);
 		return str_replace('%%BRAND%%',
 			htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'), $html);
 	}

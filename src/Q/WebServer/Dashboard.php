@@ -479,12 +479,14 @@ class Q_WebServer_Dashboard
 		// Scheme and host are chosen in the browser from location, below --
 		// a hardcoded ws:// is blocked as mixed content on an https page.
 		$baseUrl = "http://$host";
+		// Icons, manifest and link-preview tags (Q_WebServer_Brand).
+		$brandHead = Q_WebServer_Brand::headTags(Q_WebServer::brand() . ' Dashboard', '/Q/dashboard');
 		return <<<HTML
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>$brand Dashboard</title>
-<style>
+$brandHead<style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f1117;--sfc:#1a1d27;--sfc2:#222533;--bdr:#2a2d3a;--txt:#e1e4ed;--dim:#6b7089;
 --ac:#7c8aff;--grn:#4ade80;--yel:#fbbf24;--red:#f87171;--cyn:#22d3ee;--pur:#a78bfa}

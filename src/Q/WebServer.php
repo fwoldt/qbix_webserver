@@ -1937,6 +1937,16 @@ class Q_WebServer
 			return $fresh !== null ? $fresh : $cached;
 		}
 
+		// The server's own icons, manifest and link-preview image, and the
+		// origin its pages put in absolute preview URLs. This path serves
+		// HTTP/2, which is TLS in practice.
+		if (strncmp($path, '/Q/', 3) === 0) {
+			Q_WebServer_Brand::noteRequest($parsed,
+				!empty($parsed['https']) || ($parsed['httpVersion'] ?? '') === '2');
+			$brandResponse = Q_WebServer_Brand::route($path);
+			if ($brandResponse !== null) return $brandResponse;
+		}
+
 		if ($path === '/Q/event' && $method === 'POST') {
 			return self::handleRemoteEvent($parsed);
 		}
@@ -2494,6 +2504,22 @@ class Q_WebServer
 						}
 					}
 				}
+			}
+		}
+
+		// The server's own icons, manifest and link-preview image, and the
+		// origin its pages put in absolute preview URLs.
+		if (strncmp($path, '/Q/', 3) === 0) {
+			$clientMeta = is_resource($client) ? @stream_get_meta_data($client) : array();
+			Q_WebServer_Brand::noteRequest($parsed, !empty($clientMeta['crypto']));
+			$brandResponse = Q_WebServer_Brand::route($path);
+			if ($brandResponse !== null) {
+				$brandHeaders = $brandResponse['headers'];
+				$brandType = $brandHeaders['Content-Type'];
+				unset($brandHeaders['Content-Type']);
+				self::sendResponse($client, $brandResponse['status'], $brandResponse['body'],
+					$brandType, $brandHeaders);
+				return false;
 			}
 		}
 
@@ -5722,7 +5748,7 @@ HTML;
 	{
 		return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>' . htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8') . ' — Documentation</title>
-<script src="/Q/docs/marked.min.js"></script>
+' . Q_WebServer_Brand::headTags(self::brand() . ' — Documentation', '/Q/docs') . '<script src="/Q/docs/marked.min.js"></script>
 <script>if(typeof marked==="undefined"){marked={parse:function(s){
 s=s.replace(/^### (.+)$/gm,"<h3>$1</h3>").replace(/^## (.+)$/gm,"<h2>$1</h2>").replace(/^# (.+)$/gm,"<h1>$1</h1>");
 s=s.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/`([^`]+)`/g,"<code>$1</code>");
