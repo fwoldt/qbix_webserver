@@ -1,0 +1,19 @@
+# Build context for packaging/docker/Dockerfile: the tracked sources, no
+# history, no local state, no build output.
+.git
+.github
+local
+files
+tests/local
+buildroot
+downloads
+source
+spc
+spc-src
+dist
+artifacts
+qbixserver-*
+php-*
+*.tar.gz
+tests
+examples
