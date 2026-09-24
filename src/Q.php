@@ -1879,7 +1879,10 @@ class Q_Sapi
 		$body = '';
 		while (ob_get_level() > 0) {
 			$chunk = ob_get_clean();
-			if ($chunk !== false) $body = $chunk . $body;
+			// A buffer that cannot be removed answers false and stays: stop,
+			// or this loop never ends (see Q_WebServer::dropOutputBuffers()).
+			if ($chunk === false) break;
+			$body = $chunk . $body;
 		}
 		$status  = class_exists('Q_Response', false)
 			? Q_WebServer_State::responseCode() : 200;

@@ -950,6 +950,8 @@ class Q_WebServer
 				'query' => $query,
 				'headers' => $request['headers'],
 				'body' => $request['body'] ?? '',
+				// The server's own routes only; the rest goes to a worker below.
+				'_builtinOnly' => true,
 			));
 			if (is_array($builtin)) return $builtin;
 		}
@@ -2186,6 +2188,18 @@ class Q_WebServer
 				'headers'=>array('Content-Type'=>'text/plain'));
 		}
 
+		// Asked only for the server's own routes (http2Route(), for /Q/ and
+		// /.well-known/): everything the server answers itself has been
+		// answered above, so what is left is the application's. Falling
+		// through ran it right here -- index.php inside the server process,
+		// not in a worker: /Q/panel took 838ms of the event loop, and a second
+		// such request spun forever on the capture buffer and stopped the
+		// server answering at all (2026-09-24). Declined, the caller hands it
+		// to a worker like any other script.
+		if (!empty($parsed['_builtinOnly'])) {
+			return null;
+		}
+
 		$fsPath = self::resolveStatic($path);
 
 		// Directory
@@ -3085,7 +3099,7 @@ class Q_WebServer
 			$pid = Q_WebServer_Fork::fork();
 			if ($pid === 0) {
 				// ── CHILD: run dispatch pipeline ──
-				while (ob_get_level()) ob_end_clean();
+				self::dropOutputBuffers();
 				ob_start();
 				$status = 200;
 				$headers = array();
@@ -3158,7 +3172,7 @@ class Q_WebServer
 		}
 		@error_log('Q_WebServer: fork failed, serving in-process (state cleared)');
 
-		while (ob_get_level()) ob_end_clean();
+		self::dropOutputBuffers();
 		header_remove();
 		http_response_code(200);
 		ob_start();
@@ -4802,7 +4816,7 @@ HTML;
 		// Clear any stale headers and output from previous in-process requests,
 		// then start fresh output buffering. This prevents "headers already sent"
 		// errors when scripts call header() after prior output leaked through.
-		while (ob_get_level()) ob_end_clean();
+		self::dropOutputBuffers();
 		@header_remove();
 		@http_response_code(200);
 		Q_WebServer::clearResponseState();
@@ -6271,6 +6285,28 @@ init();
 		$result = (is_dir($fsPath) || is_file($fsPath)) ? $fsPath : null;
 		if (count($pathCache) < 10000) $pathCache[$cacheKey] = $result;
 		return $result;
+	}
+
+	/**
+	 * End every output buffer that can be ended, and stop at the first that
+	 * cannot.
+	 *
+	 * `while (ob_get_level()) ob_end_clean();` never finished when a buffer
+	 * refused to go -- and the capture buffer (Q_WebServer_Capture) is made
+	 * not removable on purpose, and kept for the life of the process. A second
+	 * request run in the same process spun on it forever: in the parent that
+	 * stopped the whole server answering, with a notice per turn in the log
+	 * (37 million of them on alpha, 2026-09-24), after one request for an
+	 * unknown /Q/ path. What is left is Capture's to clean (Capture::begin()).
+	 *
+	 * @method dropOutputBuffers
+	 * @static
+	 */
+	static function dropOutputBuffers()
+	{
+		while (ob_get_level() > 0) {
+			if (!@ob_end_clean()) break;
+		}
 	}
 
 	static function closeClient($key)
