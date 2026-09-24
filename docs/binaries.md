@@ -21,6 +21,83 @@ The static PHP binary from [static-php-cli](https://github.com/crazywhalecc/stat
 
 The tradeoff: Electron gives a controlled rendering environment — same browser engine on every machine. Qbix Server gives whatever browser the user has. For a web app that already works in a browser — which is what PHP apps are — there's no reason to ship another one.
 
+## Variants: Which Binary to Download
+
+Every release carries each platform's binary in four variants, for each PHP
+version the server supports (8.2, 8.3, 8.4 and 8.5), plus a source kit. A
+variant is a set of PHP extensions compiled in; which extensions each one
+carries is defined once, in the extension baseline ([requirements.md](requirements.md)),
+and every build takes its list from there.
+
+| Variant | Carries | Size (Linux x86-64, PHP 8.3) | For |
+|---|---|---|---|
+| `mini` | Only what the server itself needs: process isolation, sockets, TLS, sessions, its own metrics store | 16 MB | Static sites, small scripts, the smallest footprint |
+| `lite` | mini + everything a typical application platform requires: XML, images (gd), MySQL/MariaDB, SQLite, cURL, intl, zip, opcache | 68 MB | Most applications |
+| `standard` | lite + the recommended tier: PostgreSQL, MongoDB, the caches (apcu, redis, memcached, igbinary), LDAP, SOAP, bcmath and more | 73 MB | The default: what the documentation assumes |
+| `full` | Everything static-php-cli can build on that platform, best effort | ~90-120 MB | When you need an extension outside standard |
+| `source` | A build kit, not a binary: the phar, the baseline, the console tool and a ready spc recipe for every platform x PHP x variant | — | A platform, architecture or PHP version no release covers |
+
+Most of lite's size is the ICU data `intl` carries; Windows builds are smaller
+(35 MB for standard), since `intl` is not in them. Sizes vary a little by platform
+and PHP version; each release page lists the exact files.
+
+`full` is built on a best-effort basis: it depends on every third-party source
+static-php-cli knows, and one that fails on a platform leaves that platform's
+`full` binary out of the release rather than holding back the other variants. The
+release's file list shows which were built.
+To see exactly what a variant carries on a platform, and what it leaves out and
+why:
+
+```bash
+php qbixctl.php ext:list --variant=standard --platform=linux-x86_64 --php=8.3
+php qbixctl.php ext:plan --variant=full --platform=windows-x64
+```
+
+### File names
+
+```
+qbixserver-<platform>-php<version>-<variant>[.exe]   the server, one file
+php-<platform>-php<version>-<variant>[.exe]          the same PHP, as a plain interpreter
+qbixserver-windows-x64-php<version>-<variant>-gui.exe  Windows, no console window
+qbixserver-source-kit-<release>.tar.gz               the source kit
+qbix-webserver_<release>-1+<distro>_all.deb          OS packages (packages.md)
+qbix-webserver-<release>-1.<distro>.noarch.rpm
+SHA256SUMS                                           checksums of every file above
+```
+
+Platforms are `linux-x86_64`, `linux-aarch64`, `macos-arm64` and `windows-x64`.
+The names earlier releases used -- `qbixserver-linux-x86_64`,
+`qbixserver-windows-x64.exe` and so on -- are still published, as copies of the
+`standard` variant on PHP 8.3, so links to `releases/latest/download/<name>`
+keep working.
+
+```bash
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/qbixserver-linux-x86_64-php8.3-standard
+curl -LO https://github.com/se7enxweb/qbix-webserver/releases/latest/download/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+### Checking a binary against its variant
+
+Every release build is checked before it is published: the PHP it was built
+with is asked whether it loads everything its variant lists, and a build that
+dropped an extension fails by name. You can ask the same of any binary's PHP,
+from a checkout of this repository:
+
+```bash
+QBIX_STATIC_BUILD=1 ./php-linux-x86_64-php8.3-standard qbixctl.php ext:check --variant=standard
+```
+
+### What each platform leaves out
+
+The variants are the same on every platform except where a platform cannot
+have an extension: Windows has no `fork()` (so no `pcntl` or `posix`) and a
+shorter list from static-php-cli, and the fully static Linux binaries cannot
+load ODBC drivers at run time. [requirements.md](requirements.md#forms-of-distribution-and-their-exceptions)
+lists every exception with its reason; the Windows section below says what
+would bring each Windows gap back. For ODBC, Oracle or Firebird, use the Docker
+image ([docker.md](docker.md)) or the OS packages ([packages.md](packages.md)).
+
 ## Creating a Binary
 
 ### From the phar (requires static-php-cli)
@@ -198,6 +275,37 @@ The server exposes `GET /Q/attestation` returning the binary hash, all signature
 
 The Security tab lets you sign, verify, and publish to Rekor from the browser. Paste a PEM private key, name the signer, click Sign. Adjust the M threshold and click Verify. One-click Rekor publishing with confirmation.
 
+
+## The Windows Build: What It Leaves Out, and What Would Bring It Back
+
+The Windows binary is built by the same release workflow as the others, with
+static-php-cli (spc) on a GitHub `windows-2022` runner. It is marked
+experimental: a failure there never blocks the Linux and macOS binaries, and
+when it fails the job prints spc's own build logs, where the compiler's
+errors are, instead of only "exited with code 2".
+
+Some of what the other platforms carry is left out on Windows, or replaced.
+Each entry says why, and exactly what has to change before it can come back.
+
+| What | On Windows | Why | Needed to bring it back |
+|---|---|---|---|
+| `pcntl`, `posix` | Not built | POSIX-only PHP extensions: there is no `fork()` on Windows. | Nothing can: these do not exist for Windows. Per-request isolation comes from `qbix_fork.dll`, or from php-cgi when that is missing (see below). |
+| `intl` | Left out | The ICU bundle spc ships for Windows is ICU 78, whose headers require C++17. PHP 8.3's Windows build compiles `ext/intl` with the compiler's default standard, so the build dies in `intl_convertcpp.cpp` with `icu_78::UnicodeString: use of undefined type`. Raising the standard globally (`CL=/std:c++17`) does not work: it also reaches the C libraries, and libxml2's `/std:c11` rejects it (MSVC error D8016). | Any one of: the PHP Windows build passing `/std:c++17` to `ext/intl`'s C++ sources only; spc supporting that per extension; or spc offering an ICU 74 or earlier bundle for Windows. Then add `intl` back to the Windows `extensions:` list in `.github/workflows/release.yml`. |
+| `xsl` | Left out | spc reports "library [libxslt] is in the lib.json list but not supported to compile" on Windows. | libxslt support in spc's Windows builder. |
+| `ffi` | Built when available | spc's download step asks for `ffi` first and retries without it if that fails. Without FFI there is no `qbix_fork.dll`. | Nothing; it is attempted on every build. |
+| `qbix_fork.dll` | Best effort | A small native shim (`src/fork_shim.c`) that gives copy-on-write worker processes through FFI. It is compiled after PHP, and a failure there does not fail the job. Without it the server uses php-cgi per request, which is slower but correct. | Nothing; it is attempted on every build. |
+| Runner image | Pinned to `windows-2022` | `windows-latest` moved to an image with Visual Studio 2026 (version 18), which spc does not look for: it checks fixed paths for VS 2022 and 2019 only, and failed with "Current VS version  is not supported yet!". Its Windows libraries also carry VS 2022 project files. | spc supporting the VS 18 toolset; then the pin can move. |
+
+Releases up to and including v0.0.4.27 were published without a Windows
+binary. Two things stopped it: the `intl` failure above, and, once PHP built,
+a packaging step that looked for the new `php.exe` under `spc-src\buildroot`
+when static-php-cli had put it in `buildroot` at the checkout's root, so it
+skipped itself and the output check failed a build that had worked. Both are
+fixed; the next release carries the Windows binaries, without `intl`.
+
+When a Windows build fails, open the job's "Show why the PHP build failed"
+step: it prints the error lines and the end of `log\spc.output.log` and
+`log\spc.shell.log`.
 ## Windows GUI Mode
 
 On Windows, the release includes two variants:

@@ -21,7 +21,9 @@ var docTitles = {
   "lessons.md": "Lessons",
   "time-consuming-lessons.md": "Time-Consuming Lessons",
   "designs.md": "Designs",
-  "binaries.md": "Binaries & Signing",
+  "binaries.md": "Binaries & Variants",
+  "docker.md": "Docker Images",
+  "packages.md": "OS Packages (deb, rpm)",
   "migrate-nginx.md": "Migrate from nginx",
   "migrate-apache.md": "Migrate from Apache",
   "migrate-caddy.md": "Migrate from Caddy",
@@ -45,7 +47,7 @@ async function init() {
   if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
   var sections = {"Getting Started":["why.md","running.md","requirements.md","extensions.md","configuration.md","layout.md","console.md"],
     "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
-    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","api-discovery.md"],
+    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","docker.md","packages.md","api-discovery.md"],
     "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
     "Lessons":["lessons.md","time-consuming-lessons.md"],
     "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};
