@@ -157,6 +157,8 @@ php qbixserver.php --workers=4
 
 Classes are **eager** — loaded once at startup, shared across all workers via copy-on-write. This is the "hot path" code that handles every request.
 
+The preload runs before the pool is created, which is also before the source-code transform is installed. That is fine for code written against `Q_Response` — the transform does not apply to it. It is not fine for an application that relies on the transform (`header()`, `setcookie()`, `exit`): whatever `preload` loads keeps the real functions in every worker, and an `exit` there ends the worker instead of the request. To warm such an application in the parent, use `Q.webserver.warmup` (see [reset.md](reset.md)), which runs after the transform; the server warns at startup if `preload` is set while the transform is on.
+
 ### Handlers — loaded on demand
 
 Handlers are the opposite of classes: they're loaded **only when their event fires**. Drop a file in `handlers/` and it's available as an event:

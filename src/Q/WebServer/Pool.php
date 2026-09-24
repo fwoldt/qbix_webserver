@@ -117,7 +117,7 @@ class Q_WebServer_Pool
 			Q_WebServer_Compat::init();
 		}
 
-		// Parent-side preload, before the snapshot and before the fork.
+		// Parent-side warm-up, before the snapshot and before the fork.
 		//
 		// This is the one lever that moves per-worker memory. A worker that
 		// bootstraps a heavy framework on its first request builds that state in
@@ -131,29 +131,43 @@ class Q_WebServer_Pool
 		// tables, parsed configuration, type registries -- so the shared fraction
 		// is large and the private residue small.
 		//
-		// The preload is a script named by Q.webserver.preload, run once in an
+		// The warm-up is a script named by Q.webserver.warmup, run once in an
 		// isolated scope. It is off unless configured, because what is safe to
 		// load before a fork is application-specific: loading classes and parsing
 		// configuration is fork-safe, but a database handle opened here would be
 		// shared by every child and corrupt. The script's job is to warm the
 		// former and open none of the latter; the app provides it.
-		$preload = Q_Config::get('Q', 'webserver', 'preload', null);
-		if (is_string($preload) && $preload !== '' && is_file($preload)) {
+		//
+		// It has its own key, and must. It was first read from
+		// Q.webserver.preload, which already meant something else: an autoloader
+		// that Q_WebServer::start() requires before the pool exists -- before
+		// Compat::init() above has installed the source transform. The script
+		// therefore ran twice, and the first run compiled everything it loaded
+		// with no transform at all. A class is compiled once and every forked
+		// worker inherits it, so the whole kernel kept its real exit and its real
+		// header(): exit ended the worker instead of the request (the AJAX
+		// endpoints, which finish with eZExecution::cleanExit(), answered
+		// "Worker died"), and header() under the CLI SAPI did nothing. Files a
+		// worker loaded for itself were transformed as usual, which is why only
+		// some paths broke. Here, after init(), the script's code is compiled
+		// through the wrapper like everything else.
+		$warmup = Q_Config::get('Q', 'webserver', 'warmup', null);
+		if (is_string($warmup) && $warmup !== '' && is_file($warmup)) {
 			$before = memory_get_usage(true);
-			$__run = static function ($__preloadFile) {
-				require $__preloadFile;
+			$__run = static function ($__warmupFile) {
+				require $__warmupFile;
 			};
 			try {
-				$__run($preload);
+				$__run($warmup);
 				$grew = (memory_get_usage(true) - $before) / 1048576;
 				fwrite(STDERR, sprintf(
-					"  preload %s warmed %.1f MB in the parent (shared by every worker)\n",
-					basename($preload), $grew));
+					"  warm-up %s warmed %.1f MB in the parent (shared by every worker)\n",
+					basename($warmup), $grew));
 			} catch (\Throwable $e) {
-				// A preload that throws must not stop the server from starting --
+				// A warm-up that throws must not stop the server from starting --
 				// the workers can still warm themselves lazily, the old way.
 				if (class_exists('Q_WebServer_Log', false)) {
-					Q_WebServer_Log::error('preload ' . basename($preload)
+					Q_WebServer_Log::error('warm-up ' . basename($warmup)
 						. ' failed, workers will warm lazily: ' . $e->getMessage());
 				}
 			}

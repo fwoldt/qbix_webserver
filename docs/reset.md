@@ -110,13 +110,24 @@ between-request reset does not.
 A worker builds its whole working set — compiled templates, resolved routes, the
 object graph — on its first request and keeps it: tens to a couple hundred MB,
 private, once per worker. That set lives in the allocator's arena, which is
-anonymous memory, which `fork()` shares copy-on-write. So `Q.webserver.preload`
+anonymous memory, which `fork()` shares copy-on-write. So `Q.webserver.warmup`
 names a script the pool runs **in the parent, before it forks**, typically one
 that renders a representative page. Every worker then inherits the warmed arena
 shared; measured on a heavy app, ~21 MB private per warm worker against ~209
 unwarmed.
 
-The trap: **the snapshot is taken after the preload, so whatever the render left
+It is not `Q.webserver.preload`, and must not be. `preload` is older and means
+an autoloader, which the server requires before the pool exists -- before the
+source-code transform is installed. A class is compiled once and every worker
+inherits it, so an application loaded that way keeps its real `exit` and
+`header()` for the life of the pool: `exit` ends the *worker* rather than the
+request (the client gets `502 Worker died`), and `header()` under the CLI SAPI
+does nothing. Files a worker loads for itself are still transformed, so only
+some paths break, which makes it look like anything but a load-order problem.
+The warm-up runs after the transform is in place. The server warns at startup
+when `preload` is set with the transform on.
+
+The trap: **the snapshot is taken after the warm-up, so whatever the render left
 becomes every worker's baseline.** The between-request reset then faithfully
 restores workers *to that dirtied baseline*. A render leaves a great deal — the
 parsed request, routing state, template-override caches, a framework's
@@ -124,7 +135,7 @@ parsed request, routing state, template-override caches, a framework's
 it, frozen, serves something wrong to every worker at once.
 
 The fix is the same reflection this doc already relies on, applied once more
-before the snapshot: **the preload script resets every user-class static to its
+before the snapshot: **the warm-up script resets every user-class static to its
 declared default and clears the request globals, keeping only the pure config
 and type registries** (the statics counterpart to `keepGlobals`). Naming the
 leaks instead does not converge — on one app, a fourth surfaced after three were

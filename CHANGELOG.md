@@ -88,6 +88,17 @@ edited down to what a reader actually needs.
 
 ### Added
 
+- **A parent warm-up, `Q.webserver.warmup`.** A script the pool runs once in the
+  parent, after the source-code transform is installed and before it forks --
+  typically one rendering a representative page. The arena that render grows is
+  inherited copy-on-write, so a warm worker holds ~21 MB private against ~209
+  MB without it on an Exponential install. It has its own key because the
+  existing `Q.webserver.preload` is required before the transform exists: a
+  script run there compiled the whole application untransformed, and every
+  worker inherited a real `exit` (answering `502 Worker died` wherever the app
+  finishes a request with `exit`) and a `header()` that does nothing under the
+  CLI SAPI. The server now warns at startup when `preload` is set with the
+  transform on.
 - Column headings on the live request log (Time, Sts, Verb, Path, ms, Mem).
 - The dashboard's own heading links to the dashboard; the footer's product name
   keeps its link to the repository.

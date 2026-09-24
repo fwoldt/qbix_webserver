@@ -400,6 +400,17 @@ class Q_WebServer
 					require_once $autoloadPath;
 					$count = count(get_declared_classes());
 					echo "  Autoloader: " . basename($autoload) . "\n";
+					// This runs before the pool exists, so before the source
+					// transform is installed. With the transform on, whatever
+					// the file loads keeps its real exit and header() in every
+					// worker -- exit then ends the worker, not the request. A
+					// script meant to warm the application in the parent
+					// belongs in Q.webserver.warmup, which runs after it.
+					if (!Q_Config::get('Q', 'compat', 'skipSourceCodeTransform', false)) {
+						fwrite(STDERR, "  Warning: Q.webserver.preload is loaded before the source"
+							. " transform; code it loads keeps real exit/header()."
+							. " Use Q.webserver.warmup for a parent warm-up.\n");
+					}
 				} else {
 					echo "  Warning: autoload file not found: $autoloadPath\n";
 				}
