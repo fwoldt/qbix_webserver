@@ -3201,10 +3201,13 @@ class Q_WebServer
 				register_shutdown_function(function () use ($emit) {
 					// Reached only when dispatchToQ() did NOT return normally --
 					// the Platform's exception handler echoes and then exits.
-					// Read with ob_get_contents(): dispatchToQ() uses a
-					// NON-REMOVABLE buffer, on which ob_get_clean() fails.
+					// dispatchToQ() captures into Q_WebServer_Capture's
+					// buffer, which cannot be removed; end() collects it.
 					$body = '';
-					if (ob_get_level() > 0) {
+					if (class_exists('Q_WebServer_Capture', false)
+					and Q_WebServer_Capture::active()) {
+						$body = Q_WebServer_Capture::end();
+					} elseif (ob_get_level() > 0) {
 						$body = (string) ob_get_contents();
 					}
 					while (@ob_end_clean()) { /* drop what we can */ }
@@ -4765,8 +4768,15 @@ HTML;
 			}, 0, PHP_OUTPUT_HANDLER_FLUSHABLE | PHP_OUTPUT_HANDLER_CLEANABLE
 				| PHP_OUTPUT_HANDLER_REMOVABLE);
 		} else {
-			// Platform mode or no client socket: non-removable buffer
-			ob_start(null, 0, 0);
+			// Platform mode or no client socket: the process's one capture
+			// buffer, reused per request. Opening a non-removable buffer here
+			// each time left one behind per request, with the whole response
+			// in it, for as long as the process lived -- see Q_WebServer_Capture.
+			if (!class_exists('Q_WebServer_Capture', false)) {
+				require_once __DIR__ . '/WebServer/Capture.php';
+			}
+			Q_WebServer_Capture::begin();
+			$useCapture = true;
 		}
 
 		$status = 200;
@@ -4820,7 +4830,8 @@ HTML;
 			// No action needed here.
 		} catch (\Throwable $e) {
 			$status = 500;
-			if (ob_get_level()) ob_clean();
+			if (!empty($useCapture)) Q_WebServer_Capture::discard();
+			elseif (ob_get_level()) ob_clean();
 			echo json_encode(array('error' => $e->getMessage()));
 			$headers['Content-Type'] = 'application/json';
 		}
@@ -4828,12 +4839,14 @@ HTML;
 		// return false on it. Record the content for the shutdown handler in
 		// case the Platform exits before we return, then drop the buffer.
 		$body = '';
-		if (ob_get_level()) {
+		if (!empty($useCapture)) {
+			$body = Q_WebServer_Capture::end();
+		} elseif (ob_get_level()) {
 			$body = (string) ob_get_contents();
 			@ob_clean();
+			while (@ob_end_clean()) { /* drop any buffers we can */ }
 		}
 		self::$_capturedOutput = '';
-		while (@ob_end_clean()) { /* drop any buffers we can */ }
 		@header_remove();
 
 		// Fix 1: Clean up upload temp files

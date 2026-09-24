@@ -100,6 +100,54 @@ These are the same in all persistent-worker systems (fpm, Octane, Swoole):
 
 For (1) and (2), `pcntl_fork()` is the only bulletproof solution. For (3) and (4), no execution model helps — the developer must manage external state.
 
+## Output buffers, and why a worker's memory is flat
+
+A worker collects each response in an output buffer rather than writing it to
+stdout, and that buffer has to survive the script: applications end their own
+buffers with loops like `while (@ob_end_clean());`. So it cannot be removable.
+
+It used to be opened per request with `ob_start(null, 0, 0)`. Flags `0` make a
+buffer unremovable, but also uncleanable, so the `ob_clean()` meant to empty it
+failed silently and the next request stacked another on top -- one buffer, with
+that request's whole page in it, left behind per request for the life of the
+worker. On an Exponential install that was ~2 MB a request: a worker at 1.1 GB
+after 600 requests. Every response was still right, because the body was read
+from whichever buffer was on top, so nothing visible pointed at it. Userland
+could not see it either: no static, global or object held the memory, and
+`gc_collect_cycles()` found nothing, because PHP's output stack is not a PHP
+value.
+
+`Q_WebServer_Capture` replaces it. There is one capture buffer per process,
+opened once and reused. It is cleanable and flushable but not removable, and
+its handler moves flushed output out into a string, so the buffer is empty
+between requests. Buffers a script leaves open are flushed down into it at the
+end, as PHP does at the end of a request. Its own statics are exempt from the
+snapshot restore -- restored to the parent's "no buffer yet", every request
+would open another and the leak would be back.
+
+## A worker that grows is replaced
+
+Memory that grows per request is not something to find by watching a graph. So
+every request ends with a check, in the worker, before it answers:
+
+- the output stack must be back to exactly the capture buffer, empty;
+- the heap must be under `Q.webserver.workerMemoryCeiling` (MB; by default
+  256, or three quarters of `memory_limit` if that is lower). It is absolute on
+  purpose: with hundreds of workers, a ceiling derived from a generous
+  `memory_limit` would let each grow to gigabytes first.
+
+A worker that fails either still answers the request, and asks to be replaced.
+The parent retires it before giving it another request, forks a fresh one from
+the clean parent, and logs why:
+
+    worker 12345 replaced after 812 requests: heap 402 MB over the 384 MB ceiling
+
+A leak somewhere -- in the server, the application, an extension -- then costs
+a periodic re-fork and a log line naming it, instead of a machine that runs out
+of memory. `tests/unit-worker-memory-bounded.php` holds both halves: hundreds
+of requests on one worker leave it with one buffer and an unchanged heap, and a
+ceiling it cannot stay under gets every request answered by a fresh worker.
+
 ## Warming the pool in the parent, and the one trap in it
 
 The reset above runs *between requests*, and its baseline is a snapshot taken

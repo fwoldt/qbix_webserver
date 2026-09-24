@@ -64,6 +64,46 @@ edited down to what a reader actually needs.
 
 ### Fixed
 
+- **Every request left an output buffer behind, so persistent workers grew
+  without limit.** The response was captured in a buffer opened per request
+  with `ob_start(null, 0, 0)`; flags `0` make a buffer impossible to remove
+  *and* impossible to clean, so each request's buffer -- with its whole page in
+  it -- stayed on the stack for the life of the worker. Measured on an
+  Exponential install at ~2 MB a request: one worker at 1.1 GB after 600
+  requests. The same happened in the in-process server. Responses looked
+  right, because the body was read from whichever buffer was on top -- except
+  when a script left a buffer of its own open, when only that buffer's content
+  was sent. There is now one capture buffer per process, reused and emptied
+  each request (`Q_WebServer_Capture`), and buffers a script leaves open are
+  part of its response.
+- **Every request left its error handler behind.** PHP keeps each handler
+  that `set_error_handler()` replaces on an internal stack no PHP code can
+  see, and the between-request reset "restored" the boot handler by setting
+  it -- one more push. Exponential installs a method of its eZDebug instance,
+  which holds everything the request logged, so every request's debug log
+  stayed in the worker: ~1 MB a request, 4 MB for a search page. The reset
+  now pops handlers until the boot one is current, compared by identity.
+- **The file wrapper leaked a resource on every filesystem call.** To reach
+  the disk, the compat `file://` wrapper unregistered and re-registered
+  itself, and each registration is a resource PHP frees only when a request
+  ends -- never, in a worker. Exponential makes up to 14 000 such calls a
+  request. Missing paths and directory listings are now answered with
+  `glob()`, which bypasses the wrappers; `fstat()` on an open file no longer
+  unwraps; the transform sends `file_exists()`, `is_dir()` and `is_file()`
+  to shims that ask the OS directly; and repeated stats of a path within a
+  request are remembered (forgotten on any write through the wrapper and at
+  the end of the request). Per-request calls went from thousands to
+  hundreds. A transformed file's stat now carries its mtime, without which
+  the opcode cache would not store it, so transformed scripts are no longer
+  recompiled on every include.
+- `is_link()` was false for every link under the compat wrapper, which
+  answered link queries with `stat()` instead of `lstat()`.
+
+Together: a worker that grew ~2 MB a request (1.1 GB after 600 on an
+Exponential install) now grows ~0.2 MB a request on mixed traffic, the rest
+being one unwrap per include of a file that needs no transform, which the
+worker memory ceiling below bounds.
+
 - **The "Worker Memory (COW)" card reported several times the real memory.** It
   summed each worker's RSS, and RSS counts a shared copy-on-write page in full
   against every process mapping it -- so the warmed baseline shared across 380
@@ -88,6 +128,13 @@ edited down to what a reader actually needs.
 
 ### Added
 
+- **A per-request health check that replaces a worker instead of letting it
+  grow.** After each request a worker checks that its output stack is back to
+  the one empty capture buffer and that its heap is under
+  `Q.webserver.workerMemoryCeiling` (MB; default 256, or three quarters of
+  `memory_limit` if lower). A worker that fails still answers, and the parent
+  replaces it before its next request and logs the reason, so a leak anywhere
+  costs a re-fork and a named log line rather than the machine's memory.
 - **A parent warm-up, `Q.webserver.warmup`.** A script the pool runs once in the
   parent, after the source-code transform is installed and before it forks --
   typically one rendering a representative page. The arena that render grows is
@@ -100,6 +147,10 @@ edited down to what a reader actually needs.
   CLI SAPI. The server now warns at startup when `preload` is set with the
   transform on.
 - Column headings on the live request log (Time, Sts, Verb, Path, ms, Mem).
+- The dashboard reads at a glance: the status-code and worker-memory cards
+  list one item per line, the header reads "Linux · PHP x · Live · Up 15s",
+  and "Documentation · Powered by the Qbix engine" has its own centred line
+  in the footer.
 - The dashboard's own heading links to the dashboard; the footer's product name
   keeps its link to the repository.
 - Swap usage on the System RAM card. A box can read a comfortable RAM

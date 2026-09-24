@@ -60,6 +60,13 @@ class Q_WebServer_Compat
 		'spl_autoload_register'=> 'Q_WebServer_Compat::_spl_autoload_register',
 		'spl_autoload_unregister' => 'Q_WebServer_Compat::_spl_autoload_unregister',
 		'putenv'               => 'Q_WebServer_Compat::_putenv',
+		// Existence and type checks, answered without the file wrapper --
+		// which cannot reach the disk without re-registering itself, and
+		// every registration is a resource the worker keeps. See
+		// Q_WebServer_CompatFileWrapper::unwrap().
+		'file_exists'          => 'Q_WebServer_Compat::_file_exists',
+		'is_dir'               => 'Q_WebServer_Compat::_is_dir',
+		'is_file'              => 'Q_WebServer_Compat::_is_file',
 	);
 
 	/** @var bool Whether the phar:// scheme is currently wrapped for transforms. */
@@ -227,15 +234,32 @@ class Q_WebServer_Compat
 		}
 
 		// ── Restore error/exception handlers to boot state ──
+		//
+		// By popping, never by pushing. PHP keeps every handler that
+		// set_error_handler() replaces on an internal stack, which no PHP
+		// code can see. This used to "restore" the boot handler by setting
+		// it -- one more push -- so the stack gained an entry per request,
+		// each holding the handler the request had installed. Exponential
+		// installs a method of its eZDebug instance, and that instance holds
+		// every message and timing the request logged, so every request's
+		// debug log stayed in the worker for good: about 1 MB a request, and
+		// 4 MB for a search page, with no static, global or object anywhere
+		// in reach of it.
+		//
+		// The stack is unwound until the current handler IS the boot one,
+		// compared by identity rather than taken on trust from the
+		// bookkeeping, so a push made by code that did not go through the
+		// shim is unwound too.
 		if (self::$bootHandlersCaptured) {
-			// Pop any handlers the request pushed
-			// set_error_handler returns the previous handler, and
-			// restore_error_handler pops the stack. We reset by
-			// setting the boot handler explicitly.
-			set_error_handler(self::$bootErrorHandler ?? function () { return false; });
-			set_exception_handler(self::$bootExceptionHandler);
+			self::unwindHandlers('error', self::$bootErrorHandler);
+			self::unwindHandlers('exception', self::$bootExceptionHandler);
 		}
 		self::$errorHandlerStack = array();
+
+		// Stats remembered during the request are only good for the request.
+		if (class_exists('Q_WebServer_CompatFileWrapper', false)) {
+			Q_WebServer_CompatFileWrapper::forgetStats();
+		}
 
 		// ── Autoloaders stay registered ──
 		// They used to be unregistered here, to hand the next request the
@@ -555,6 +579,19 @@ class Q_WebServer_Compat
 	 * Returns: string (transformed source), false (sentinel — no transform needed),
 	 * or null (not in cache, file added after prewarm).
 	 */
+	/**
+	 * The modification time recorded with a cached transform, or 0.
+	 * @method cachedMtime
+	 * @static
+	 * @param {string} $filePath
+	 * @return {integer}
+	 */
+	static function cachedMtime($filePath)
+	{
+		return isset(self::$transformCache[$filePath]['mtime'])
+			? (int) self::$transformCache[$filePath]['mtime'] : 0;
+	}
+
 	static function getCachedTransform($filePath)
 	{
 		if (!isset(self::$transformCache[$filePath])) return null;
@@ -592,7 +629,7 @@ class Q_WebServer_Compat
 	 * cache has to be able to say "I was written by a different transformer"
 	 * and be ignored wholesale.
 	 */
-	const PREWARM_FORMAT = 1;
+	const PREWARM_FORMAT = 2;
 
 	/** Resolved path of the persisted pre-warm file, or null. */
 	private static $persistPath = false;
@@ -1402,6 +1439,110 @@ class Q_WebServer_Compat
 	}
 
 	/**
+	 * The error or exception handler currently installed, without changing it.
+	 *
+	 * @method currentHandler
+	 * @static
+	 * @param {string} $kind 'error' or 'exception'
+	 * @return {callable|null}
+	 */
+	static function currentHandler($kind)
+	{
+		if ($kind === 'error') {
+			$current = set_error_handler(static function () { return false; });
+			restore_error_handler();
+		} else {
+			$current = set_exception_handler(static function () {});
+			restore_exception_handler();
+		}
+		return $current;
+	}
+
+	/**
+	 * Pop handlers until the one installed is $boot, so PHP's hidden handler
+	 * stack holds nothing a request put there. Bounded: a stack that never
+	 * reaches $boot is emptied and $boot installed once on the empty stack.
+	 *
+	 * @method unwindHandlers
+	 * @static
+	 * @param {string} $kind 'error' or 'exception'
+	 * @param {callable|null} $boot
+	 */
+	static function unwindHandlers($kind, $boot)
+	{
+		for ($i = 0; $i < 256; ++$i) {
+			$current = self::currentHandler($kind);
+			if ($current === $boot) return;
+			if ($current === null) break;
+			if ($kind === 'error') restore_error_handler();
+			else restore_exception_handler();
+		}
+		if ($boot !== null and self::currentHandler($kind) !== $boot) {
+			if ($kind === 'error') set_error_handler($boot);
+			else set_exception_handler($boot);
+		}
+	}
+
+	/**
+	 * What a plain path is, asked of the operating system directly.
+	 *
+	 * Returns 'native' for anything the fast answer does not cover -- a
+	 * non-string, another stream wrapper's URL, or the kernel's device and
+	 * process trees, where "is it a regular file" has answers glob() cannot
+	 * give -- and otherwise what Q_WebServer_CompatFileWrapper::existsAndIsDir()
+	 * says.
+	 *
+	 * The answer never passes through PHP's stat cache, so a filemtime() on
+	 * the same path afterwards still asks for, and gets, the real stat.
+	 */
+	private static function pathType($path)
+	{
+		if (!is_string($path)) return 'native';
+		if (strpos($path, '://') !== false) {
+			if (strncmp($path, 'file://', 7) !== 0) return 'native';
+			$path = substr($path, 7);
+		}
+		if (strncmp($path, '/dev/', 5) === 0 or strncmp($path, '/proc/', 6) === 0
+			or strncmp($path, '/sys/', 5) === 0) return 'native';
+		return Q_WebServer_CompatFileWrapper::existsAndIsDir($path);
+	}
+
+	/**
+	 * Replacement for file_exists().
+	 * @method _file_exists
+	 * @static
+	 */
+	static function _file_exists($filename)
+	{
+		$t = self::pathType($filename);
+		return $t === 'native' ? \file_exists($filename) : $t !== null;
+	}
+
+	/**
+	 * Replacement for is_dir().
+	 * @method _is_dir
+	 * @static
+	 */
+	static function _is_dir($filename)
+	{
+		$t = self::pathType($filename);
+		return $t === 'native' ? \is_dir($filename) : $t === true;
+	}
+
+	/**
+	 * Replacement for is_file(). A path that exists and is not a directory
+	 * is taken to be a file; sockets and FIFOs, which is_file() rejects, do
+	 * not occur in an application's tree, and the device trees go native.
+	 * @method _is_file
+	 * @static
+	 */
+	static function _is_file($filename)
+	{
+		$t = self::pathType($filename);
+		return $t === 'native' ? \is_file($filename) : $t === false;
+	}
+
+	/**
 	 * Replacement for set_error_handler().
 	 * Tracks pushed handlers so shutdown() can restore the boot state.
 	 */
@@ -2190,6 +2331,44 @@ class Q_WebServer_CompatFileWrapper
 
 	/** @var resource The underlying file handle */
 	private $handle;
+	/** @var int Modification time of the file a transformed buffer came from */
+	private $mtime = 0;
+	/** @var array|null Directory entries, when listed without a handle */
+	private $dirEntries = null;
+
+	/**
+	 * Real stats taken during this request, by path.
+	 *
+	 * A template engine asks for the same few files' modification times over
+	 * and over -- one search page asked 3 855 times about a few dozen files
+	 * -- and each real stat costs an unwrap, which leaves a resource behind
+	 * for the life of the worker (see self::unwrap()). The first stat of a
+	 * path in a request is kept and the repeats answered from it.
+	 *
+	 * Emptied at the end of every request, and whenever this process writes,
+	 * renames, deletes or creates anything through the wrapper, so what it
+	 * holds is never older than the request and never older than this
+	 * process's own last change. Bounded, so no request can grow it without
+	 * limit. Exempt from the snapshot restore (Q_WebServer_Snapshot), which
+	 * would otherwise put back the parent's stats from before the fork.
+	 *
+	 * @var array
+	 */
+	private static $statMemo = array();
+
+	/** @var int Entries kept at most; past it the memo starts again. */
+	const STAT_MEMO_MAX = 8192;
+
+	/**
+	 * Forget every remembered stat. Called at the end of each request and on
+	 * every change made through the wrapper.
+	 * @method forgetStats
+	 * @static
+	 */
+	static function forgetStats()
+	{
+		self::$statMemo = array();
+	}
 	/** @var string Buffered transformed content for reading */
 	private $buffer = '';
 	/** @var int Read position in buffer */
@@ -2201,6 +2380,25 @@ class Q_WebServer_CompatFileWrapper
 
 	// We need to restore the real file:// wrapper for actual file ops,
 	// then re-register ours. This prevents infinite recursion.
+	//
+	// It is not free, and the cost does not go away. Every
+	// stream_wrapper_register() allocates a resource that PHP releases only
+	// when the request ends -- which, in a persistent worker, is never. So
+	// each unwrap()/rewrap() pair left one behind: Exponential made up to
+	// 14 000 of them a request, answering file_exists() and is_dir(), and a
+	// worker grew by ~1.6 MB a request until it was killed. Everything that
+	// can be answered without the real wrapper now is (url_stat for
+	// existence and type, directory listings, fstat on an open handle), and
+	// repeated stats within a request are remembered; what is left are real
+	// opens, writes and first stats, and the worker memory ceiling bounds it.
+	//
+	// Not done, on purpose: answering an include of a script the opcode
+	// cache already holds with an empty stream. The engine opens the file on
+	// every include even when it will run the cached compile, so it looked
+	// free -- but when the cache decides the script must be recompiled (a
+	// regenerated template with a new mtime), it compiles whatever the
+	// stream holds, and pages silently lost the templates that came back
+	// empty. An optimisation that can blank part of a page is not one.
 	private static function unwrap()
 	{
 		stream_wrapper_restore('file');
@@ -2229,6 +2427,11 @@ class Q_WebServer_CompatFileWrapper
 		) && preg_match('/\.php$/i', $realPath)
 		  && Q_WebServer_Compat::isEnabled();
 
+		// Any change made through the wrapper can make a remembered stat wrong.
+		if (strpbrk($mode, 'waxc+') !== false) {
+			self::forgetStats();
+		}
+
 		if ($shouldTransform) {
 			// Check in-memory cache — covers both transforms and sentinels.
 			$cached = Q_WebServer_Compat::getCachedTransform($realPath);
@@ -2245,6 +2448,7 @@ class Q_WebServer_CompatFileWrapper
 				$this->buffer = $cached;
 				$this->position = 0;
 				$this->transformed = true;
+				$this->mtime = Q_WebServer_Compat::cachedMtime($realPath);
 				$opened_path = $realPath;
 				return true;
 			}
@@ -2271,6 +2475,7 @@ class Q_WebServer_CompatFileWrapper
 					$this->buffer = $transformed;
 					$this->position = 0;
 					$this->transformed = true;
+					$this->mtime = Q_WebServer_Compat::cachedMtime($realPath);
 					self::rewrap();
 					$opened_path = $realPath;
 					return true;
@@ -2345,13 +2550,19 @@ class Q_WebServer_CompatFileWrapper
 
 	public function stream_stat()
 	{
+		// A transformed file is served from memory. Its stat carries the
+		// source file's mtime: without one the opcode cache will not store a
+		// script, so every transformed file -- the front controller, the
+		// autoloader, every class that calls header() -- was compiled again
+		// on every include instead of once.
 		if ($this->transformed) {
-			return array('size' => strlen($this->buffer));
+			return array('size' => strlen($this->buffer), 'mtime' => $this->mtime,
+				'mode' => 0100644);
 		}
-		self::unwrap();
-		$stat = fstat($this->handle);
-		self::rewrap();
-		return $stat;
+		// fstat() works on the handle already open and never looks a wrapper
+		// up, so there is nothing to unwrap for -- and unwrapping is not free:
+		// see self::unwrap().
+		return fstat($this->handle);
 	}
 
 	public function stream_close()
@@ -2408,57 +2619,140 @@ class Q_WebServer_CompatFileWrapper
 	public function url_stat($path, $flags)
 	{
 		$realPath = preg_replace('/^file:\/\//', '', $path);
+
+		// A path that is not there is answered without the real wrapper:
+		// glob() asks the operating system directly, and a failed stat is
+		// never cached by PHP, so the answer cannot be mistaken for anything
+		// later. Most probes -- an autoloader or a template lookup trying
+		// candidates -- are exactly this. See self::unwrap() for why avoiding
+		// it matters.
+		//
+		// Never raise for a path that is not there, either. Whether a missing
+		// path deserves a diagnostic is the calling function's business, and
+		// @stat() is not enough to stay quiet: a custom error handler is still
+		// invoked, and eZ Publish installs one that throws around
+		// mysqli_set_charset(), so a miss during an autoload inside that call
+		// silently left the connection latin1.
+		// is_link() and lstat() ask about the link itself, which stat() and
+		// the existence check below both look through: a link to a missing
+		// target is there for is_link() and gone for everything else. These
+		// used to be answered with stat(), so is_link() was false for every
+		// link under the wrapper.
+		if ($flags & STREAM_URL_STAT_LINK) {
+			self::unwrap();
+			$stat = @lstat($realPath);
+			self::rewrap();
+			return $stat ?: false;
+		}
+
+		if (self::existsAndIsDir($realPath) === null) {
+			return false;
+		}
+
+		// A path that exists gets its real stat. An answer made up from the
+		// type alone would be cached by PHP under that path, and the
+		// filemtime() that commonly follows a file_exists() would read a
+		// modification time of zero from it. Existence and type checks in
+		// application code do not come here at all -- the source transform
+		// sends file_exists(), is_dir() and is_file() to Compat, which asks
+		// the operating system directly.
+		if (isset(self::$statMemo[$realPath])) {
+			return self::$statMemo[$realPath];
+		}
 		self::unwrap();
-		// Never raise for a path that is not there.
-		//
-		// A stream wrapper answers "does this exist" with its return value;
-		// whether a missing path deserves a diagnostic is the calling
-		// function's business, and the built-in handler for plain files works
-		// that way. Raising here puts a warning behind every file_exists()
-		// that comes back false -- and an autoloader probing for a class is
-		// nothing but file_exists() coming back false, repeatedly.
-		//
-		// @stat() is not enough either: the silence operator lowers
-		// error_reporting for the call, but a custom error handler is still
-		// invoked. An application that installs one which throws gets the
-		// exception regardless. eZ Publish installs exactly that around
-		// mysqli_set_charset(), so a probe that missed during the autoload
-		// inside that call was reported as "the charset could not be set",
-		// and the connection silently kept the server default of latin1.
-		// Rows then came back transliterated -- a non-breaking space arrived
-		// as "?" -- XML fields stopped parsing, and pages quietly lost their
-		// text. Nothing was logged by anything.
-		//
-		// So: do not stat a path that does not exist. file_exists() here runs
-		// against the real handler, because unwrap() is already in effect.
-		$stat = file_exists($realPath) ? @stat($realPath) : false;
+		$stat = @stat($realPath);
 		self::rewrap();
-		return $stat ?: false;
+		if (!$stat) return false;
+		if (count(self::$statMemo) >= self::STAT_MEMO_MAX) {
+			self::$statMemo = array();
+		}
+		return self::$statMemo[$realPath] = $stat;
+	}
+
+	/**
+	 * Whether a path exists, and if so whether it is a directory, asked of
+	 * the operating system without the stream wrappers.
+	 *
+	 * glob() takes a pattern, so the path's own pattern characters are
+	 * escaped; with none left it matches the path alone or nothing. GLOB_MARK
+	 * appends a slash to a directory, following links as stat() does. A link
+	 * whose target is gone is still listed, where stat() would fail, so a
+	 * non-directory match is confirmed with realpath(), which also works on
+	 * the path directly -- after dropping that path's realpath cache entry,
+	 * which could otherwise still name a file deleted since.
+	 *
+	 * @method existsAndIsDir
+	 * @static
+	 * @param {string} $path
+	 * @return {boolean|null} true: a directory; false: exists, not a
+	 *   directory; null: not there
+	 */
+	static function existsAndIsDir($path)
+	{
+		if ($path === '' or strpos($path, "\0") !== false) return null;
+		$pattern = addcslashes($path, self::globSpecials());
+		$found = @glob($pattern, GLOB_MARK | GLOB_NOSORT);
+		if (!$found) return null;
+		$last = substr($found[0], -1);
+		if ($last === '/' or $last === DIRECTORY_SEPARATOR) return true;
+		clearstatcache(true, $path);
+		return realpath($path) === false ? null : false;
+	}
+
+	/**
+	 * Characters glob() reads as pattern syntax in a path. The backslash is
+	 * one of them except on Windows, where it separates directories.
+	 */
+	private static function globSpecials()
+	{
+		return DIRECTORY_SEPARATOR === '\\' ? '*?[' : '\\*?[';
 	}
 
 	// ── Directory operations ──
 
 	public function dir_opendir($path, $options)
 	{
-		$realPath = preg_replace('/^file:\/\//', '', $path);
-		self::unwrap();
-		$this->dirHandle = opendir($realPath);
-		self::rewrap();
-		return $this->dirHandle !== false;
+		// Listed with glob(), which does not go through the stream wrappers,
+		// so nothing is unwrapped (see self::unwrap()). Two patterns, because
+		// "*" leaves out names beginning with a dot and GLOB_BRACE is not
+		// available everywhere; ".*" brings "." and ".." with it, as
+		// readdir() does.
+		$realPath = rtrim(preg_replace('/^file:\/\//', '', $path), '/');
+		if ($realPath === '') $realPath = '/';
+		if (self::existsAndIsDir($realPath) !== true) return false;
+		$base = addcslashes($realPath === '/' ? '' : $realPath, self::globSpecials()) . '/';
+		$entries = array();
+		foreach (array('*', '.*') as $p) {
+			foreach ((@glob($base . $p, GLOB_NOSORT) ?: array()) as $f) {
+				$entries[basename($f)] = true;
+			}
+		}
+		$entries['.'] = true;
+		$entries['..'] = true;
+		$this->dirEntries = array_keys($entries);
+		return true;
 	}
 
 	public function dir_readdir()
 	{
+		if ($this->dirEntries !== null) {
+			$e = current($this->dirEntries);
+			if ($e === false) return false;
+			next($this->dirEntries);
+			return $e;
+		}
 		return readdir($this->dirHandle);
 	}
 
 	public function dir_rewinddir()
 	{
+		if ($this->dirEntries !== null) { reset($this->dirEntries); return true; }
 		return rewinddir($this->dirHandle);
 	}
 
 	public function dir_closedir()
 	{
+		if ($this->dirEntries !== null) { $this->dirEntries = null; return true; }
 		return closedir($this->dirHandle);
 	}
 
@@ -2466,6 +2760,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function rename($from, $to)
 	{
+		self::forgetStats();
 		self::unwrap();
 		$result = rename(preg_replace('/^file:\/\//', '', $from),
 		                 preg_replace('/^file:\/\//', '', $to));
@@ -2475,6 +2770,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function unlink($path)
 	{
+		self::forgetStats();
 		self::unwrap();
 		$result = unlink(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
@@ -2483,6 +2779,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function mkdir($path, $mode, $options)
 	{
+		self::forgetStats();
 		self::unwrap();
 		$result = mkdir(preg_replace('/^file:\/\//', '', $path), $mode,
 			$options & STREAM_MKDIR_RECURSIVE);
@@ -2492,6 +2789,7 @@ class Q_WebServer_CompatFileWrapper
 
 	public function rmdir($path, $options)
 	{
+		self::forgetStats();
 		self::unwrap();
 		$result = rmdir(preg_replace('/^file:\/\//', '', $path));
 		self::rewrap();
@@ -2501,6 +2799,7 @@ class Q_WebServer_CompatFileWrapper
 	public function stream_metadata($path, $option, $value)
 	{
 		$realPath = preg_replace('/^file:\/\//', '', $path);
+		self::forgetStats();
 		self::unwrap();
 		switch ($option) {
 			case STREAM_META_TOUCH:

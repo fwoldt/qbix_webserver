@@ -143,16 +143,37 @@ class Q_WebServer_Snapshot
 	 * Restore ONLY class statics, not globals.
 	 * Uses cached ReflectionProperty handles — no Reflection lookups per call.
 	 */
+	/**
+	 * Classes whose statics are the process's own state, not a request's, and
+	 * are therefore never put back to the snapshot.
+	 *
+	 *   Snapshot -- restoring it would undo updateNewClasses() by reverting
+	 *               $snapshot and $reflectors.
+	 *   Compat   -- manages its own state through shutdown() and init().
+	 *   Capture  -- holds which output buffer is the capture buffer. Put back
+	 *               to the parent's value (none), every request would open
+	 *               another, and one would be left behind per request: the
+	 *               leak Capture exists to end.
+	 *   CompatFileWrapper -- remembers stats for the current request. Put
+	 *               back, every request would start with the parent's stats
+	 *               from before the fork, and report files as older than they
+	 *               are.
+	 *
+	 * @property $processState
+	 * @type array
+	 */
+	protected static $processState = array(
+		'Q_WebServer_Snapshot' => true,
+		'Q_WebServer_Compat' => true,
+		'Q_WebServer_Capture' => true,
+		'Q_WebServer_CompatFileWrapper' => true,
+	);
+
 	static function restoreStatics()
 	{
 		if (!self::$taken) return;
 		foreach (self::$snapshot as $cls => $props) {
-			// Never restore our own statics — doing so would undo
-			// updateNewClasses() by reverting $snapshot/$reflectors.
-			if ($cls === 'Q_WebServer_Snapshot') continue;
-			// Never restore Compat statics — the compat layer manages its
-			// own state via shutdown()/init().
-			if ($cls === 'Q_WebServer_Compat') continue;
+			if (isset(self::$processState[$cls])) continue;
 			foreach ($props as $name => $val) {
 				$prop = self::$reflectors[$cls][$name];
 				// A closure in a static is behaviour installed once, never

@@ -77,6 +77,11 @@ class Q_WebServer_Pool
 		if (!class_exists('Q_WebServer_Fork', false) && is_file($forkFile)) {
 			require_once $forkFile;
 		}
+		// The response capture buffer. Loaded here, in the parent and before
+		// the source transform is installed, so every worker inherits it.
+		if (!class_exists('Q_WebServer_Capture', false)) {
+			require_once dirname(__DIR__) . '/WebServer/Capture.php';
+		}
 		if (!Q_WebServer_Fork::available()) {
 			throw new Exception(
 				"Q_WebServer_Pool requires fork capability. "
@@ -316,7 +321,8 @@ class Q_WebServer_Pool
 			// Execute the PHP script
 			$resp = self::executeScript($req);
 			self::writeMsg($socket, $resp['status'], $resp['body'],
-				$resp['headers'], $resp['cookies'] ?? array());
+				$resp['headers'], $resp['cookies'] ?? array(),
+				$resp['recycle'] ?? '');
 			$handled++;
 
 			if (!$octane) {
@@ -393,7 +399,7 @@ class Q_WebServer_Pool
 			}
 
 			// Superglobals: overwritten by executeScript() on next iteration.
-			// Output buffers: non-removable buffer in executeScript, read via ob_get_contents.
+			// Output buffers: the one capture buffer, emptied by Capture::end().
 			// Error state: clear it.
 			error_clear_last();
 
@@ -593,11 +599,9 @@ class Q_WebServer_Pool
 			self::$inputWrapperRegistered = true;
 		}
 
-		// Non-removable buffer: Q_Dispatcher::dispatch() calls ob_end_flush()
-		// which would destroy a normal buffer. Passing flags=0 makes
-		// ob_end_flush()/ob_end_clean() fail on this buffer, so it survives.
-		// We read it with ob_get_contents(). (Same fix as dispatchToQ, issue #12.)
-		ob_start(null, 0, 0);
+		// One capture buffer for the life of the worker, reused per request --
+		// see Q_WebServer_Capture for why it is not opened afresh each time.
+		Q_WebServer_Capture::begin();
 		$status = 200;
 		$headers = array();
 		// mod_php and fpm run a script with its own directory as the working
@@ -675,7 +679,7 @@ class Q_WebServer_Pool
 			if ($code and $code !== 200 and $status === 200) $status = $code;
 		} catch (\Throwable $e) {
 			$status = 500;
-			if (ob_get_level()) ob_clean();
+			Q_WebServer_Capture::discard();
 			echo $e->getMessage();
 		}
 		// Back to where the worker started, so the next request is not
@@ -684,14 +688,27 @@ class Q_WebServer_Pool
 			@chdir($prevCwd);
 		}
 
-		// ob_get_contents reads the non-removable buffer; ob_get_clean would
-		// return false. Then drop any buffers we can.
-		$body = '';
-		if (ob_get_level()) {
-			$body = (string) ob_get_contents();
-			@ob_clean();
+		// Everything the script printed, including buffers it left open.
+		$body = Q_WebServer_Capture::end();
+
+		// Health, checked on every request, so that nothing a script or the
+		// server itself holds on to can grow without bound. A worker whose
+		// output buffers did not come back to one-and-empty, or whose heap is
+		// past the ceiling, answers this request and is then replaced by the
+		// parent -- which also logs why, so a leak is named the first time it
+		// happens instead of being found as a machine out of memory.
+		$recycle = '';
+		if (!Q_WebServer_Capture::balanced()) {
+			$recycle = 'output buffers did not return to the capture buffer'
+				. ' (level ' . ob_get_level() . ')';
+		} else {
+			$ceiling = self::memoryCeiling();
+			$heap = memory_get_usage();
+			if ($ceiling > 0 and $heap > $ceiling) {
+				$recycle = sprintf('heap %.0f MB over the %.0f MB ceiling',
+					$heap / 1048576, $ceiling / 1048576);
+			}
 		}
-		while (@ob_end_clean()) { /* drop removable buffers */ }
 
 		// Cookies live in Q_Response, which is the worker's memory. The
 		// parent used to read its own copy when writing the response and so
@@ -702,7 +719,43 @@ class Q_WebServer_Pool
 		and method_exists('Q_WebServer_State', 'cookieHeaders')) {
 			$cookies = (array) Q_WebServer_State::cookieHeaders();
 		}
-		return compact('status', 'body', 'headers', 'cookies');
+		return compact('status', 'body', 'headers', 'cookies', 'recycle');
+	}
+
+	/**
+	 * The heap size past which a worker is replaced, in bytes; 0 for never.
+	 *
+	 * Q.webserver.workerMemoryCeiling, in MB. Unset, it is 256 MB, or three
+	 * quarters of memory_limit if that is lower -- below the point where PHP
+	 * would end a request with a fatal error. It is an absolute figure on
+	 * purpose: a server may run hundreds of workers, and a ceiling derived
+	 * from a generous memory_limit alone (4.8 GB on one install) would let
+	 * each of them grow to gigabytes before anything noticed. A worker
+	 * serving a normal application sits far below 256 MB; one that reaches it
+	 * is holding on to something, and is cheaper to replace than to trust.
+	 *
+	 * @method memoryCeiling
+	 * @static
+	 * @return {integer}
+	 */
+	static function memoryCeiling()
+	{
+		static $ceiling = null;
+		if ($ceiling !== null) return $ceiling;
+		$mb = Q_Config::get('Q', 'webserver', 'workerMemoryCeiling', null);
+		if ($mb !== null and $mb !== '') {
+			return $ceiling = max(0, (int) $mb) * 1048576;
+		}
+		$limit = trim((string) ini_get('memory_limit'));
+		$bytes = (int) $limit;
+		switch (strtolower(substr($limit, -1))) {
+			case 'g': $bytes *= 1024;
+			case 'm': $bytes *= 1024;
+			case 'k': $bytes *= 1024;
+		}
+		$ceiling = 256 * 1048576;
+		if ($bytes > 0) $ceiling = min($ceiling, (int) ($bytes * 0.75));
+		return $ceiling;
 	}
 
 	// ── Parent-side dispatch ─────────────────────────────
@@ -910,6 +963,13 @@ class Q_WebServer_Pool
 			unset($response['_cacheMessages']);
 		}
 
+		// A worker's request to be replaced is for the pool, not the client.
+		$recycleReason = '';
+		if ($response and isset($response['_recycle'])) {
+			$recycleReason = (string) $response['_recycle'];
+			unset($response['_recycle']);
+		}
+
 		$client = $this->workerClients[$index] ?? null;
 		$reqHeaders = $this->workerRequestHeaders[$index] ?? [];
 		if ($response && $client && is_resource($client)) {
@@ -929,6 +989,15 @@ class Q_WebServer_Pool
 			unset($this->workerClients[$index]);
 
 			// Recycle if marked for graceful recycling, or hit maxRequests
+			// A worker that reported a failed health check is replaced now,
+			// before it is given another request, and the reason is logged.
+			if ($recycleReason !== '') {
+				$this->workers[$index]['recycleAfter'] = true;
+				fwrite(STDERR, sprintf("  worker %d replaced after %d requests: %s\n",
+					(int) ($this->workers[$index]['pid'] ?? 0),
+					(int) ($this->workers[$index]['requests'] ?? 0),
+					$recycleReason));
+			}
 			$shouldRecycle = !empty($this->workers[$index]['recycleAfter'])
 				|| ($this->maxRequests > 0 && $this->workers[$index]['requests'] >= $this->maxRequests);
 
@@ -1339,7 +1408,7 @@ class Q_WebServer_Pool
 	}
 
 	protected static function writeMsg($sock, $status, $body, $headers,
-		$cookies = array())
+		$cookies = array(), $recycle = '')
 	{
 		// json_encode() returns false on bytes that are not valid UTF-8, and
 		// strlen(false) is 0, so a binary body used to go out as a length
@@ -1351,11 +1420,19 @@ class Q_WebServer_Pool
 		//
 		// The cookies travel with it: they are built in the worker and this
 		// is the only thing that carries them out.
-		$j = json_encode(compact('status', 'body', 'headers', 'cookies'));
+		// A worker that failed its health check asks to be replaced. Only
+		// present when it did, so a healthy response keeps its exact shape.
+		$fields = array('status', 'body', 'headers', 'cookies');
+		if ($recycle !== '') {
+			$_recycle = $recycle;
+			$fields[] = '_recycle';
+		}
+		$j = json_encode(compact($fields));
 		if ($j === false) {
 			$b64 = true;
 			$body = base64_encode($body);
-			$j = json_encode(compact('status', 'body', 'headers', 'cookies', 'b64'));
+			$fields[] = 'b64';
+			$j = json_encode(compact($fields));
 		}
 		if ($j === false) {
 			// Headers themselves are not encodable. Say so rather than
