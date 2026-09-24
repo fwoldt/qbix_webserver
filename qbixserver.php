@@ -818,13 +818,17 @@ if (!empty($opts['signBinary'])) {
 		fwrite(STDERR, "Usage: --sign-binary --key=alice.pem [--key=bob.pem] [--signer=Alice]\n");
 		exit(1);
 	}
-	if (count($keys) === 1) {
-		$result = Q_WebServer_Trust::signBinary($selfPath, $keys[0], $signers[0] ?? null);
-	} else {
-		$result = null;
-		foreach ($keys as $i => $k) {
-			$result = Q_WebServer_Trust::signBinary($selfPath, $k, $signers[$i] ?? null);
+	// Every key signs in turn; one that cannot (missing, unreadable, not a
+	// private key) is named and the whole run fails, rather than exiting 0
+	// having written nothing.
+	$result = null;
+	foreach ($keys as $i => $k) {
+		$r = is_readable($k) ? Q_WebServer_Trust::signBinary($selfPath, $k, $signers[$i] ?? null) : null;
+		if (!$r) {
+			fwrite(STDERR, "Could not sign with $k: " . (is_readable($k) ? 'not a usable private key' : 'no readable file') . "\n");
+			exit(1);
 		}
+		$result = $r;
 	}
 	if ($result) {
 		$n = count($result['signatures']);
@@ -845,15 +849,23 @@ if (!empty($opts['verifyBinary'])) {
 	$selfPath = realpath($_SERVER['SCRIPT_FILENAME'] ?? $argv[0]);
 	$m = isset($opts['m']) ? (int) $opts['m'] : null;
 	$result = Q_WebServer_Trust::verifyBinary($selfPath, $m);
-	fwrite(STDERR, "Binary: {$result['binary_hash']}\n");
-	fwrite(STDERR, "Hash matches: " . ($result['hash_matches'] ? 'yes' : 'NO — binary was modified') . "\n");
-	fwrite(STDERR, "Signatures: {$result['label']}\n");
-	foreach ($result['details'] as $d) {
-		$icon = $d['status'] === 'valid' ? '✓' : '✗';
-		fwrite(STDERR, "  $icon {$d['signer']} ({$d['status']})\n");
+	// Nothing to verify -- no signatures, or no binary -- comes back as an
+	// error alone; it is reported as such, not as a list of empty fields.
+	if (!empty($result['error'])) {
+		fwrite(STDERR, "Not verified: {$result['error']}"
+			. (isset($result['required']) ? " ({$result['required']} signature(s) required)" : '') . "\n");
+		fwrite(STDERR, "Result: FAILED\n");
+		exit(1);
 	}
-	fwrite(STDERR, "Result: " . ($result['valid'] ? 'VALID' : 'FAILED') . "\n");
-	exit($result['valid'] ? 0 : 1);
+	fwrite(STDERR, "Binary: " . ($result['binary_hash'] ?? '?') . "\n");
+	fwrite(STDERR, "Hash matches: " . (!empty($result['hash_matches']) ? 'yes' : 'NO — binary was modified') . "\n");
+	fwrite(STDERR, "Signatures: " . ($result['label'] ?? '') . "\n");
+	foreach ((array) ($result['details'] ?? array()) as $d) {
+		$icon = ($d['status'] ?? '') === 'valid' ? '✓' : '✗';
+		fwrite(STDERR, "  $icon " . ($d['signer'] ?? '?') . " (" . ($d['status'] ?? '?') . ")\n");
+	}
+	fwrite(STDERR, "Result: " . (!empty($result['valid']) ? 'VALID' : 'FAILED') . "\n");
+	exit(!empty($result['valid']) ? 0 : 1);
 }
 
 // ── Publish to Rekor (optional transparency log) ──
