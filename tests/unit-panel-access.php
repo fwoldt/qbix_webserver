@@ -201,7 +201,7 @@ $logs = array();
 
 // ── Server A: defaults (no password, panel not remote) ──────────
 $baseA = setupSite('a');
-$srv = startServer($baseA, array());
+$srv = startServer($baseA, array('panel' => array('defaultPassword' => null)));
 check('server A started', $srv !== null && $srv[1] > 0, true);
 if ($srv and $srv[1]) {
 	list($procA, $port, $tls) = $srv;
@@ -216,7 +216,7 @@ if ($srv and $srv[1]) {
 		check("A, $label, ...as the server's HTML page", strpos($h['content-type'] ?? '', 'text/html') === 0, true);
 		check("A, $label, ...which says how to set a password", strpos($b, 'qbixctl panel:password') !== false, true);
 
-		list($st, $h, $b) = $fn($p, $remote, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'intruder-pw')));
+		list($st, $h, $b) = $fn($p, $remote, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'In7#Tr9!Dx3@Ub5Kq')));
 		check("A, $label, remote: the API refuses too", $st, 403);
 	}
 	check('A: no password was stored by a remote visitor', is_file($baseA . DS . 'local' . DS . 'panel.json'), false);
@@ -238,14 +238,14 @@ if ($srv and $srv[1]) {
 	// The CLI sets a password; the running server honours it on the next request.
 	$out = array();
 	exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($ctl) . ' panel:password --root=' . escapeshellarg($baseA . DS . 'web')
-		. ' --password=cli-set-pw 2>&1', $out, $rc);
+		. ' --password=Cl1#Rk7!Wm9@Pz4Xq 2>&1', $out, $rc);
 	check('qbixctl panel:password exits 0', $rc, 0);
 	check('...and says where it wrote', strpos(implode("\n", $out), $baseA . DS . 'local' . DS . 'panel.json') !== false, true);
 	foreach ($protocols as $label => $fn) {
 		$p = $portFor($fn, $port, $tls);
 		list($st, , $b) = $fn($p, $remote, 'GET', '/Q/panel');
 		check("A, $label, remote, password set by the CLI: the page is served (login form)", array($st, strpos($b, 'Control Panel') !== false), array(200, true));
-		list($st, , $b) = $fn($p, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'cli-set-pw')));
+		list($st, , $b) = $fn($p, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'Cl1#Rk7!Wm9@Pz4Xq')));
 		$token = (json_decode($b, true) ?: array())['token'] ?? '';
 		check("A, $label, remote: the CLI's password signs in", array($st, $token !== ''), array(200, true));
 		list($st) = $fn($p, $remote, 'GET', '/Q/api/system', '', array('X-Panel-Token' => $token));
@@ -259,7 +259,7 @@ if ($srv and $srv[1]) {
 
 // ── Server B: reachable remotely without a password ─────────────
 $baseB = setupSite('b');
-$srv = startServer($baseB, array('dashboard' => array('remote' => true)));
+$srv = startServer($baseB, array('dashboard' => array('remote' => true), 'panel' => array('defaultPassword' => null)));
 check('server B started', $srv !== null && $srv[1] > 0, true);
 if ($srv and $srv[1]) {
 	list($procB, $port, $tls) = $srv;
@@ -271,17 +271,103 @@ if ($srv and $srv[1]) {
 		$d = json_decode($b, true) ?: array();
 		check("B, $label, remote: it is told a password is needed and may not be set from here",
 			array($d['needsSetup'] ?? null, $d['setupAllowed'] ?? null), array(true, false));
-		list($st, , $b) = $fn($p, $remote, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'intruder-pw')));
+		list($st, , $b) = $fn($p, $remote, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'In7#Tr9!Dx3@Ub5Kq')));
 		check("B, $label, remote: first-time setup is refused", $st, 403);
 	}
 	check('B: nothing was stored by the remote attempts', is_file($baseB . DS . 'local' . DS . 'panel.json'), false);
 	$fn = $http2 ? 'h2' : 'h1';
-	list($st, , $b) = $fn($portFor($fn, $port, $tls), $local, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'local-set-pw')));
+	list($st, , $b) = $fn($portFor($fn, $port, $tls), $local, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'Lo5#Vt8!Qn2@Hy6Wd')));
 	check('B: setup from this machine works', array($st, isset((json_decode($b, true) ?: array())['token'])), array(200, true));
-	list($st, , $b) = h1($port, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'local-set-pw')));
+	list($st, , $b) = h1($port, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'Lo5#Vt8!Qn2@Hy6Wd')));
 	check('B, remote: that password signs in', isset((json_decode($b, true) ?: array())['token']), true);
 	stopServer($procB);
 	$logs['B'] = $baseB . DS . 'log';
+}
+
+// ── Server C: the default key ("panel") in force ────────────────
+// Each protocol starts from no password file. The remote addresses differ
+// per step so the lockout (5 failures per address) never gets in the way.
+$baseC = setupSite('c');
+$srv = startServer($baseC, array());
+check('server C started', $srv !== null && $srv[1] > 0, true);
+$strong = 'Ch4#Nq8!Wz2@Kv6Pt';
+if ($srv and $srv[1]) {
+	list($procC, $port, $tls) = $srv;
+	$fileC = $baseC . DS . 'local' . DS . 'panel.json';
+	foreach ($protocols as $label => $fn) {
+		$p = $portFor($fn, $port, $tls);
+		$ip = $fn === 'h2' ? '127.0.0.4' : '127.0.0.3';
+		@unlink($fileC);
+		list($st, , $b) = $fn($p, $ip, 'GET', '/Q/panel');
+		check("C, $label, remote: with the default in force the panel page is served", $st, 200);
+		list(, , $b) = $fn($p, $ip, 'POST', '/Q/api/auth/login', '{}');
+		$d = json_decode($b, true) ?: array();
+		check("C, $label: the login form is told the default is \"panel\" and must be changed",
+			array($d['defaultInForce'] ?? null, strpos($d['hint'] ?? '', '"panel"') !== false), array(true, true));
+		list($st) = $fn($p, $ip, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'not-it')));
+		$c = json_decode((string) @file_get_contents($fileC), true) ?: array();
+		check("C, $label: a failed sign-in is refused and marks nothing", array($st, isset($c['mustChange'])), array(401, false));
+		list($st, , $b) = $fn($p, $ip, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'panel')));
+		$d = json_decode($b, true) ?: array();
+		$token = $d['token'] ?? '';
+		check("C, $label, remote: the default signs in, and must be changed", array($st, $token !== '', $d['mustChange'] ?? null), array(200, true, true));
+		$tok = array('X-Panel-Token' => $token);
+		list($st, , $b) = $fn($p, $ip, 'GET', '/Q/api/system', '', $tok);
+		check("C, $label: until then the API is vetoed", array($st, (json_decode($b, true) ?: array())['mustChange'] ?? null), array(403, true));
+		list($st) = $fn($p, $ip, 'GET', '/Q/dashboard?token=' . $token);
+		check("C, $label: ...and the session is no admin credential for the dashboard", $st !== 200, true);
+		list($st, , $b) = $fn($p, $ip, 'POST', '/Q/api/auth/password', json_encode(array('password' => 'panel2024!Short')), $tok);
+		$d = json_decode($b, true) ?: array();
+		check("C, $label: a weak new password is refused, with the rules it broke", array($st, !empty($d['failed'])), array(400, true));
+		list($st, , $b) = $fn($p, $ip, 'POST', '/Q/api/auth/password', json_encode(array('password' => $strong)), $tok);
+		check("C, $label: a strong one is accepted", $st, 200);
+		list($st) = $fn($p, $ip, 'GET', '/Q/api/system', '', $tok);
+		check("C, $label: ...after which the API works", $st, 200);
+		$c = json_decode((string) @file_get_contents($fileC), true) ?: array();
+		check("C, $label: ...the stored credential is bcrypt and not the default, with no must-change left",
+			array(strpos($c['passwordHash'] ?? '', '$2y$'), $c['default'] ?? null, isset($c['mustChange'])), array(0, false, false));
+		list($st) = $fn($p, $ip, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'panel')));
+		check("C, $label: the default no longer signs in", $st, 401);
+
+		// The CLI sets a real password directly and clears the default's marks.
+		@unlink($fileC);
+		list(, , $b) = $fn($p, '127.0.0.5', 'POST', '/Q/api/auth/login', json_encode(array('password' => 'panel')));
+		$token = (json_decode($b, true) ?: array())['token'] ?? '';
+		exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($ctl) . ' panel:password --root=' . escapeshellarg($baseC . DS . 'web')
+			. ' --password=' . escapeshellarg('Cl9#Mx4!Rb7@Tq2Vz') . ' 2>&1', $out, $rc);
+		$c = json_decode((string) @file_get_contents($fileC), true) ?: array();
+		check("C, $label: qbixctl panel:password replaces the default (default false, no must-change)",
+			array($rc, $c['default'] ?? null, isset($c['mustChange'])), array(0, false, false));
+		list($st) = $fn($p, '127.0.0.5', 'GET', '/Q/api/system', '', array('X-Panel-Token' => $token));
+		check("C, $label: ...and ends the default's session", $st, 401);
+		list($st, , $b) = $fn($p, '127.0.0.5', 'POST', '/Q/api/auth/login', json_encode(array('password' => 'Cl9#Mx4!Rb7@Tq2Vz')));
+		check("C, $label: ...and its password signs in with nothing to change",
+			array($st, (json_decode($b, true) ?: array())['mustChange'] ?? null), array(200, false));
+	}
+	stopServer($procC);
+	$logs['C'] = $baseC . DS . 'log';
+	check('C: default-password sign-ins are logged as warnings with the address',
+		(bool) preg_match('/WARNING: signed in with the DEFAULT panel password from 127\.0\.0\.3/', (string) @file_get_contents($logs['C'])), true);
+}
+
+// ── Server D: the default accepted only from this machine ───────
+$baseD = setupSite('d');
+$srv = startServer($baseD, array('panel' => array('defaultLocalOnly' => true)));
+check('server D started', $srv !== null && $srv[1] > 0, true);
+if ($srv and $srv[1]) {
+	list($procD, $port, $tls) = $srv;
+	foreach ($protocols as $label => $fn) {
+		$p = $portFor($fn, $port, $tls);
+		list($st) = $fn($p, $remote, 'GET', '/Q/panel');
+		check("D, $label, remote: with defaultLocalOnly the default gives no remote access", $st, 403);
+		list($st) = $fn($p, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'panel')));
+		check("D, $label, remote: ...and the default does not sign in", $st, 403);
+		list($st, , $b) = $fn($p, $local, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'panel')));
+		check("D, $label, this machine: the default signs in, and must be changed",
+			array($st, (json_decode($b, true) ?: array())['mustChange'] ?? null), array(200, true));
+	}
+	stopServer($procD);
+	$logs['D'] = $baseD . DS . 'log';
 }
 
 if ($fail) {
@@ -290,7 +376,7 @@ if ($fail) {
 		foreach (array_slice(file($l) ?: array(), -12) as $line) echo '    ' . $line;
 	}
 }
-foreach (array($baseA, $baseB) as $base) {
+foreach (array($baseA, $baseB, $baseC, $baseD) as $base) {
 	foreach (array('web/Q/probe.php', 'web/probe.count', 'web/page.php', 'web/page.count', 'local/panel.json',
 		'config.json', 'log', 'fullchain.pem', 'privkey.pem') as $f) @unlink($base . DS . $f);
 	@rmdir($base . DS . 'web' . DS . 'Q'); @rmdir($base . DS . 'web'); @rmdir($base . DS . 'local');

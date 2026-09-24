@@ -26,6 +26,10 @@ async function api(path, body) {
     ? {method:'POST', headers:headers, body:JSON.stringify(body)}
     : {headers:headers});
   var data = await r.json();
+  if (r.status === 403 && data.mustChange) {
+    showChangePassword(data.rules);
+    throw new Error('must change');
+  }
   if (data.error && (data.needsSetup || r.status === 401)) {
     showAuthScreen(data.needsSetup, data);
     throw new Error('auth');
@@ -83,13 +87,16 @@ function showAuthScreen(isSetup, info) {
   screen.style.margin = '40px auto';
   screen.innerHTML = '<div class="card">'
     + '<h3 style="margin-bottom:12px">' + (isSetup ? 'Set Panel Password' : 'Panel Login') + '</h3>'
-    + (isSetup ? '<p style="font-size:13px;color:var(--dim);margin-bottom:16px">You\'re the first person to access this panel. Set a password to secure it.</p>' : '')
-    + '<div class="form-row"><label>Password</label><input type="password" id="auth-pw" placeholder="' + (isSetup ? 'Choose a password (6+ chars)' : 'Enter password') + '"></div>'
+    + (isSetup ? '<p style="font-size:13px;color:var(--dim);margin-bottom:16px">You\'re the first person to access this panel. Set a password to secure it: at least 16 characters, with upper and lower case, a digit and a symbol.</p>' : '')
+    + (!isSetup && info && info.hint ? '<p id="auth-hint" style="font-size:13px;color:var(--dim);margin-bottom:16px"></p>' : '')
+    + '<div class="form-row"><label>Password</label><input type="password" id="auth-pw" placeholder="' + (isSetup ? 'Choose a password (16+ characters)' : 'Enter password') + '"></div>'
     + (isSetup ? '<div class="form-row"><label>Confirm</label><input type="password" id="auth-pw2" placeholder="Confirm password"></div>' : '')
     + '<button class="btn btn-primary" onclick="doAuth(' + (isSetup ? 'true' : 'false') + ')" style="width:100%">' + (isSetup ? 'Set Password' : 'Login') + '</button>'
     + '<div id="auth-error" style="color:var(--red);font-size:13px;margin-top:8px;display:none"></div>'
     + '</div>';
   document.body.insertBefore(screen, document.querySelector('.tabs').nextSibling);
+  var hintEl = document.getElementById('auth-hint');
+  if (hintEl) hintEl.textContent = info.hint;
 
   // Enter key
   screen.addEventListener('keydown', function(e) {
@@ -106,7 +113,7 @@ async function doAuth(isSetup) {
   if (isSetup) {
     var pw2 = document.getElementById('auth-pw2').value;
     if (pw !== pw2) { errEl.textContent = 'Passwords don\'t match'; errEl.style.display = 'block'; return; }
-    if (pw.length < 6) { errEl.textContent = 'Must be at least 6 characters'; errEl.style.display = 'block'; return; }
+    if (Array.from(pw).length < 16) { errEl.textContent = 'Must be at least 16 characters'; errEl.style.display = 'block'; return; }
   }
 
   var endpoint = isSetup ? 'auth/setup' : 'auth/login';
@@ -117,11 +124,12 @@ async function doAuth(isSetup) {
   });
   var data = await r.json();
   if (data.error) {
-    errEl.textContent = data.error;
+    errEl.textContent = data.error + (data.failed ? ' ' + data.failed.join(' ') : '');
     errEl.style.display = 'block';
     return;
   }
   if (data.token) {
+    if (data.mustChange) { setToken(data.token); showChangePassword(data.rules); return; }
     setToken(data.token);
     // If we were redirected here from another page, go back
     var next = new URLSearchParams(window.location.search).get('next');
@@ -149,7 +157,7 @@ async function checkAuthAndInit() {
     // Has password — check if we have a valid token
     var t = getToken();
     if (!t) {
-      showAuthScreen(false);
+      showAuthScreen(false, data);
       return;
     }
     // Validate token by calling a real endpoint
@@ -1247,3 +1255,109 @@ async function fwDownload(framework) {
 
 // Init
 checkAuthAndInit();
+
+// ── Changing the default password ────────────────────
+// Signed in with the default key, nothing else works until it is changed.
+// The checklist mirrors the server's rules so it can tick as you type; the
+// server decides, and its list of failed rules is shown if it disagrees.
+
+var PW_SEQUENCES = ['abcdefghijklmnopqrstuvwxyz', '0123456789', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890'];
+
+function pwChecks(pw, rules) {
+  rules = rules || {};
+  var min = rules.minLength || 16, minDistinct = rules.minDistinct || 10, minBits = rules.minBits || 80;
+  var chars = Array.from(pw), lower = pw.toLowerCase();
+  var up = /\p{Lu}/u.test(pw), lo = /\p{Ll}/u.test(pw), dg = /\p{Nd}/u.test(pw);
+  var sy = chars.some(function (c) { return !/[\p{Lu}\p{Ll}\p{Nd}]/u.test(c); });
+  var other = chars.some(function (c) { return !/[\p{Lu}\p{Ll}\p{Nd}]/u.test(c) && c.charCodeAt(0) > 127; });
+  var pool = (lo ? 26 : 0) + (up ? 26 : 0) + (dg ? 10 : 0) + (sy ? 33 : 0) + (other ? 64 : 0);
+  var bits = pool > 1 ? Math.log2(pool) * chars.length : 0;
+  var run = false;
+  for (var i = 0; i + 4 <= lower.length && !run; i++) {
+    var four = lower.substr(i, 4);
+    run = PW_SEQUENCES.some(function (s) { return s.indexOf(four) !== -1 || s.split('').reverse().join('').indexOf(four) !== -1; });
+  }
+  var words = ['qbix', 'password', 'admin', 'panel'].filter(function (w) { return lower.indexOf(w) !== -1; });
+  return [
+    [min + ' or more characters', chars.length >= min],
+    ['no more than ' + (rules.maxBytes || 72) + ' bytes', new TextEncoder().encode(pw).length <= (rules.maxBytes || 72)],
+    ['an uppercase letter', up], ['a lowercase letter', lo], ['a digit', dg], ['a symbol', sy],
+    [minDistinct + ' or more different characters', new Set(chars).size >= minDistinct],
+    ['no character three times in a row', !/(.)\1\1/u.test(pw)],
+    ['no run of four in order (abcd, 4321, qwer)', !run],
+    ['none of: panel, qbix, password, admin, the server or host name', words.length === 0],
+    ['at least ' + minBits + ' bits of estimated strength', bits >= minBits],
+    ['not a common password (checked by the server)', null]
+  ];
+}
+
+function showChangePassword(rules) {
+  var main = document.getElementById('main-content');
+  var tabs = document.querySelector('.tabs');
+  if (!main && tabs) {
+    // Wrap everything after the tabs, as showAuthScreen() does, so it can be hidden.
+    var els = [], sib = tabs.nextElementSibling;
+    while (sib) { if (sib.id !== 'auth-screen') els.push(sib); sib = sib.nextElementSibling; }
+    main = document.createElement('div');
+    main.id = 'main-content';
+    els.forEach(function (el) { main.appendChild(el); });
+    tabs.parentNode.insertBefore(main, tabs.nextSibling);
+  }
+  if (main) main.style.display = 'none';
+  if (tabs) tabs.style.display = 'none';
+  var old = document.getElementById('auth-screen');
+  if (old) old.remove();
+
+  var screen = document.createElement('div');
+  screen.id = 'auth-screen';
+  screen.className = 'content';
+  screen.style.maxWidth = '460px';
+  screen.style.margin = '40px auto';
+  screen.innerHTML = '<div class="card">'
+    + '<h3 style="margin-bottom:12px">Change the default password</h3>'
+    + '<p style="font-size:13px;color:var(--dim);margin-bottom:16px">You signed in with the default password. Choose your own before anything else: until you do, anyone who knows the default can sign in too.</p>'
+    + '<div class="form-row"><label>New password</label><input type="password" id="cpw-1" autocomplete="new-password"></div>'
+    + '<div class="form-row"><label>Again</label><input type="password" id="cpw-2" autocomplete="new-password"></div>'
+    + '<ul id="cpw-rules" style="list-style:none;padding:0;margin:8px 0 12px;font-size:12px;line-height:1.7"></ul>'
+    + '<button class="btn btn-primary" id="cpw-go" style="width:100%">Change password</button>'
+    + '<div id="cpw-error" style="color:var(--red);font-size:13px;margin-top:8px;display:none"></div>'
+    + '</div>';
+  document.body.insertBefore(screen, tabs ? tabs.nextSibling : null);
+
+  var list = document.getElementById('cpw-rules');
+  function render() {
+    var pw = document.getElementById('cpw-1').value;
+    list.innerHTML = '';
+    pwChecks(pw, rules).forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = (r[1] === null ? '• ' : r[1] ? '✓ ' : '✗ ') + r[0];
+      li.style.color = r[1] === null ? 'var(--dim)' : r[1] ? 'var(--green)' : 'var(--red)';
+      list.appendChild(li);
+    });
+  }
+  document.getElementById('cpw-1').addEventListener('input', render);
+  render();
+  document.getElementById('cpw-1').focus();
+
+  document.getElementById('cpw-go').onclick = async function () {
+    var a = document.getElementById('cpw-1').value, b = document.getElementById('cpw-2').value;
+    var err = document.getElementById('cpw-error');
+    err.style.display = 'none';
+    if (a !== b) { err.textContent = 'The two passwords differ.'; err.style.display = 'block'; return; }
+    var r = await fetch(API + '/auth/password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Panel-Token': getToken() || ''},
+      body: JSON.stringify({password: a})
+    });
+    var data = await r.json();
+    if (!data.ok) {
+      err.textContent = (data.error || 'Not changed.') + (data.failed ? ' ' + data.failed.join(' ') : '');
+      err.style.display = 'block';
+      return;
+    }
+    screen.remove();
+    if (tabs) tabs.style.display = '';
+    if (main) main.style.display = '';
+    initPanel();
+  };
+}

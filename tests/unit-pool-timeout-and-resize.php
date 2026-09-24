@@ -122,7 +122,7 @@ if ($up) {
 	check('the pool still answers afterwards', array($st, strncmp($body, 'FAST ', 5) === 0), array(200, true));
 
 	// ── the panel can resize the pool ───────────────────────────
-	list($st, $body) = req($port, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'resize-test-pw')));
+	list($st, $body) = req($port, 'POST', '/Q/api/auth/setup', json_encode(array('password' => 'Rz8#kWq2!Lm5@Tv9Xy')));
 	$token = (json_decode($body, true) ?: array())['token'] ?? '';
 	check('the panel password is set up', $token !== '', true);
 	$auth = array('Authorization' => 'Bearer ' . $token);

@@ -20,8 +20,6 @@
  */
 class Q_WebServer_Panel
 {
-	/** @internal IP => [timestamps] for brute force protection */
-	static $loginAttempts = array();
 	/** @internal Currently served app dirName, or null */
 	static $servingApp = null;
 	/**
@@ -83,35 +81,51 @@ class Q_WebServer_Panel
 				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
 		}
 
-		// API endpoints — require authentication
-		if (strpos($path, '/Q/api/') === 0) {
-			// Password setup endpoint — no auth needed
-			$route = substr($path, 7);
+		if (strpos($path, '/Q/api/') !== 0) return null;
+
+		$route = substr($path, 7);
+		$body = !empty($parsed['body']) ? (json_decode($parsed['body'], true) ?: array()) : array();
+
+		if ($route === 'auth/login') {
+			list($status, $data) = Q_WebServer_Panel_Auth::login($parsed, $body);
+			return $json($status, $data);
+		}
+		if ($route === 'auth/setup') {
 			// The first password is set from this machine, with the dashboard
 			// token, or where the panel is open remotely on purpose -- never
 			// by whoever happens to reach the page first.
-			if ($route === 'auth/setup' and !self::setupAllowed($parsed)) {
+			if (!self::setupAllowed($parsed)) {
 				return $json(403, array('error' => self::SETUP_REFUSED_TEXT,
-					'needsSetup' => !self::hasPassword(), 'setupAllowed' => false));
+					'needsSetup' => !Q_WebServer_Panel_Auth::hasPassword(), 'setupAllowed' => false));
 			}
-			if ($route === 'auth/setup' || $route === 'auth/login') {
-				$result = self::handleAuthApi($route, $parsed);
-				if (!empty($result['needsSetup'])) $result += self::setupInfo($parsed);
-				return $json($result['status'] ?? 200, $result);
-			}
-
-			// All other API calls require a valid session token
-			$authResult = self::checkAuth($parsed);
-			if (!empty($authResult['needsSetup'])) $authResult += self::setupInfo($parsed);
-			if (!$authResult['ok']) {
-				return $json(401, $authResult);
-			}
-
-			$result = self::handleApi($path, $parsed);
-			return $json($result['status'] ?? 200, $result);
+			list($status, $data) = Q_WebServer_Panel_Auth::setup($parsed, $body);
+			return $json($status, $data);
 		}
 
-		return null;
+		// Everything else needs a session...
+		$auth = Q_WebServer_Panel_Auth::checkSession($parsed);
+		if (!$auth['ok']) {
+			if (!empty($auth['needsSetup'])) $auth += self::setupInfo($parsed);
+			return $json(401, $auth);
+		}
+		// ...that the observers let through: one signed in with the default
+		// key can only change it, or sign out.
+		$veto = Q_WebServer_Panel_Events::notify('session.request', array(
+			'token' => $auth['token'], 'route' => $route,
+			'ip' => (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '')));
+		if ($veto) return $json($veto['status'], $veto['body']);
+
+		if ($route === 'auth/password') {
+			list($status, $data) = Q_WebServer_Panel_Auth::change($parsed, $body);
+			return $json($status, $data);
+		}
+		if ($route === 'auth/logout') {
+			list($status, $data) = Q_WebServer_Panel_Auth::logout($parsed);
+			return $json($status, $data);
+		}
+
+		$result = self::handleApi($path, $parsed);
+		return $json($result['status'] ?? 200, $result);
 	}
 
 	/** Plain-text refusal, for the API. */
@@ -148,7 +162,7 @@ class Q_WebServer_Panel
 	{
 		return self::isLocal($parsed)
 			|| Q_Config::get('Q', 'panel', 'remote', false)
-			|| self::hasPassword()
+			|| Q_WebServer_Panel_Auth::canSignIn($parsed)
 			|| Q_WebServer::adminAllowed($parsed);
 	}
 
@@ -202,21 +216,7 @@ class Q_WebServer_Panel
 	 */
 	static function storePassword($password, $configPath = null, $revokeSessions = false)
 	{
-		$password = (string) $password;
-		if (strlen($password) < 6) return array('ok' => false, 'error' => 'Password must be at least 6 characters');
-		$configPath = $configPath ?: self::panelConfigPath();
-		$config = is_file($configPath) ? (json_decode((string) file_get_contents($configPath), true) ?: array()) : array();
-		$config['passwordHash'] = password_hash($password, PASSWORD_DEFAULT);
-		if ($revokeSessions or !isset($config['sessions']) or !is_array($config['sessions'])) {
-			$config['sessions'] = array();
-		}
-		$dir = dirname($configPath);
-		if (!is_dir($dir)) @mkdir($dir, 0700, true);
-		if (@file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT)) === false) {
-			return array('ok' => false, 'error' => 'Failed to write config to ' . $configPath);
-		}
-		@chmod($configPath, 0600);
-		return array('ok' => true, 'path' => $configPath);
+		return Q_WebServer_Panel_Auth::storePassword($password, $configPath, $revokeSessions);
 	}
 
 	/**
@@ -230,120 +230,11 @@ class Q_WebServer_Panel
 	}
 
 	/**
-	 * Handle auth API endpoints
-	 */
-	private static function handleAuthApi($route, $parsed)
-	{
-		$configPath = self::panelConfigPath();
-		$config = file_exists($configPath)
-			? json_decode(file_get_contents($configPath), true)
-			: array();
-
-		$body = !empty($parsed['body'])
-			? json_decode($parsed['body'], true)
-			: array();
-
-		if ($route === 'auth/setup') {
-			// First-time setup: set password
-			if (!empty($config['passwordHash'])) {
-				return array('error' => 'Password already set. Use auth/login.',
-					'needsSetup' => false);
-			}
-			$stored = self::storePassword($body['password'] ?? '', $configPath);
-			if (!$stored['ok']) return array('error' => $stored['error']);
-			// Signed in straight away: a session for whoever just set it.
-			$config = json_decode((string) file_get_contents($configPath), true) ?: array();
-			$token = bin2hex(random_bytes(32));
-			$config['sessions'][$token] = time() + 86400 * 7; // 7 day expiry
-			@file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
-			@chmod($configPath, 0600);
-			return array('ok' => true, 'token' => $token);
-		}
-
-		if ($route === 'auth/login') {
-			if (empty($config['passwordHash'])) {
-				return array('needsSetup' => true);
-			}
-			// SECURITY: brute force protection — block IP after 5 failed attempts
-			$ip = $parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '0.0.0.0';
-			$now = time();
-			if (!isset(self::$loginAttempts[$ip])) {
-				self::$loginAttempts[$ip] = array();
-			}
-			// Clean old attempts (older than 5 minutes)
-			self::$loginAttempts[$ip] = array_filter(
-				self::$loginAttempts[$ip],
-				function ($t) use ($now) { return $t > $now - 300; }
-			);
-			if (count(self::$loginAttempts[$ip]) >= 5) {
-				return array('error' => 'Too many attempts, try again later', 'status' => 429);
-			}
-			$password = $body['password'] ?? '';
-			if (!password_verify($password, $config['passwordHash'])) {
-				self::$loginAttempts[$ip][] = $now;
-				return array('error' => 'Wrong password', 'status' => 401);
-			}
-			// Success — clear attempts
-			unset(self::$loginAttempts[$ip]);
-			// Issue session token
-			$token = bin2hex(random_bytes(32));
-			if (!isset($config['sessions'])) $config['sessions'] = array();
-			// Clean expired sessions
-			$now = time();
-			foreach ($config['sessions'] as $t => $exp) {
-				if ($exp < $now) unset($config['sessions'][$t]);
-			}
-			$config['sessions'][$token] = $now + 86400 * 7;
-			if (!is_dir(dirname($configPath))) @mkdir(dirname($configPath), 0700, true);
-			file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
-			return array('ok' => true, 'token' => $token);
-		}
-
-		return array('error' => 'Unknown auth endpoint');
-	}
-
-	/**
 	 * Check if the request has a valid auth token
 	 */
 	private static function checkAuth($parsed)
 	{
-		$configPath = self::panelConfigPath();
-		if (!file_exists($configPath)) {
-			return array('ok' => false, 'needsSetup' => true,
-				'error' => 'No password set. Call auth/setup first.');
-		}
-		$config = json_decode(file_get_contents($configPath), true);
-		if (empty($config['passwordHash'])) {
-			return array('ok' => false, 'needsSetup' => true,
-				'error' => 'No password set. Call auth/setup first.');
-		}
-
-		// Check Authorization: Bearer <token> header
-		$authHeader = $parsed['headers']['authorization'] ?? '';
-		$token = '';
-		if (strpos($authHeader, 'Bearer ') === 0) {
-			$token = substr($authHeader, 7);
-		}
-		// Also check X-Panel-Token header
-		if (empty($token)) {
-			$token = $parsed['headers']['x-panel-token'] ?? '';
-		}
-		// Also check cookie
-		if (empty($token)) {
-			$token = $parsed['cookies']['Q_panel_token'] ?? '';
-		}
-
-		if (empty($token)) {
-			return array('ok' => false, 'error' => 'No auth token provided');
-		}
-
-		$sessions = $config['sessions'] ?? array();
-		$expiry = $sessions[$token] ?? 0;
-		if ($expiry < time()) {
-			return array('ok' => false, 'error' => 'Token expired or invalid');
-		}
-
-		return array('ok' => true);
+		return Q_WebServer_Panel_Auth::checkSession($parsed);
 	}
 
 	/**
@@ -355,12 +246,7 @@ class Q_WebServer_Panel
 	 */
 	static function validateToken($token)
 	{
-		if (empty($token)) return false;
-		$configPath = self::panelConfigPath();
-		if (!file_exists($configPath)) return false;
-		$config = json_decode(file_get_contents($configPath), true);
-		$sessions = $config['sessions'] ?? array();
-		return isset($sessions[$token]) && $sessions[$token] > time();
+		return Q_WebServer_Panel_Auth::validateToken((string) $token);
 	}
 
 	/**
@@ -371,10 +257,7 @@ class Q_WebServer_Panel
 	 */
 	static function hasPassword()
 	{
-		$configPath = self::panelConfigPath();
-		if (!file_exists($configPath)) return false;
-		$config = json_decode(file_get_contents($configPath), true);
-		return !empty($config['passwordHash']);
+		return Q_WebServer_Panel_Auth::hasPassword();
 	}
 
 	static function handleApi($path, $parsed)
@@ -531,46 +414,15 @@ class Q_WebServer_Panel
 
 	private static function apiChangePassword($parsed)
 	{
-		$body = !empty($parsed['body'])
-			? json_decode($parsed['body'], true) : array();
-		$configPath = self::panelConfigPath();
-		$config = json_decode(file_get_contents($configPath), true);
-
-		$oldPw = $body['oldPassword'] ?? '';
-		$newPw = $body['newPassword'] ?? '';
-
-		if (!password_verify($oldPw, $config['passwordHash'])) {
-			return array('error' => 'Current password is wrong');
-		}
-		if (strlen($newPw) < 6) {
-			return array('error' => 'New password must be at least 6 characters');
-		}
-
-		$config['passwordHash'] = password_hash($newPw, PASSWORD_DEFAULT);
-		// Invalidate all other sessions
-		$currentToken = $parsed['headers']['x-panel-token']
-			?? $parsed['cookies']['Q_panel_token'] ?? '';
-		$config['sessions'] = array();
-		if ($currentToken) {
-			$config['sessions'][$currentToken] = time() + 86400 * 7;
-		}
-			if (!is_dir(dirname($configPath))) @mkdir(dirname($configPath), 0700, true);
-		file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
-		return array('ok' => true);
+		$body = !empty($parsed['body']) ? (json_decode($parsed['body'], true) ?: array()) : array();
+		list($status, $data) = Q_WebServer_Panel_Auth::change($parsed, $body);
+		return $data + array('status' => $status);
 	}
 
 	private static function apiLogout($parsed)
 	{
-		$configPath = self::panelConfigPath();
-		$config = json_decode(file_get_contents($configPath), true);
-		$token = $parsed['headers']['x-panel-token']
-			?? $parsed['cookies']['Q_panel_token'] ?? '';
-		if ($token && isset($config['sessions'][$token])) {
-			unset($config['sessions'][$token]);
-			if (!is_dir(dirname($configPath))) @mkdir(dirname($configPath), 0700, true);
-			file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
-		}
-		return array('ok' => true);
+		list($status, $data) = Q_WebServer_Panel_Auth::logout($parsed);
+		return $data + array('status' => $status);
 	}
 
 	// ── Apps API ─────────────────────────────────────────
@@ -1317,9 +1169,6 @@ class Q_WebServer_Panel
 		return array('opened' => $dir, 'editor' => $editor);
 	}
 
-
-
-
 	// ── Framework Package Management ─────────────────────
 
 	/**
@@ -1672,7 +1521,6 @@ class Q_WebServer_Panel
 		$output = shell_exec($fullCmd);
 		return ['output' => $output, 'cmd' => $cmd];
 	}
-
 
 	// ── Package Download (all frameworks) ────────────────
 
@@ -2166,7 +2014,6 @@ class Q_WebServer_Panel
 		];
 	}
 
-
 	// ── Frameworks API ───────────────────────────────────
 
 	static function apiFrameworks()
@@ -2347,7 +2194,6 @@ class Q_WebServer_Panel
 		$output = shell_exec($fullCmd);
 		return ['output' => $output, 'cmd' => $cli . ' ' . $cmd];
 	}
-
 
 	// ── Helpers ──────────────────────────────────────────
 

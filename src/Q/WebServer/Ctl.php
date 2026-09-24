@@ -498,23 +498,41 @@ class Q_WebServer_Ctl
 			return 0;
 		}, $ctxOpts + array('staging' => array('Use Let\'s Encrypt\'s staging server (for trying things out)', false)), array(), '[domain...]');
 		$C::add('panel:password', 'Set or change the control panel password', function ($a, $o) {
+			// The configuration the server reads: the default key and the
+			// brand are part of the policy, and so is Q.panel.bcryptCost.
+			self::context($o);
 			$file = self::panelPasswordFile($o);
 			if ($file === null) {
 				Q_Console::err('no such directory: ' . ($o['app'] ?? $o['root'] ?? getcwd() . '/web'));
 				return 1;
 			}
-			$password = self::readPassword($o);
-			if ($password === null) return 1;
-			if (!class_exists('Q_WebServer_Panel')) require_once self::$sourceDir . '/src/Q/WebServer/Panel.php';
-			// A changed password ends the sessions signed in with the old one.
-			$r = Q_WebServer_Panel::storePassword($password, $file, true);
-			if (!$r['ok']) { Q_Console::err($r['error']); return 1; }
+			$context = Q_WebServer_Panel_Auth::policyContext(null, $file);
+			if (!empty($o['generate'])) {
+				$password = Q_WebServer_Panel_PasswordPolicy::generate($context);
+			} else {
+				$password = self::readPassword($o);
+				if ($password === null) return 1;
+			}
+			// A changed password ends the sessions signed in with the old one,
+			// and clears the default key's must-change marks.
+			$r = Q_WebServer_Panel_Auth::storePassword($password, $file, true, null, $context);
+			if (!$r['ok']) {
+				Q_Console::err($r['error']);
+				foreach ($r['failed'] ?? array() as $rule) Q_Console::err('  - ' . $rule);
+				Q_Console::err('See docs/passwords.md for the rules, or use --generate.');
+				return 1;
+			}
+			if (!empty($o['generate'])) {
+				Q_Console::out('generated panel password (shown once, keep it safe):');
+				Q_Console::out('  ' . $password);
+			}
 			Q_Console::out('panel password set in ' . $r['path'] . '; sign in at /Q/panel');
 			return 0;
-		}, array(
+		}, self::$contextOptions + array(
 			'root' => 'The document root the server runs with (default: ./web)',
 			'app' => 'The application directory, for a server run with --app',
 			'password' => 'The password (default: asked for, or read from standard input)',
+			'generate' => array('Make a strong random password, set it, and print it once', false),
 		));
 		$C::add('cache:clear', 'Invalidate every page in the response cache', function ($a, $o) use ($say) {
 			self::context($o);
