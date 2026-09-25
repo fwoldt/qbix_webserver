@@ -11,6 +11,7 @@
  *                                   terminal's fallback when WebSockets are blocked:
  *
  *     GET    shell/session?session=S        hello: tier, themes, toggle key
+ *     DELETE shell/session?session=S        end that session and its jobs
  *     POST   shell/exec {command|line, session?, tier?, timeout?, force?}
  *                                           202 {job}; poll or fetch the job for the result
  *     GET    shell/poll?session=S&since=N   {messages, next}
@@ -61,6 +62,10 @@ class Q_WebServer_Shell_Api
 		if ($sub === 'session' && $method === 'GET') {
 			$key = Q_WebServer_Shell_Server::session($token, $sessionName, $ip);
 			return array(200, Q_WebServer_Shell_Server::hello($key));
+		}
+		if ($sub === 'session' && $method === 'DELETE') {
+			// The console's close control: end this session and its jobs.
+			return array(200, array('ok' => true, 'closed' => Q_WebServer_Shell_Server::closeClient($token, $sessionName)));
 		}
 		if ($sub === 'exec' && $method === 'POST') {
 			$line = (string) ($body['command'] ?? $body['line'] ?? '');
@@ -213,6 +218,10 @@ class Q_WebServer_Shell_Api
 				$key = Q_WebServer_Shell_Server::session($token, (string) ($m['session'] ?? ''), $ip);
 				$c = Q_WebServer_Shell_Server::complete($key, (string) ($m['line'] ?? ''), (int) ($m['pos'] ?? 0));
 				Q_WebSocket::send($sk, array('t' => 'completion', 'rid' => $m['rid'] ?? null, 'session' => $key) + $c);
+				return;
+			case 'close':
+				Q_WebServer_Shell_Server::closeClient($token, (string) ($m['session'] ?? ''));
+				Q_WebSocket::send($sk, array('t' => 'closed', 'session' => (string) ($m['session'] ?? '')));
 				return;
 			case 'history':
 				$key = Q_WebServer_Shell_Server::session($token, (string) ($m['session'] ?? ''), $ip);

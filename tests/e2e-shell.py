@@ -182,6 +182,69 @@ async def main():
         await page.keyboard.press('`')
         await page.wait_for_timeout(300)
         check('` shows it again', await page.evaluate("() => !!document.querySelector('.qshell.open')"))
+
+        # The toolbar item and the window controls (+ − m ×).
+        item = page.locator('.qnav [data-qshell-open]')
+        check('the toolbar item says it is showing (aria-expanded)', await item.get_attribute('aria-expanded') == 'true')
+        pill = await page.evaluate("""() => { const s = getComputedStyle(document.querySelector('.qnav [data-qshell-open]')), o = getComputedStyle(document.querySelector('.qnav a:not([data-qshell-open])'));
+            return [s.borderRadius === o.borderRadius, s.paddingLeft === o.paddingLeft, s.fontSize === o.fontSize, s.borderTopWidth === o.borderTopWidth]; }""")
+        check('the toolbar item is styled like the other toolbar pills', all(pill), str(pill))
+        check('the connection dot shows on the toolbar item', await page.evaluate("() => getComputedStyle(document.querySelector('[data-qshell-open] .qshell-dot')).display !== 'none'"))
+        for sel, name in (('.qs-show', '+'), ('.qs-hide', '−'), ('.qs-maxbtn', 'm'), ('.qs-close', '×')):
+            lab = await page.get_attribute('.qs-win ' + sel, 'aria-label')
+            check('window control %s has an accessible name' % name, bool(lab), repr(lab))
+        check('a background job for the hide test', await run(page, 'sleep 20 &', '['))
+        await page.click('.qs-win .qs-hide')
+        await page.wait_for_timeout(300)
+        hidden = not await page.evaluate("() => !!document.querySelector('.qshell.open')")
+        check('− hides the shell', hidden)
+        check('− gives focus back to the toolbar item', await page.evaluate("() => document.activeElement && document.activeElement.hasAttribute('data-qshell-open')"))
+        check('the toolbar item shows running, hidden', await page.evaluate("() => document.querySelector('[data-qshell-open]').classList.contains('qshell-hidden-run')"))
+        await item.click()
+        await page.wait_for_selector('.qshell.open', timeout=4000)
+        check('the toolbar item shows it again', True)
+        check('the session survived hiding (the job is still listed)', await run(page, 'jobs', 'sleep 20'))
+        h0 = await page.evaluate("() => document.querySelector('.qshell').getBoundingClientRect().height")
+        await page.click('.qs-win .qs-maxbtn')
+        await page.wait_for_timeout(300)
+        h1 = await page.evaluate("() => document.querySelector('.qshell').getBoundingClientRect().height")
+        check('m maximises to the full height', h1 >= 539 and h1 > h0, '%s -> %s' % (h0, h1))
+        if SHOTS:
+            await page.screenshot(path=os.path.join(SHOTS, 'shell-960-max.png'))
+        await page.click('.qs-win .qs-maxbtn')
+        await page.wait_for_timeout(300)
+        h2 = await page.evaluate("() => document.querySelector('.qshell').getBoundingClientRect().height")
+        check('m again restores the height', abs(h2 - h0) < 2, '%s vs %s' % (h2, h0))
+        await page.click('.qs-win .qs-close')
+        try:
+            await page.wait_for_selector('.qs-confirm', timeout=4000)
+            check('× with a running job asks first', True)
+        except Exception:
+            check('× with a running job asks first', False)
+        if SHOTS:
+            await page.screenshot(path=os.path.join(SHOTS, 'shell-960-close-confirm.png'))
+        await page.click('.qs-confirm .qs-confirm-no')
+        await page.wait_for_timeout(200)
+        check('cancelling keeps the shell and its job', await run(page, 'jobs', 'sleep 20'))
+        await page.click('.qs-win .qs-close')
+        await page.wait_for_selector('.qs-confirm', timeout=4000)
+        await page.click('.qs-confirm .qs-confirm-yes')
+        await page.wait_for_timeout(600)
+        check('× then confirming closes the shell', not await page.evaluate("() => !!document.querySelector('.qshell')"))
+        check('after closing, the toolbar item is back to plain', await page.evaluate("() => { const a = document.querySelector('[data-qshell-open]'); return !a.classList.contains('qshell-started') && a.getAttribute('aria-expanded') === 'false'; }"))
+        await page.keyboard.press('`')
+        await page.wait_for_selector('.qshell.open', timeout=4000)
+        check('` starts a fresh shell after closing', await run(page, 'echo fresh-start', 'fresh-start'))
+        left = await page.evaluate("""async () => { const t = sessionStorage.getItem('Q_panel_token');
+            const r = await fetch('/Q/api/shell/jobs', {headers: {'X-Panel-Token': t}}); const j = await r.json();
+            return (j.jobs || []).filter(x => x.state === 'running' && x.line.indexOf('sleep 20') !== -1).length; }""")
+        check('closing ended the old session\'s running job', left == 0, str(left))
+        for scheme in ('light', 'dark'):
+            await page.emulate_media(color_scheme=scheme)
+            await page.wait_for_timeout(200)
+            if SHOTS:
+                await page.screenshot(path=os.path.join(SHOTS, 'shell-960-%s.png' % scheme))
+        await page.emulate_media(color_scheme='dark')
         check('no script errors on the page', not errors, '; '.join(errors))
 
         # Phone width, touch.
@@ -199,8 +262,20 @@ async def main():
         overflow = await mp.evaluate("() => document.documentElement.scrollWidth > window.innerWidth + 1")
         check('phone: no horizontal overflow', not overflow)
         check('phone: commands run', await run(mp, 'echo phone-ok', 'phone-ok'))
+        sizes = await mp.evaluate("() => Array.from(document.querySelectorAll('.qs-win button')).map(b => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })")
+        check('phone: window controls are at least 44px', len(sizes) == 4 and all(w >= 44 and h >= 44 for w, h in sizes), str(sizes))
         if SHOTS:
             await mp.screenshot(path=os.path.join(SHOTS, 'shell-480.png'))
+        # Signed out: the item is there, but disabled with the hint.
+        octx = await b.new_context(viewport={'width': 960, 'height': 540}, device_scale_factor=2)
+        op = await octx.new_page()
+        await op.goto(BASE + '/Q/docs')
+        await op.wait_for_timeout(1500)
+        dis = await op.evaluate("() => { const a = document.querySelector('[data-qshell-open]'); return a ? [a.getAttribute('aria-disabled'), a.title] : null; }")
+        check('signed out: the item is disabled with the sign-in hint', bool(dis) and dis[0] == 'true' and 'Sign in' in (dis[1] or ''), str(dis))
+        await op.keyboard.press('`')
+        await op.wait_for_timeout(300)
+        check('signed out: ` does not open the shell', not await op.evaluate("() => !!document.querySelector('.qshell.open')"))
         await b.close()
     ok = all(results)
     print('%s %d of %d checks' % ('PASS' if ok else 'FAIL', sum(1 for r in results if r), len(results)))

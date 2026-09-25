@@ -16,6 +16,16 @@ qsh> man jobs
 
 ### The terminal
 
+- **The Shell item**: every server view's toolbar has a Shell pill, styled
+  like the others. Clicking it (or `` ` ``) shows the console; while the
+  console runs hidden the pill is dashed, and its dot shows the connection
+  (green WebSocket, amber polling, orange reconnecting, red signed out).
+  Signed out it is disabled and says to sign in to the Control Panel.
+- **Window controls** in the title bar: `+` starts or shows the shell, `−`
+  hides it (the session and its jobs keep running; `Esc` does the same),
+  `m` maximises it to the full height and back (remembered in this
+  browser), and `×` closes it, ending the session and its jobs. `×` lists
+  any running jobs and asks before ending them.
 - **Tabs and splits**: `Ctrl-Shift-T` opens a tab, `Ctrl-Shift-D` splits
   the pane; each pane is its own session with its own jobs (the history
   is shared).
@@ -149,7 +159,8 @@ The shell's own security settings (below) cannot be changed from the shell.
 
 `command &` runs in the background; `jobs`, `fg %n`, `bg %n`, `kill %n`
 and `wait` manage them, as in bash. A job keeps running when the console
-is closed and its output is waiting when it opens again.
+is hidden (`−` or `Esc`) and its output is waiting when it shows again;
+closing it with `×` ends the session and its jobs, after asking.
 
 ### REST API
 
@@ -162,6 +173,7 @@ browser.
 | Method and path | |
 |---|---|
 | `GET session` | who, tier, user, whether OS commands and sudo are allowed |
+| `DELETE session?session=<name>` | end that session and its jobs (the console's `×`) |
 | `POST exec` | `{"command": "...", "force": false, "timeout": 30}` → `202` with a job id |
 | `GET poll?since=<seq>` | messages since a sequence number (`next` in the reply) |
 | `POST input`, `POST signal` | `{"job": "<id>", "data": "..."}`; `{"job": "<id>", "sig": "INT"}` |

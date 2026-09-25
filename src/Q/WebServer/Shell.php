@@ -191,8 +191,11 @@ class Q_WebServer_Shell
 	{
 		if (!self::enabled() || !is_string($html) || strpos($html, 'data-qshell-open') !== false) return $html;
 		$key = htmlspecialchars((string) self::config('toggleKey'), ENT_QUOTES);
-		$item = '<a href="#shell" class="qshell-item" data-qshell-open role="button" aria-haspopup="dialog" '
-			. 'title="Shell (press ' . $key . ')">Shell <kbd>' . $key . '</kbd></a>';
+		// A toolbar pill like the page's own links (it lives in the same
+		// .qnav, so it takes their CSS). The dot shows the connection once
+		// the shell has started; aria-expanded says whether it is showing.
+		$item = '<a href="#shell" class="qshell-item" data-qshell-open role="button" aria-haspopup="dialog" aria-expanded="false" '
+			. 'aria-label="Shell" title="Shell (press ' . $key . ')"><span class="qshell-dot" aria-hidden="true"></span>Shell <kbd>' . $key . '</kbd></a>';
 		$count = 0;
 		$html = preg_replace('/(<div class="qnav"[^>]*>.*?)(<\/div>)/s', '$1' . $item . '$2', $html, 1, $count);
 		$assets = '<link rel="stylesheet" href="/Q/shell/shell.css">'

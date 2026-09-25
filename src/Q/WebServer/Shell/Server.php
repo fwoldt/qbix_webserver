@@ -99,6 +99,24 @@ class Q_WebServer_Shell_Server
 		unset(self::$sessions[$key]);
 	}
 
+	/**
+	 * End a session a client names, with its jobs: the console's close
+	 * control. Only the owner's own session is touched, and one that does
+	 * not exist is not created just to be closed.
+	 * @param {string} $token the panel session token
+	 * @param {string} $client the client's own session id
+	 * @return {boolean} whether a session was closed
+	 */
+	static function closeClient($token, $client)
+	{
+		if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', (string) $client)) return false;
+		$owner = self::owner($token);
+		$key = substr(hash('sha256', $owner . ':' . $client), 0, 32);
+		if (!isset(self::$sessions[$key]) || self::$sessions[$key]['owner'] !== $owner) return false;
+		self::closeSession($key);
+		return true;
+	}
+
 	/** What a client needs to know when it connects. */
 	static function hello($key)
 	{
@@ -528,7 +546,7 @@ class Q_WebServer_Shell_Server
 		if ($owner !== null && (self::$sessions[$j['session']]['owner'] ?? null) !== $owner) return null;
 		return array('id' => $id, 'n' => $j['n'], 'line' => $j['line'], 'state' => $j['state'], 'exit' => $j['code'],
 			'duration' => $j['state'] === 'done' ? ($j['ms'] ?? 0) : (int) round((microtime(true) - $j['started']) * 1000),
-			'background' => $j['bg'], 'stdout' => $j['stdout'], 'stderr' => $j['stderr']);
+			'background' => $j['bg'], 'session' => $j['session'], 'stdout' => $j['stdout'], 'stderr' => $j['stderr']);
 	}
 
 	/** Jobs of a user (or of one session). */

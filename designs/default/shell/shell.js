@@ -67,7 +67,7 @@
     ws: null, mode: 'ws', panes: {}, byKey: {}, queue: [], polling: {}, ready: false, conn: 'connecting',
     // How the console is connected, shown as a dot in its title bar:
     // live (WebSocket), polling, reconnecting, or signed out.
-    setConn: function (c) { if (this.conn === c) return; this.conn = c; if (typeof Shell !== 'undefined' && Shell.paintStatus) Shell.paintStatus(); },
+    setConn: function (c) { if (this.conn === c) return; this.conn = c; if (typeof Shell !== 'undefined' && Shell.paintStatus) { Shell.paintStatus(); syncItems(); } },
     start: function () {
       var self = this;
       if (!('WebSocket' in window)) return this.fallback();
@@ -179,6 +179,16 @@
     hello: function (pane) { this.send({ t: 'hello', session: pane.clientId, pane: pane.id }); },
     register: function (pane) { this.panes[pane.id] = pane; this.hello(pane); },
     unregister: function (pane) { delete this.panes[pane.id]; if (pane.key) delete this.byKey[pane.key]; },
+    // The close control: end a session on the server (its jobs with it).
+    closeSession: function (clientId) { return this.api('DELETE', 'shell/session?session=' + encodeURIComponent(clientId)); },
+    // Forget every pane and connection, without reconnecting; the next
+    // start() begins afresh.
+    reset: function () {
+      var ws = this.ws; this.ws = null;
+      if (ws) { ws.onclose = null; ws.onerror = null; ws.onmessage = null; try { ws.close(); } catch (e) {} }
+      this.panes = {}; this.byKey = {}; this.queue = []; this.polling = {};
+      this.ready = false; this.mode = 'ws'; this.conn = 'connecting';
+    },
     dispatch: function (m) {
       var pane = null;
       if (m.t === 'hello') {
@@ -560,10 +570,22 @@
        ['split ┃', function () { self.split('row'); }, 'Split side by side (Ctrl-Shift-D)'],
        ['split ━', function () { self.split('col'); }, 'Split top and bottom (Ctrl-Shift-E)'],
        ['tabs ⇄', function () { self.layout(self.node.classList.contains('qs-horizontal') ? 'vertical' : 'horizontal', true); }, 'Tabs down the side or along the top'],
-       ['hide `', function () { self.hide(); }, 'Hide (` or Esc)']].forEach(function (b) {
+      ].forEach(function (b) {
         var btn = el('button', 'qs-btn', b[0]); btn.type = 'button'; btn.title = b[2];
         btn.addEventListener('click', b[1]); bar.appendChild(btn);
       });
+      // Window controls: start or show, hide (the session keeps running),
+      // maximise, and close (ends the session and its jobs).
+      var win = el('span', 'qs-win');
+      [['+', 'qs-show', 'Start or show the shell', function () { self.show(); }],
+       ['−', 'qs-hide', 'Hide the shell; its session keeps running (` or Esc)', function () { self.hide(); }],
+       ['m', 'qs-maxbtn', 'Maximise to the full height, and back', function () { self.maximise(); }],
+       ['×', 'qs-close', 'Close the shell: ends its session and jobs', function () { self.close(false); }]].forEach(function (b) {
+        var btn = el('button', b[1], b[0]); btn.type = 'button'; btn.title = b[2]; btn.setAttribute('aria-label', b[2]);
+        btn.addEventListener('click', b[3]); win.appendChild(btn);
+        if (b[1] === 'qs-maxbtn') self.maxBtn = btn;
+      });
+      bar.appendChild(win);
       var main = el('div', 'qs-main');
       this.tabsEl = el('div', 'qs-tabs'); this.tabsEl.setAttribute('role', 'tablist');
       var nt = el('div', 'qs-tab qs-newtab', '＋'); nt.title = 'New tab'; nt.addEventListener('click', function () { self.newTab(); });
@@ -584,6 +606,7 @@
       document.body.appendChild(n);
       this.node = n;
       var h = LS.get('height', null); if (h) n.style.height = h;
+      if (LS.get('max', false)) n.classList.add('qs-max');
       if (window.matchMedia && matchMedia('(pointer: coarse)').matches) n.classList.add('qs-touch');
       this.layout(LS.get('layout', 'vertical'), false);
       this.resizer(grip);
@@ -607,11 +630,58 @@
       this.ensure();
       this.node.classList.add('open'); this.node.setAttribute('aria-hidden', 'false');
       var p = this.current && this.current.active; if (p) setTimeout(function () { p.focus(); }, 30);
+      syncItems();
     },
     hide: function () {
       if (!this.node) return;
+      var had = this.node.contains(document.activeElement);
       this.node.classList.remove('open'); this.node.setAttribute('aria-hidden', 'true');
-      if (document.activeElement && this.node.contains(document.activeElement)) document.activeElement.blur();
+      if (had) document.activeElement.blur();
+      syncItems(); focusItem();
+    },
+    // m: the full height and back, remembered in this browser.
+    maximise: function () {
+      if (!this.node) return;
+      var on = !this.node.classList.contains('qs-max');
+      this.node.classList.toggle('qs-max', on);
+      LS.set('max', on);
+      if (this.maxBtn) this.maxBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    },
+    // ×: end the session and its jobs. Running jobs are named first, and
+    // nothing is ended unless that is confirmed.
+    close: function (force) {
+      var self = this;
+      if (!this.node) return;
+      if (force) return this.destroy();
+      var keys = Object.keys(Link.panes).map(function (id) { return Link.panes[id].key; }).filter(Boolean);
+      Link.api('GET', 'shell/jobs').then(function (j) {
+        var running = (j.jobs || []).filter(function (x) { return x.state === 'running' && keys.indexOf(x.session) !== -1; });
+        if (!running.length) return self.destroy();
+        self.confirm((running.length === 1 ? 'One job is' : running.length + ' jobs are') + ' still running: '
+          + running.map(function (x) { return '[' + x.n + '] ' + x.line; }).join(', ') + '. Close the shell and end them?',
+          function () { self.destroy(); });
+      });
+    },
+    confirm: function (text, yes) {
+      var self = this;
+      if (this.confirmEl) this.confirmEl.remove();
+      var box = el('div', 'qs-confirm'); box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Close the shell?');
+      box.appendChild(el('p', '', text));
+      var ok = el('button', 'qs-btn qs-confirm-yes', 'End them and close'); ok.type = 'button';
+      var no = el('button', 'qs-btn qs-confirm-no', 'Keep running'); no.type = 'button';
+      ok.addEventListener('click', function () { box.remove(); self.confirmEl = null; yes(); });
+      no.addEventListener('click', function () { box.remove(); self.confirmEl = null; var p = self.current && self.current.active; if (p) p.focus(); });
+      box.appendChild(ok); box.appendChild(no);
+      this.node.appendChild(box); this.confirmEl = box;
+      no.focus();
+    },
+    destroy: function () {
+      var ids = Object.keys(Link.panes).map(function (id) { return Link.panes[id].clientId; });
+      ids.forEach(function (c) { Link.closeSession(c); });
+      Link.reset();
+      if (this.node) this.node.remove();
+      this.node = null; this.tabs = []; this.current = null; this.info = null; this.confirmEl = null;
+      syncItems(); focusItem();
     },
     toggle: function () { this.isOpen() ? this.hide() : this.show(); },
     newTab: function () {
@@ -720,6 +790,7 @@
     notice: function (text, auth) {
       var items = document.querySelectorAll('[data-qshell-open]');
       for (var i = 0; i < items.length; i++) { items[i].classList.add('qshell-off'); items[i].title = text; }
+      if (auth) { this.allowed = false; this.why = text; } syncItems();
       // An open console stays open and says what happened in its own pane;
       // closing it on a lost session left the visitor with no message at all.
       if (auth) {
@@ -771,6 +842,32 @@
   };
 
   // ── Wiring: the toolbar item and the toggle key ─────────────────────
+  // The toolbar item mirrors the console: showing (aria-expanded), running
+  // but hidden, the connection's dot, or unavailable until signed in.
+  function syncItems() {
+    var items = document.querySelectorAll('[data-qshell-open]');
+    var started = !!Shell.node, open = Shell.isOpen();
+    var conn = { live: 'qshell-c-live', polling: 'qshell-c-poll', reconnecting: 'qshell-c-down', 'signed-out': 'qshell-c-out' }[Link.conn] || '';
+    var state = !Shell.allowed ? (Shell.why || 'Sign in to the Control Panel to use the shell.')
+      : open ? 'Shell: showing (press ' + TOGGLE + ' or Esc to hide)'
+      : started ? 'Shell: running, hidden (press ' + TOGGLE + ' to show)'
+      : 'Shell (press ' + TOGGLE + ')';
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      it.setAttribute('aria-expanded', open ? 'true' : 'false');
+      it.setAttribute('aria-disabled', Shell.allowed ? 'false' : 'true');
+      it.setAttribute('aria-label', state);
+      it.title = state;
+      it.classList.toggle('qshell-off', !Shell.allowed);
+      it.classList.toggle('qshell-started', started);
+      it.classList.toggle('qshell-hidden-run', started && !open);
+      ['qshell-c-live', 'qshell-c-poll', 'qshell-c-down', 'qshell-c-out'].forEach(function (c) { it.classList.toggle(c, started && c === conn); });
+    }
+  }
+  function focusItem() {
+    var it = document.querySelector('[data-qshell-open]');
+    if (it && typeof it.focus === 'function') it.focus({ preventScroll: true });
+  }
   function typingElsewhere(t) {
     if (!t || !t.tagName) return false;
     if (Shell.node && Shell.node.contains(t)) return false;
@@ -809,7 +906,7 @@
         if (x.s === 200) {
           Shell.allowed = true;
           var items = document.querySelectorAll('[data-qshell-open]');
-          for (var i = 0; i < items.length; i++) { items[i].classList.remove('qshell-off'); items[i].title = 'Shell (press ' + TOGGLE + ')'; }
+          Shell.why = null; syncItems();
           if (x.j.toggleKey) TOGGLE = x.j.toggleKey;
           if (location.hash === '#shell') Shell.show();
         } else {

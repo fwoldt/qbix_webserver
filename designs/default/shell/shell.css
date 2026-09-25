@@ -1,9 +1,23 @@
 /* The Q shell: a Quake-style drop-down console over the server's own pages.
    Colours come from the active theme (theme-<name>.json) as --qs-* variables. */
+/* The toolbar item. Inside a view's .qnav it is one of that view's pills and
+   takes their CSS; the rules below only add its dot and states. */
 .qshell-item kbd{font:inherit;font-size:.85em;opacity:.7;margin-left:4px;padding:0 4px;border:1px solid currentColor;border-radius:4px}
-.qshell-item.qshell-off{opacity:.55}
-.qshell-float{position:fixed;top:10px;right:12px;z-index:2147483000;display:flex;gap:4px;font:12px -apple-system,system-ui,sans-serif}
-.qshell-float a{color:#c9d1d9;background:rgba(22,27,34,.92);padding:3px 10px;border:1px solid #30363d;border-radius:10px;text-decoration:none}
+.qshell-item .qshell-dot{display:none;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle;background:#6b7089}
+.qshell-item.qshell-started .qshell-dot{display:inline-block}
+.qshell-item.qshell-c-live .qshell-dot{background:#3fb950}
+.qshell-item.qshell-c-poll .qshell-dot{background:#d29922}
+.qshell-item.qshell-c-down .qshell-dot{background:#f0883e}
+.qshell-item.qshell-c-out .qshell-dot{background:#f85149}
+.qshell-item[aria-expanded=true]{color:#a78bfa;background:rgba(124,92,252,.08)}
+.qshell-item.qshell-hidden-run{border-style:dashed}
+.qshell-item.qshell-off,.qshell-item[aria-disabled=true]{opacity:.55;cursor:not-allowed}
+/* Pages without a toolbar get one, with the same pill as the views' .qnav a
+   (values copied from designs/default/panel/style.css, kept in step). */
+.qshell-float{position:fixed;top:10px;right:12px;z-index:2147483000;display:flex;flex-wrap:wrap;gap:4px;font:12px -apple-system,system-ui,sans-serif;min-width:0}
+.qshell-float a{color:#6b7089;text-decoration:none;padding:2px 9px;border:1px solid rgba(255,255,255,.08);border-radius:10px;white-space:nowrap;background:rgba(10,11,20,.92)}
+.qshell-float a:hover,.qshell-float a:focus-visible{color:#fff;border-color:#a78bfa;outline:none}
+@media (prefers-color-scheme:light){.qshell-float a{background:rgba(255,255,255,.92);border-color:rgba(0,0,0,.08)}.qshell-float a:hover,.qshell-float a:focus-visible{color:#1a1a2e}}
 
 .qshell{--qs-bg:#0d1117;--qs-fg:#d1d7e0;--qs-dim:#7d8590;--qs-accent:#7c5cfc;--qs-cursor:#a78bfa;--qs-sel:rgba(124,92,252,.35);
   --qs-prompt:#4ade80;--qs-err:#f87171;--qs-border:rgba(255,255,255,.12);--qs-opacity:.94;
@@ -91,3 +105,14 @@
 
 .qs-conn{display:inline-block;margin-right:2px;font-size:12px;line-height:1}
 .qs-conn-live{color:#3fb950}.qs-conn-poll{color:#d29922}.qs-conn-down{color:#f0883e}.qs-conn-out{color:#f85149}
+
+/* Window controls: start/show, hide, maximise, close. */
+.qs-win{display:flex;gap:2px;margin-left:4px}
+.qs-win button{background:none;border:1px solid var(--qs-border);color:var(--qs-dim);border-radius:6px;min-width:24px;height:22px;padding:0 6px;font:600 13px/1 ui-monospace,Menlo,monospace;cursor:pointer}
+.qs-win button:hover,.qs-win button:focus-visible{color:var(--qs-fg);border-color:var(--qs-accent);outline:none}
+.qs-win .qs-close:hover,.qs-win .qs-close:focus-visible{color:#fff;background:var(--qs-err);border-color:var(--qs-err)}
+.qshell.qs-max{height:100vh !important;max-height:100vh}
+.qs-confirm{position:absolute;right:8px;top:34px;z-index:2;background:var(--qs-bg);border:1px solid var(--qs-accent);border-radius:8px;padding:10px 12px;max-width:min(360px,calc(100vw - 16px));box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.qs-confirm p{margin:0 0 8px}
+.qs-confirm button{margin-right:6px}
+@media (max-width:600px),(pointer:coarse){.qs-win button{min-width:44px;height:44px;font-size:16px}.qs-bar{flex-wrap:wrap}}
