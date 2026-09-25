@@ -2236,7 +2236,7 @@ class Q_WebServer
 			phpinfo();
 			$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
 			return array('status' => 200, 'body' => $html,
-				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
+				'headers' => array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'no-store'));
 		}
 
 		if ($path === '/Q/dashboard' || $path === '/Q/dashboard/') {
@@ -2258,21 +2258,16 @@ class Q_WebServer
 			// Panel password — require a valid session cookie
 			// This machine is let in, as adminAllowed() lets it in everywhere else.
 			if (Q_WebServer_Panel::hasPassword() && !self::isLocalRequest($parsed)) {
-				$cookie = $parsed['cookies']['Q_panel_token'] ?? '';
-				$qp = array();
-				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
-				$qToken = $qp['token'] ?? '';
-				if (!Q_WebServer_Panel::validateToken($cookie)
-					&& !Q_WebServer_Panel::validateToken($qToken)
-					&& ($token === null || !is_string($qToken) || !hash_equals((string) $token, $qToken))
-				) {
+				// The same credential check as every other admin view: a panel
+				// session in the cookie, a header or ?token=, or the dashboard token.
+				if (!self::hasAdminCredential($parsed)) {
 					// Redirect to panel (which has the login form)
 					return array('status' => 302, 'body' => '',
 						'headers' => array('Location' => '/Q/panel'));
 				}
 			}
 			return array('status'=>200, 'body'=>Q_WebServer_Dashboard::renderHtml($parsed),
-				'headers'=>array('Content-Type'=>'text/html; charset=utf-8'));
+				'headers'=>array('Content-Type'=>'text/html; charset=utf-8', 'Cache-Control'=>'no-store'));
 		}
 		// The control panel and its API, answered here as they are on the
 		// HTTP/1.1 path (Q_WebServer_Panel::handle()). Nothing here answered
@@ -2829,7 +2824,7 @@ class Q_WebServer
 				ob_start();
 				phpinfo();
 				$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
-				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8');
+				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8', array('Cache-Control' => 'no-store'));
 				return false;
 			}
 			// The rest of the admin surface, before anything answers it.
@@ -5504,6 +5499,9 @@ WORKER;
 			strncmp($auth, 'Bearer ', 7) === 0 ? substr($auth, 7) : '',
 			(string) ($parsed['cookies']['Q_panel_token'] ?? ''),
 		);
+		// A control panel session, wherever the request carries it -- the same
+		// answer the panel and the shell get (Q_WebServer_Panel_Auth::sessionFromRequest).
+		if (class_exists('Q_WebServer_Panel_Auth') && ($ps = Q_WebServer_Panel_Auth::sessionFromRequest($parsed)) !== null && !$ps['mustChange']) return true;
 		$static = Q_Config::get('Q', 'dashboard', 'token', null);
 		foreach ($given as $t) {
 			if ($t === '') continue;

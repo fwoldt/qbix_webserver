@@ -6,7 +6,11 @@ let authToken = null;
 
 // ── Auth ─────────────────────────────────────────────
 
+// The server sets the session cookie at sign-in (Path=/, every /Q/ view);
+// it wins over this tab's storage, which can hold a token from an older session.
 function getToken() {
+  var m = document.cookie.match(/(?:^|;\s*)Q_panel_token=([^;]+)/);
+  if (m && m[1]) return (authToken = decodeURIComponent(m[1]));
   if (authToken) return authToken;
   try { authToken = sessionStorage.getItem('Q_panel_token'); } catch(e) {}
   return authToken;
@@ -14,8 +18,8 @@ function getToken() {
 function setToken(t) {
   authToken = t;
   try { sessionStorage.setItem('Q_panel_token', t); } catch(e) {}
-  // Also set as cookie for WebSocket auth
-  document.cookie = 'Q_panel_token=' + t + '; path=/; SameSite=Strict';
+  // The same cookie the server sets, for a server too old to set it.
+  document.cookie = 'Q_panel_token=' + t + '; path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
 }
 
 async function api(path, body) {

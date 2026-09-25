@@ -60,7 +60,13 @@ class Q_WebServer_Panel
 		$path = $parsed['path'];
 		$json = function ($status, $data) {
 			return array('status' => $status, 'body' => json_encode($data),
-				'headers' => array('Content-Type' => 'application/json'));
+				'headers' => array('Content-Type' => 'application/json', 'Cache-Control' => 'no-store'));
+		};
+		// A sign-in (or a password change, which keeps its session) sets the
+		// session cookie from the server; a sign-out clears it.
+		$withCookie = function (array $r, $token) use ($parsed) {
+			$r['headers']['Set-Cookie'] = Q_WebServer_Panel_Auth::sessionCookie($token, $parsed);
+			return $r;
 		};
 
 		// Who may reach the panel at all: see allowed(). The same rule on
@@ -78,7 +84,7 @@ class Q_WebServer_Panel
 
 		if ($path === '/Q/panel' || $path === '/Q/panel/') {
 			return array('status' => 200, 'body' => self::renderPanel($parsed),
-				'headers' => array('Content-Type' => 'text/html; charset=utf-8'));
+				'headers' => array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'no-store'));
 		}
 
 		if (strpos($path, '/Q/api/') !== 0) return null;
@@ -88,7 +94,8 @@ class Q_WebServer_Panel
 
 		if ($route === 'auth/login') {
 			list($status, $data) = Q_WebServer_Panel_Auth::login($parsed, $body);
-			return $json($status, $data);
+			$r = $json($status, $data);
+			return !empty($data['token']) ? $withCookie($r, (string) $data['token']) : $r;
 		}
 		if ($route === 'auth/setup') {
 			// The first password is set from this machine, with the dashboard
@@ -123,11 +130,12 @@ class Q_WebServer_Panel
 
 		if ($route === 'auth/password') {
 			list($status, $data) = Q_WebServer_Panel_Auth::change($parsed, $body);
-			return $json($status, $data);
+			$r = $json($status, $data);
+			return ($status === 200 && $auth['token'] !== '') ? $withCookie($r, (string) ($data['token'] ?? $auth['token'])) : $r;
 		}
 		if ($route === 'auth/logout') {
 			list($status, $data) = Q_WebServer_Panel_Auth::logout($parsed);
-			return $json($status, $data);
+			return $withCookie($json($status, $data), null);
 		}
 
 		$result = self::handleApi($path, $parsed);

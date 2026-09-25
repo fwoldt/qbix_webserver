@@ -140,8 +140,10 @@ class Q_WebServer_Shell_Api
 			return array(403, 'Forbidden: the shell opens only from this server\'s own pages.');
 		}
 		if (!Q_WebServer_Panel::allowed($parsed)) return array(403, 'Forbidden.');
-		$token = Q_WebServer_Panel_Auth::requestToken($parsed);
-		if (!Q_WebServer_Panel_Auth::validateToken($token)) return array(401, 'Sign in to the Control Panel to use the shell.');
+		$ps = Q_WebServer_Panel_Auth::sessionFromRequest($parsed);
+		if ($ps === null) return array(401, 'Sign in to the Control Panel to use the shell.');
+		if ($ps['mustChange']) return array(403, 'Change the control panel\'s default password first, then open the shell.');
+		$token = $ps['token'];
 		$ip = (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '');
 		$ok = Q_WebSocket::upgrade($client, $h, function ($sk, $raw) use ($token, $ip) {
 			Q_WebServer_Shell_Api::onMessage($sk, $raw, $token, $ip);

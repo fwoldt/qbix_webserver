@@ -292,19 +292,13 @@ class Q_WebServer_Dashboard
 			// If panel password is set, require auth (cookie or query token)
 			// This machine is let in, as adminAllowed() lets it in everywhere else.
 			if (Q_WebServer_Panel::hasPassword() && !Q_WebServer::isLocalRequest($parsed)) {
-				$cookie = $parsed['cookies']['Q_panel_token'] ?? '';
-				$qp = array();
-				if (!empty($parsed['query'])) parse_str($parsed['query'], $qp);
-				$qToken = $qp['token'] ?? '';
-				if (!Q_WebServer_Panel::validateToken($cookie)
-					&& !Q_WebServer_Panel::validateToken($qToken)
-				) {
+				if (!Q_WebServer::hasAdminCredential($parsed)) {
 					Q_WebServer::sendRedirect($client,
 						'/Q/panel?next=' . urlencode('/Q/dashboard'));
 					return true;
 				}
 			}
-			Q_WebServer::sendResponse($client, 200, self::renderHtml($parsed), 'text/html; charset=utf-8');
+			Q_WebServer::sendResponse($client, 200, self::renderHtml($parsed), 'text/html; charset=utf-8', array('Cache-Control' => 'no-store'));
 			return true;
 		}
 		if ($p === '/Q/stats') {
@@ -588,9 +582,9 @@ class Q_WebServer_Dashboard
 
 		// Get auth token for WebSocket connection
 		$wsToken = '';
-		$cookie = $parsed['cookies']['Q_panel_token'] ?? '';
-		if ($cookie && Q_WebServer_Panel::validateToken($cookie)) {
-			$wsToken = $cookie;
+		$ps = Q_WebServer_Panel_Auth::sessionFromRequest($parsed);
+		if ($ps !== null && !$ps['mustChange']) {
+			$wsToken = $ps['token'];
 		}
 		if (!$wsToken) {
 			$qp = array();

@@ -11,11 +11,13 @@
     get: function (k, d) { try { var v = localStorage.getItem('qshell.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
     set: function (k, v) { try { localStorage.setItem('qshell.' + k, JSON.stringify(v)); } catch (e) {} }
   };
+  // The session the server set at sign-in (the cookie, on every /Q/ view)
+  // comes first; this tab's own storage only when there is no cookie. A token
+  // left in one tab's storage used to win over the live cookie and be refused.
   function token() {
-    var t = null;
-    try { t = sessionStorage.getItem('Q_panel_token'); } catch (e) {}
-    if (!t) { var m = document.cookie.match(/(?:^|;\s*)Q_panel_token=([^;]+)/); if (m) t = decodeURIComponent(m[1]); }
-    return t;
+    var m = document.cookie.match(/(?:^|;\s*)Q_panel_token=([^;]+)/);
+    if (m && m[1]) return decodeURIComponent(m[1]);
+    try { return sessionStorage.getItem('Q_panel_token'); } catch (e) { return null; }
   }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function rid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }

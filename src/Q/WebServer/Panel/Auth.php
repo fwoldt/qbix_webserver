@@ -189,6 +189,63 @@ class Q_WebServer_Panel_Auth
 		return (string) ($parsed['cookies']['Q_panel_token'] ?? '');
 	}
 
+	/**
+	 * The control panel session this request carries, from any of the places
+	 * a browser or a script puts it (Authorization: Bearer, X-Panel-Token, or
+	 * the Q_panel_token cookie), checked against the stored sessions. The one
+	 * answer every /Q/ view and endpoint asks: the dashboard, phpinfo,
+	 * metrics, the panel page, the shell's HTTP routes and its WebSocket.
+	 *
+	 * @return {array|null} array('token', 'mustChange', 'from' => bearer|header|cookie[N]), or null
+	 */
+	static function sessionFromRequest($parsed, $path = null)
+	{
+		$h = (array) ($parsed['headers'] ?? array());
+		$candidates = array();
+		$auth = (string) ($h['authorization'] ?? '');
+		if (strpos($auth, 'Bearer ') === 0) $candidates['bearer'] = substr($auth, 7);
+		if ((string) ($h['x-panel-token'] ?? '') !== '') $candidates['header'] = (string) $h['x-panel-token'];
+		if ((string) ($parsed['cookies']['Q_panel_token'] ?? '') !== '') $candidates['cookie'] = (string) $parsed['cookies']['Q_panel_token'];
+		// A browser can hold more than one Q_panel_token (an old one set for
+		// another path, or by an earlier sign-in); the parsed cookies keep one
+		// of them. Every value in the raw header is a candidate.
+		$raw = $h['cookie'] ?? '';
+		foreach ((array) $raw as $line) {
+			if (preg_match_all('/(?:^|;)\s*Q_panel_token=([^;]*)/', (string) $line, $m)) {
+				foreach ($m[1] as $i => $v) {
+					$v = rawurldecode(trim($v));
+					if ($v !== '' && !in_array($v, $candidates, true)) $candidates['cookie' . $i] = $v;
+				}
+			}
+		}
+		// A stale token in one place (an old cookie, a tab's leftover
+		// storage) must not hide a live one in another: the first live one wins.
+		foreach ($candidates as $from => $token) {
+			if (self::sessionLive($token, $path)) {
+				return array('token' => $token, 'mustChange' => self::mustChange($token, $path), 'from' => $from);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The Set-Cookie value that carries a session to every /Q/ view, or that
+	 * clears it ($token null). Set by the server on sign-in, so it no longer
+	 * depends on the page's script having run: Path=/ so the dashboard,
+	 * phpinfo and the shell see it as the panel does; SameSite=Lax so a
+	 * top-level visit from a bookmark or another site still carries it (every
+	 * state-changing call also needs the token in a header); Secure over TLS.
+	 * Readable by script on purpose: the panel and the shell send it back in
+	 * the X-Panel-Token header, which is what makes their writes CSRF-safe.
+	 */
+	static function sessionCookie($token, $parsed)
+	{
+		$secure = !empty($parsed['https']) || ($parsed['httpVersion'] ?? '') === '2';
+		$v = 'Q_panel_token=' . ($token === null ? '' : rawurlencode($token)) . '; Path=/; SameSite=Lax'
+			. ($token === null ? '; Max-Age=0' : '; Max-Age=' . self::SESSION_SECONDS);
+		return $v . ($secure ? '; Secure' : '');
+	}
+
 	/** Whether a token is a live session. */
 	static function sessionLive($token, $path = null)
 	{
@@ -229,10 +286,10 @@ class Q_WebServer_Panel_Auth
 		if (!self::canSignIn($parsed)) {
 			return array('ok' => false, 'needsSetup' => true, 'error' => 'No password set. Call auth/setup first.');
 		}
-		$token = self::requestToken($parsed);
-		if ($token === '') return array('ok' => false, 'error' => 'No auth token provided');
-		if (!self::sessionLive($token)) return array('ok' => false, 'error' => 'Token expired or invalid');
-		return array('ok' => true, 'token' => $token);
+		$s = self::sessionFromRequest($parsed);
+		if ($s !== null) return array('ok' => true, 'token' => $s['token']);
+		if (self::requestToken($parsed) === '') return array('ok' => false, 'error' => 'No auth token provided');
+		return array('ok' => false, 'error' => 'Token expired or invalid');
 	}
 
 	// ── The API ─────────────────────────────────────────────────────────

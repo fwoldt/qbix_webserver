@@ -252,6 +252,32 @@ if ($srv and $srv[1]) {
 		check("A, $label, remote: ...and the session reaches the API", $st, 200);
 		list($st) = $fn($p, $remote, 'GET', '/Q/api/system');
 		check("A, $label, remote: the API still needs a session", $st, 401);
+
+		// One session for every /Q/ view: signed in on the panel, the cookie
+		// alone opens the dashboard and phpinfo, and the shell takes it too.
+		// (On a live server the dashboard answered 403 to a signed-in visitor.)
+		list($st, $h) = $fn($p, $remote, 'POST', '/Q/api/auth/login', json_encode(array('password' => 'Cl1#Rk7!Wm9@Pz4Xq')));
+		$sc = (string) ($h['set-cookie'] ?? '');
+		preg_match('/Q_panel_token=([^;]+)/', $sc, $cm);
+		$ck = $cm[1] ?? '';
+		check("A, $label, remote: sign-in sets the session cookie for every /Q/ path",
+			array($ck !== '', stripos($sc, 'Path=/') !== false, stripos($sc, 'SameSite=Lax') !== false), array(true, true, true));
+		list($st) = $fn($p, $remote, 'GET', '/Q/dashboard', '', array('Cookie' => "Q_panel_token=$ck"));
+		check("A, $label, remote, signed in on the panel: /Q/dashboard answers 200", $st, 200);
+		list($st) = $fn($p, $remote, 'GET', '/Q/phpinfo', '', array('Cookie' => "Q_panel_token=$ck"));
+		check("A, $label, remote, signed in: /Q/phpinfo answers 200", $st, 200);
+		list($st) = $fn($p, $remote, 'GET', '/Q/dashboard', '', array('Cookie' => "Q_panel_token=stale0000; Q_panel_token=$ck"));
+		check("A, $label, remote: a stale cookie beside the live one does not hide it", $st, 200);
+		list($st, $h) = $fn($p, $remote, 'GET', '/Q/dashboard', '', array('Cookie' => "Q_panel_token=$ck"));
+		check("A, $label: the dashboard is never stored by a cache (no-store)", stripos((string) ($h['cache-control'] ?? ''), 'no-store') !== false, true);
+		list($st) = $fn($p, $remote, 'GET', '/Q/api/shell/session?session=t', '', array('X-Panel-Token' => $ck));
+		check("A, $label, remote: the shell takes the same session", $st, 200);
+		list($st) = $fn($p, $remote, 'GET', '/Q/api/shell/poll?session=t&since=0');
+		check("A, $label, remote: shell polling refuses without a session", $st, 401);
+		list($st, $h) = $fn($p, $remote, 'POST', '/Q/api/auth/logout', '{}', array('X-Panel-Token' => $ck, 'Cookie' => "Q_panel_token=$ck"));
+		check("A, $label: sign-out clears the cookie", stripos((string) ($h['set-cookie'] ?? ''), 'Max-Age=0') !== false, true);
+		list($st) = $fn($p, $remote, 'GET', '/Q/dashboard', '', array('Cookie' => "Q_panel_token=$ck"));
+		check("A, $label, remote: after sign-out the dashboard refuses again", in_array($st, array(302, 403), true), true);
 	}
 	stopServer($procA);
 	$logs['A'] = $baseA . DS . 'log';
