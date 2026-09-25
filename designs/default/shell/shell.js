@@ -64,7 +64,10 @@
 
   // ── Transport: one socket for every pane, or HTTP polling ───────────
   var Link = {
-    ws: null, mode: 'ws', panes: {}, byKey: {}, queue: [], polling: {}, ready: false,
+    ws: null, mode: 'ws', panes: {}, byKey: {}, queue: [], polling: {}, ready: false, conn: 'connecting',
+    // How the console is connected, shown as a dot in its title bar:
+    // live (WebSocket), polling, reconnecting, or signed out.
+    setConn: function (c) { if (this.conn === c) return; this.conn = c; if (typeof Shell !== 'undefined' && Shell.paintStatus) Shell.paintStatus(); },
     start: function () {
       var self = this;
       if (!('WebSocket' in window)) return this.fallback();
@@ -73,12 +76,14 @@
         this.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/Q/ws/shell');
       } catch (e) { return this.fallback(); }
       var opened = false;
-      this.ws.onopen = function () { opened = true; self.ready = true; self.flush(); };
+      this.ws.onopen = function () { opened = true; self.ready = true; self.setConn('live'); self.flush(); };
       this.ws.onmessage = function (e) { var m; try { m = JSON.parse(e.data); } catch (x) { return; } self.dispatch(m); };
       this.ws.onerror = function () { if (!opened && !failed) { failed = true; self.fallback(); } };
       this.ws.onclose = function () {
         self.ready = false;
         if (!opened) { if (!failed) { failed = true; self.fallback(); } return; }
+        if (self.conn === 'signed-out') return;
+        self.setConn('reconnecting');
         // Reconnect, and say hello again for every pane.
         setTimeout(function () { if (self.mode === 'ws') { self.start(); Object.keys(self.panes).forEach(function (id) { self.hello(self.panes[id]); }); } }, 1500);
       };
@@ -86,6 +91,7 @@
     fallback: function () {
       this.mode = 'http';
       this.ready = true;
+      if (this.conn !== 'signed-out') this.setConn('polling');
       var self = this;
       Object.keys(this.panes).forEach(function (id) { self.hello(self.panes[id]); });
       this.flush();
@@ -115,12 +121,13 @@
       switch (m.t) {
         case 'hello':
           this.api('GET', 'shell/session?session=' + encodeURIComponent(m.session)).then(function (j) {
-            if (j._status !== 200) { self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, pane: m.pane }); return; }
+            if (j._status !== 200) { if (j._status === 401) self.setConn('signed-out'); self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, pane: m.pane }); return; }
             j.pane = m.pane; self.dispatch(j); self.poll(j.session);
           });
           break;
         case 'exec':
           this.api('POST', 'shell/exec', { command: m.line, session: m.session, interactive: true, force: !!m.force }).then(function (j) {
+            if (j._status === 401) self.setConn('signed-out');
             if (j._status !== 202) self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, pane: m.pane, session: pane && pane.key });
           });
           break;
@@ -147,9 +154,11 @@
           if (j._status !== 200) {
             // Say so once per outage, then keep trying with a longer wait.
             if (!p.down) { p.down = true; self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, session: key }); }
+            self.setConn(j._status === 401 ? 'signed-out' : 'reconnecting');
             setTimeout(loop, j._status === 401 ? 5000 : 2000); return;
           }
           if (p.down) { p.down = false; self.dispatch({ t: 'notice', d: 'Connected again.', session: key }); }
+          self.setConn('polling');
           (j.messages || []).forEach(function (m) { self.dispatch(m); });
           if (typeof j.next === 'number') p.since = j.next;
           setTimeout(loop, (j.messages && j.messages.length) ? 60 : 350);
@@ -178,7 +187,10 @@
         if (pane) { pane.key = m.session; this.byKey[m.session] = pane; }
       } else if (m.session) pane = this.byKey[m.session];
       else if (m.pane) pane = this.panes[m.pane];
-      if (!pane && m.t === 'error') { Shell.notice(m.d, m.auth); return; }
+      if (m.t === 'error' && m.auth === false) this.setConn('signed-out');
+      // auth === false is the WebSocket's "this session has ended"; true is
+      // an HTTP 401. Either way the visitor is signed out and must be told.
+      if (!pane && m.t === 'error') { Shell.notice(m.d, m.auth === false || m.auth === true); return; }
       if (pane) pane.receive(m);
     }
   };
@@ -683,8 +695,17 @@
     },
     elevated: function (until) { this.sudoUntil = until ? until * 1000 : 0; this.paintStatus(); },
     paintStatus: function () {
-      if (!this.statusEl || !this.info) return;
-      this.statusEl.textContent = (this.info.brand ? this.info.brand + ' · ' : '') + 'tier ' + this.info.tier + (this.info.allowSystem ? ' · OS commands on' : '') + (Link.mode === 'http' ? ' · polling' : '');
+      if (!this.statusEl) return;
+      var CONN = { live: ['connected (WebSocket)', 'qs-conn-live'], polling: ['connected (polling)', 'qs-conn-poll'],
+        reconnecting: ['reconnecting…', 'qs-conn-down'], 'signed-out': ['signed out: sign in at /Q/panel', 'qs-conn-out'],
+        connecting: ['connecting…', 'qs-conn-poll'] };
+      var c = CONN[Link.conn] || CONN.connecting;
+      var dot = el('span', 'qs-conn ' + c[1], '\u25CF');
+      dot.title = c[0]; dot.setAttribute('role', 'status'); dot.setAttribute('aria-label', 'Shell ' + c[0]);
+      this.statusEl.textContent = '';
+      this.statusEl.appendChild(dot);
+      if (!this.info || Link.conn === 'signed-out' || Link.conn === 'reconnecting') { this.statusEl.appendChild(document.createTextNode(' ' + c[0])); return; }
+      this.statusEl.appendChild(document.createTextNode(' ' + (this.info.brand ? this.info.brand + ' · ' : '') + 'tier ' + this.info.tier + (this.info.allowSystem ? ' · OS commands on' : '') + (Link.mode === 'http' ? ' · polling' : '')));
       if (this.info.user) {
         var u = el('span', this.info.root ? 'qs-root' : '', ' · runs as ' + this.info.user);
         if (this.info.root) u.title = 'Commands run as root. Set Q.shell.user to run them as an ordinary user.';
@@ -699,8 +720,14 @@
     notice: function (text, auth) {
       var items = document.querySelectorAll('[data-qshell-open]');
       for (var i = 0; i < items.length; i++) { items[i].classList.add('qshell-off'); items[i].title = text; }
-      if (auth && this.isOpen()) { this.hide(); }
-      if (auth) { this.allowed = false; this.why = text; }
+      // An open console stays open and says what happened in its own pane;
+      // closing it on a lost session left the visitor with no message at all.
+      if (auth) {
+        this.allowed = false; this.why = text;
+        Link.setConn('signed-out');
+        var p = this.current && this.current.active;
+        if (this.isOpen() && p && p.lastNotice !== text) { p.lastNotice = text; p.note(text + ' Sign in at /Q/panel, then press ` here again.\n', 'qs-err'); }
+      }
     },
     // Keys: bind <key> <command>, kept in this browser.
     keyName: function (e) {

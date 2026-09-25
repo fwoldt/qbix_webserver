@@ -88,3 +88,6 @@
   .qs-split.qs-row>*+*{border-left:0;border-top:1px solid var(--qs-border)}
 }
 @media (prefers-reduced-motion:reduce){.qshell{transition:none}}
+
+.qs-conn{display:inline-block;margin-right:2px;font-size:12px;line-height:1}
+.qs-conn-live{color:#3fb950}.qs-conn-poll{color:#d29922}.qs-conn-down{color:#f0883e}.qs-conn-out{color:#f85149}
