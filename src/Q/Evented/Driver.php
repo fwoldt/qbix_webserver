@@ -14,4 +14,25 @@ abstract class Q_Evented_Driver
 	abstract function tick($timeout = 0);
 	abstract function stop();
 	abstract function running();
+
+	/**
+	 * Run a timer or deferred callback so that nothing it throws can end the
+	 * event loop. The loop is the whole server: one uncaught error in a
+	 * periodic job (a stats heartbeat, say) used to stop every listener at
+	 * once. The error is logged, once per distinct message, and the loop goes on.
+	 */
+	static function guard($cb, $kind)
+	{
+		static $seen = array();
+		try {
+			$cb();
+		} catch (\Throwable $e) {
+			$key = get_class($e) . ':' . $e->getMessage();
+			if (!isset($seen[$key]) && count($seen) < 200) {
+				$seen[$key] = true;
+				fwrite(STDERR, sprintf("  %s callback failed, and the server carries on: %s: %s in %s:%d\n",
+					$kind, get_class($e), $e->getMessage(), $e->getFile(), $e->getLine()));
+			}
+		}
+	}
 }

@@ -92,7 +92,15 @@
       var t = token();
       var opt = { method: method, headers: { 'X-Panel-Token': t || '' }, credentials: 'same-origin' };
       if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-      return fetch('/Q/api/' + path, opt).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
+      // Whatever comes back -- JSON, a plain-text error page, nothing at all --
+      // becomes an object with _status, so no failure is ever swallowed.
+      return fetch('/Q/api/' + path, opt).then(function (r) {
+        return r.text().then(function (txt) {
+          var j; try { j = txt ? JSON.parse(txt) : {}; } catch (e) { j = { error: (txt || '').slice(0, 300) || ('HTTP ' + r.status) }; }
+          if (!j || typeof j !== 'object') j = { value: j };
+          j._status = r.status; return j;
+        });
+      }, function (e) { return { _status: 0, error: 'The server did not answer (' + (e && e.message || 'network error') + ').' }; });
     },
     send: function (m) {
       if (!this.ready) { this.queue.push(m); return; }
@@ -105,13 +113,13 @@
       switch (m.t) {
         case 'hello':
           this.api('GET', 'shell/session?session=' + encodeURIComponent(m.session)).then(function (j) {
-            if (j._status !== 200) { self.dispatch({ t: 'error', d: j.error || 'The shell is not available.', auth: j._status === 401, pane: m.pane }); return; }
+            if (j._status !== 200) { self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, pane: m.pane }); return; }
             j.pane = m.pane; self.dispatch(j); self.poll(j.session);
           });
           break;
         case 'exec':
           this.api('POST', 'shell/exec', { command: m.line, session: m.session, interactive: true, force: !!m.force }).then(function (j) {
-            if (j._status !== 202) self.dispatch({ t: 'error', d: j.error || 'not started', pane: m.pane, session: pane && pane.key });
+            if (j._status !== 202) self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, pane: m.pane, session: pane && pane.key });
           });
           break;
         case 'stdin': this.api('POST', 'shell/input', { job: m.id, data: m.d }); break;
@@ -134,11 +142,28 @@
         if (!self.byKey[key]) { delete self.polling[key]; return; }
         var p = self.polling[key];
         self.api('GET', 'shell/poll?session=' + encodeURIComponent(self.byKey[key].clientId) + '&since=' + p.since).then(function (j) {
+          if (j._status !== 200) {
+            // Say so once per outage, then keep trying with a longer wait.
+            if (!p.down) { p.down = true; self.dispatch({ t: 'error', d: Link.explain(j), auth: j._status === 401, session: key }); }
+            setTimeout(loop, j._status === 401 ? 5000 : 2000); return;
+          }
+          if (p.down) { p.down = false; self.dispatch({ t: 'notice', d: 'Connected again.', session: key }); }
           (j.messages || []).forEach(function (m) { self.dispatch(m); });
           if (typeof j.next === 'number') p.since = j.next;
           setTimeout(loop, (j.messages && j.messages.length) ? 60 : 350);
         }).catch(function () { setTimeout(loop, 2000); });
       })();
+    },
+    // What a failed request means, and what to do next.
+    explain: function (j) {
+      var s = j._status, e = j.error || '';
+      if (s === 401) return 'Your control panel session is not valid here: sign in at /Q/panel, then press ` again.';
+      if (s === 403) return e || 'Not allowed at this tier. `help` lists what you can run.';
+      if (s === 404) return e || 'The shell is not available on this server.';
+      if (s === 429) return e || 'Too many jobs are running; wait for one to finish (`jobs`).';
+      if (s === 0) return e + ' Check that the server is running.';
+      if (s >= 500) return 'The server failed to run it (HTTP ' + s + '): ' + (e || 'no details') + '.';
+      return e || ('Unexpected answer (HTTP ' + s + ').');
     },
     hello: function (pane) { this.send({ t: 'hello', session: pane.clientId, pane: pane.id }); },
     register: function (pane) { this.panes[pane.id] = pane; this.hello(pane); },
@@ -292,9 +317,10 @@
         this.renderPrompt();
         break;
       case 'completion': this.completed(m); break;
+      case 'notice': this.note(m.d + '\n'); break;
       case 'error':
         this.note(m.d + '\n', 'qs-err');
-        if (m.auth === false) Shell.notice(m.d, true);
+        if (m.auth === false || m.auth === true) Shell.notice(m.d, true);
         this.job = null; this.tab.busy(false); this.renderPrompt();
         break;
     }

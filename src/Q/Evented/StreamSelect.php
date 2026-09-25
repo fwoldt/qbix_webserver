@@ -146,7 +146,7 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 			$batch = $this->deferred;
 			$this->deferred = array();
 			foreach ($batch as $id => $cb) {
-				if (empty($this->disabled[$id])) $cb();
+				if (empty($this->disabled[$id])) self::guard($cb, 'deferred');
 			}
 		}
 
@@ -156,9 +156,13 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 		foreach ($this->timers as $id => $t) {
 			if (!empty($this->disabled[$id])) continue;
 			if ($now >= $t['fireAt']) {
-				$t['callback']();
+				self::guard($t['callback'], 'timer');
 				if ($t['interval'] > 0) {
 					$this->timers[$id]['fireAt'] = $now + $t['interval'];
+					// Its next run counts toward how long this tick may wait;
+					// left out, a repeating timer waited for the next I/O or
+					// the next other timer, however far off that was.
+					if ($nextTimer === null || $t['interval'] < $nextTimer) $nextTimer = $t['interval'];
 				} else {
 					unset($this->timers[$id]);
 				}
@@ -275,4 +279,5 @@ class Q_Evented_StreamSelect extends Q_Evented_Driver
 			|| !empty($this->timers) || !empty($this->deferred)
 			|| !empty($this->signals);
 	}
+
 }

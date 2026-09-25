@@ -133,7 +133,7 @@ class Q_Evented_IoPoll extends Q_Evented_Driver
 		if (!empty($this->deferred)) {
 			$batch = $this->deferred;
 			$this->deferred = array();
-			foreach ($batch as $cb) { $cb(); }
+			foreach ($batch as $cb) { self::guard($cb, 'deferred'); }
 		}
 
 		// Signal dispatch
@@ -146,7 +146,7 @@ class Q_Evented_IoPoll extends Q_Evented_Driver
 		$nextTimer = null;
 		foreach ($this->timers as $id => $t) {
 			if ($now >= $t[0]) {
-				($t[2])();
+				self::guard($t[2], 'timer');
 				if ($t[1] > 0) {
 					$this->timers[$id][0] = $now + $t[1];
 				} else {

@@ -33,21 +33,21 @@ class Q_Evented_Revolt extends Q_Evented_Driver
 	function delay($seconds, callable $cb)
 	{
 		return EventLoop::delay($seconds, function () use ($cb) {
-			$cb();
+			self::guard($cb, 'timer');
 		});
 	}
 
 	function repeat($seconds, callable $cb)
 	{
 		return EventLoop::repeat($seconds, function () use ($cb) {
-			$cb();
+			self::guard($cb, 'timer');
 		});
 	}
 
 	function defer(callable $cb)
 	{
 		return EventLoop::defer(function () use ($cb) {
-			$cb();
+			self::guard($cb, 'timer');
 		});
 	}
 

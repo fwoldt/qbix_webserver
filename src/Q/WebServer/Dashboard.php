@@ -36,6 +36,20 @@ class Q_WebServer_Dashboard
 		});
 	}
 
+	/**
+	 * The shell's activity card, or null. Never allowed to fail the stats it
+	 * is part of: those feed the live heartbeat and the page itself.
+	 */
+	static function shellSummary()
+	{
+		if (!class_exists('Q_WebServer_Shell_Server', false)) return null;
+		try {
+			return Q_WebServer_Shell_Server::summary();
+		} catch (\Throwable $e) {
+			return array('error' => $e->getMessage());
+		}
+	}
+
 	static $sessions = array();  // sessionId => lastSeen timestamp (MRU order)
 	static $maxSessions = 20;    // configurable cap
 
@@ -250,7 +264,7 @@ class Q_WebServer_Dashboard
 			// missing per tier, with the install commands. Computed once per process.
 			'extensions' => self::extensionsSummary(),
 			// Q shell activity; only when the shell has been loaded in this process.
-			'shell' => class_exists('Q_WebServer_Shell_Server', false) ? Q_WebServer_Shell_Server::summary() : null,
+			'shell' => self::shellSummary(),
 			'php' => PHP_VERSION,
 			'os' => PHP_OS,
 			'sessions' => self::getSessionList(),

@@ -685,7 +685,7 @@ class Q_WebServer_Shell_Server
 		}
 		return array('enabled' => Q_WebServer_Shell::enabled(), 'sessions' => count(self::$sessions),
 			'running' => $running, 'commands' => count(self::$audit), 'system' => $system,
-			'allowSystem' => (bool) Q_WebServer_Shell::config()['allowSystem'], 'recent' => $recent);
+			'allowSystem' => (bool) Q_WebServer_Shell::config('allowSystem'), 'recent' => $recent);
 	}
 	// ── Completion ──────────────────────────────────────────────────────
 
