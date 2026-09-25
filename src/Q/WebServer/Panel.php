@@ -242,9 +242,9 @@ class Q_WebServer_Panel
 	 */
 	static function panelConfigPath()
 	{
-		return defined('APP_DIR')
-			? APP_DIR . '/local/panel.json'
-			: qbix_data_path('local/panel.json');
+		// The credentials file in the panel's store (acl/panel.json): see
+		// Q_WebServer_Panel_Store for where that is and the rule it passes.
+		return Q_WebServer_Panel_Store::aclFile();
 	}
 
 	/**

@@ -83,9 +83,11 @@ class Q_WebServer_Shell
 
 	static function dataDir()
 	{
-		$panel = (class_exists('Q_WebServer_Panel') and (defined('APP_DIR') or function_exists('qbix_data_path')))
-			? Q_WebServer_Panel::panelConfigPath() : null;
-		$base = $panel ? dirname($panel) : sys_get_temp_dir();
+		// Beside the panel's sessions: <state dir>/shell with a configuration
+		// tree (/var/lib/qbix/shell), APP_DIR/local/shell without one.
+		$sessions = (class_exists('Q_WebServer_Panel_Store') and (defined('APP_DIR') or function_exists('qbix_data_path')))
+			? Q_WebServer_Panel_Store::dirs()['sessions'] : null;
+		$base = $sessions ? dirname($sessions) : sys_get_temp_dir();
 		return $base . DIRECTORY_SEPARATOR . 'shell';
 	}
 

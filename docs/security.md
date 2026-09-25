@@ -177,6 +177,14 @@ changes, and guarded by a lockout that doubles up to an hour. A server with no
 password yet signs in only with the default key, and only to change it. Everything
 about it is in [passwords.md](passwords.md).
 
+Where the password and the sessions are kept is guarded too. Every directory from
+them up to `/` must belong to root or the server's user and be writable by no one
+else, the directories and files themselves the server's alone (`0700`/`0600`), and no
+symbolic link on the way. A store some other user could rename and replace with a
+password of their own is never believed: the panel then refuses every sign-in, the
+default key and every session, and says why at start and in `qbixctl panel:check`.
+See [dashboard.md](dashboard.md#where-the-panel-keeps-its-credentials).
+
 ## Notes for anyone maintaining a fork
 
 Two of the above were found by running the server rather than reading it, and

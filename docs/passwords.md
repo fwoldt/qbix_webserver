@@ -29,9 +29,11 @@ says exactly how, so an operator can choose one that passes the first time.
   them is ignored. So nothing longer is ever accepted, as a new password or at
   sign-in, rather than silently cut. (Most characters are one byte; an accented
   letter is two, most other scripts three.)
-- **Where.** `local/panel.json` in the directory above the document root -- for
-  `--root=/srv/site/web`, that is `/srv/site/local/panel.json` -- or in the `--app`
-  directory. It is written readable by the server's user only (`0600`).
+- **Where.** `acl/panel.json`: under the configuration tree (`/etc/qbix/acl`) when
+  the server uses one, else `local/panel.json` above the document root. Written
+  `0600`, in a `0700` directory that must pass the panel's ownership rule up to `/`,
+  or the panel refuses every sign-in -- see
+  [dashboard.md](dashboard.md#where-the-panel-keeps-its-credentials).
 
 ### The rules
 
@@ -131,8 +133,9 @@ qbixctl panel:password --root=/srv/site/web --generate # makes one, sets it, pri
 echo 'your password' | qbixctl panel:password --root=/srv/site/web
 ```
 
-Pass the same `--root` the server runs with (or `--app=DIR`); the password lands in
-`local/panel.json` in the directory above it. A password that breaks a rule is refused
+Pass the same `--root` the server runs with (or `--app=DIR`), and its
+`--conf-dir`/`--config` if it has them; the password lands in the panel's
+`acl/panel.json` (`qbixctl panel:check` shows where that is). A password that breaks a rule is refused
 with the list of rules it breaks and a non-zero exit. `--generate` makes a 24-character
 password from a cryptographically secure source that passes every rule, sets it, and
 prints it once. Either way the password is stored as a chosen one: the default key
