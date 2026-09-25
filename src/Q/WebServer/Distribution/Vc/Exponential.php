@@ -69,6 +69,12 @@ class Q_WebServer_Distribution_Vc_Exponential implements Q_WebServer_Framework_D
 				'argv' => array($php, 'runcronjobs.php', '--allow-root-user'));
 		}
 
+		$expInfo = __DIR__ . DIRECTORY_SEPARATOR . 'expinfo.php';
+		if (is_file($expInfo)) {
+			$commands[] = array('name' => 'Site installation info', 'cmd' => 'expinfo',
+				'argv' => array($php, $expInfo));
+		}
+
 		$links = array(array('label' => 'Site', 'url' => '/'));
 		foreach ($sa['list'] as $s) {
 			if (stripos($s, 'admin') !== false) { $links[] = array('label' => 'Admin', 'url' => '/' . $s . '/'); break; }

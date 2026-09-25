@@ -109,6 +109,7 @@ check('cms 6.x: lib/version.php was never included', class_exists('eZPublishSDK'
 $byCmd = array();
 foreach ($d['commands'] as $c) $byCmd[$c['cmd']] = $c;
 check('cms 6.x: clear-all is listed and disruptive', $byCmd['cache:clear-all']['disruptive'] ?? null, true);
+check('cms 6.x: expinfo command is listed', isset($byCmd['expinfo']) ? $byCmd['expinfo']['name'] : null, 'Site installation info');
 check('cms 6.x: the admin link points at the admin siteaccess', $d['links'][1]['url'] ?? null, '/admin/');
 
 $cms5 = tree($base . DS . 'cms5', array(
