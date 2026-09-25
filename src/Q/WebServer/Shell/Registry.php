@@ -260,7 +260,8 @@ class Q_WebServer_Shell_Registry
 				if (isset($spec['argv']) && is_callable($spec['argv'])) {
 					$argv = call_user_func($spec['argv'], $args, $this->ctx);
 					if (!is_array($argv) || !$argv) { $sink->error('qsh: ' . $spec['name'] . ": nothing to run\n"); return 1; }
-					return Q_WebServer_Shell_Exec::run($argv, $stdin, $sink, $env);
+					$cwd = isset($spec['cwd']) && is_dir((string) $spec['cwd']) ? (string) $spec['cwd'] : null;
+					return Q_WebServer_Shell_Exec::run($argv, $stdin, $sink, $env, $cwd);
 				}
 		}
 		$sink->error('qsh: ' . $spec['name'] . ": cannot be run\n");

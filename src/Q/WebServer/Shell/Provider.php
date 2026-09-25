@@ -17,6 +17,7 @@
  *   options      option name => description (for completion and help)
  *   argv         callable(array $args, array $ctx): array -- the program and
  *                its arguments, run as a process of its own
+ *   cwd          the directory argv runs in (default: the runner's)
  *   handler      callable(Q_WebServer_Shell_Interpreter, array $args,
  *                string $stdin, Q_WebServer_Shell_Sink): int -- instead of argv
  *

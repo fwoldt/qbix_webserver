@@ -50,5 +50,10 @@ class Q_WebServer_Distribution_Vc
 		require_once __DIR__ . '/../Framework/Detector.php';
 		require_once __DIR__ . '/Vc/Exponential.php';
 		Q_WebServer_Framework::register(new Q_WebServer_Distribution_Vc_Exponential(), 50);
+		// Its tools as shell commands (exp info, exp cache:clear-all ...), and a theme.
+		if (class_exists('Q_WebServer_Shell')) {
+			require_once __DIR__ . '/Vc/Shell.php';
+			Q_WebServer_Shell::addProvider(new Q_WebServer_Distribution_Vc_Shell());
+		}
 	}
 }
