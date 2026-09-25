@@ -914,7 +914,8 @@ async function loadDomainUsage() {
     var cur = h.status || 'active';
     var sel = '<select aria-label="Status of ' + escH(h.host) + '" onchange="setDomainStatus(\'' + escH(h.host) + '\', this.value, this)" data-was="' + escH(cur) + '">'
       + ['active','suspended','disabled'].map(function(s){ return '<option value="' + s + '"' + (s === cur ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>';
-    return '<tr><td><a href="https://' + escH(h.host) + '/" target="_blank" rel="noopener">' + escH(h.host) + '</a></td><td>' + src + '</td><td>' + st + (seen ? '<div style="font-size:12px;color:var(--dim)">' + seen + '</div>' : '') + '</td><td>' + (h.record || h.seen || src ? sel : '') + '</td></tr>';
+    var scheme = h.https ? 'https://' : 'http://';
+    return '<tr><td><a href="' + scheme + escH(h.host) + '/" target="_blank" rel="noopener">' + escH(h.host) + '</a></td><td>' + src + '</td><td>' + st + (seen ? '<div style="font-size:12px;color:var(--dim)">' + seen + '</div>' : '') + '</td><td>' + (!h.ip && (h.record || h.seen || src) ? sel : '') + '</td></tr>';
   }).join('');
   el.innerHTML = '<div class="card" style="margin-bottom:16px"><h3 style="font-size:14px;margin-bottom:8px">In use</h3>'
     + '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Listening: ' + (li || 'unknown') + '</div>'
@@ -948,13 +949,59 @@ async function loadDomains() {
       if (d.certStatus !== 'valid') btns += ' <button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="provisionCert(\'' + d.domain + '\')">Provision</button>';
       else btns += ' <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="provisionCert(\'' + d.domain + '\')">Renew</button>';
       btns += ' <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px;color:var(--red)" onclick="removeDomain(\'' + d.domain + '\')">Remove</button>';
-      return '<div class="card" style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center"><div><strong>' + d.domain + '</strong></div><div>' + badge + btns + '</div></div>'
-        + (d.root ? '<div style="font-size:11px;color:var(--dim);margin-top:4px">Root: ' + d.root + '</div>' : '')
-        + (d.certExpires ? '<div style="font-size:11px;color:var(--dim);margin-top:2px">Expires: ' + d.certExpires + '</div>' : '')
+      return '<div class="card" style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><div><strong>' + escH(d.domain) + '</strong></div><div>' + badge + btns + '</div></div>'
+        + (d.certExpires ? '<div style="font-size:12px;color:var(--dim);margin-top:2px">Expires: ' + escH(d.certExpires) + '</div>' : '')
+        + (d.source === 'panel' ? domainEditor(d) : (d.root ? '<div style="font-size:12px;color:var(--dim);margin-top:4px">Root: ' + escH(d.root) + ' (from config)</div>' : ''))
         + '</div>';
     }).join('');
   }
   loadHosts();
+}
+// Per-domain editor: document root, aliases, subdomains.
+function domainEditor(d) {
+  var id = 'dom-' + d.domain.replace(/[^a-z0-9]/g, '-');
+  var D = escH(d.domain);
+  var rootWarn = d.root && !d.rootResolved ? ' <span style="color:var(--red)">not an existing directory; served from the default root</span>' : '';
+  var aliases = (d.aliases || []).map(function(a) {
+    return '<span class="dom-chip">' + escH(a) + ' <button class="dom-x" aria-label="Remove alias ' + escH(a) + '" onclick="domainAlias(\'' + D + '\', \'' + escH(a) + '\', false)">&times;</button></span>';
+  }).join(' ');
+  var subs = Object.keys(d.subdomains || {}).map(function(k) {
+    return '<tr><td>' + escH(k) + '</td><td><code>' + escH(d.subdomains[k]) + '</code></td><td><button class="btn btn-ghost" style="font-size:12px;padding:3px 8px;color:var(--red)" onclick="domainSubdomain(\'' + D + '\', \'' + escH(k) + '\', null)">Remove</button></td></tr>';
+  }).join('');
+  return '<div class="dom-edit">'
+    + '<label for="' + id + '-root">Document root</label>'
+    + '<div class="dom-row"><input id="' + id + '-root" value="' + escH(d.root || '') + '" placeholder="/srv/example.com/web (empty: server default)"><button class="btn btn-ghost" onclick="domainRoot(\'' + D + '\', \'' + id + '\')">Save root</button></div>' + rootWarn
+    + '<label for="' + id + '-alias">Aliases</label>'
+    + '<div class="dom-row">' + (aliases || '<span style="color:var(--dim)">none</span>') + '</div>'
+    + '<div class="dom-row"><input id="' + id + '-alias" placeholder="www.' + D + '"><button class="btn btn-ghost" onclick="domainAlias(\'' + D + '\', document.getElementById(\'' + id + '-alias\').value, true)">Add alias</button></div>'
+    + '<label for="' + id + '-sub">Subdomains</label>'
+    + (subs ? '<table class="dom-usage"><thead><tr><th>Name</th><th>Root</th><th></th></tr></thead><tbody>' + subs + '</tbody></table>' : '')
+    + '<div class="dom-row"><input id="' + id + '-sub" placeholder="blog" aria-label="Subdomain name" oninput="previewDomainRoot(\'' + D + '\', this.value, document.getElementById(\'' + id + '-subroot\'))"><input id="' + id + '-subroot" placeholder="empty: the standard folder" aria-label="Subdomain root"><button class="btn btn-ghost" onclick="domainSubdomain(\'' + D + '\', document.getElementById(\'' + id + '-sub\').value, document.getElementById(\'' + id + '-subroot\').value)">Add subdomain</button></div>'
+    + '</div>';
+}
+async function domainPost(route, body) {
+  var r = await api(route, body);
+  if (r && r.status === 409 && r.confirm) {
+    var q = r.create ? 'Create ' + r.root + ' (0755, owned like its parent)?' : (r.error || 'Are you sure?');
+    if (!confirm(q + '\n\nProceed?')) return null;
+    body.confirm = true;
+    if (r.create) body.create = true;
+    r = await api(route, body);
+  }
+  if (r && r.error) { alert(r.error); return null; }
+  loadDomains();
+  return r;
+}
+function domainRoot(domain, id) { return domainPost('domains/root', {domain: domain, root: document.getElementById(id + '-root').value.trim()}); }
+function domainAlias(domain, alias, add) {
+  alias = (alias || '').trim(); if (!alias) return alert('Enter an alias');
+  var b = {domain: domain}; b[add ? 'add' : 'remove'] = alias;
+  return domainPost('domains/alias', b);
+}
+function domainSubdomain(domain, name, root) {
+  name = (name || '').trim(); if (!name) return alert('Enter a subdomain name');
+  if (root === null) return domainPost('domains/subdomain', {domain: domain, name: name, remove: true});
+  return domainPost('domains/subdomain', {domain: domain, name: name, root: (root || '').trim()});
 }
 async function loadHosts() {
   var r = await api('domains/hosts');
@@ -995,8 +1042,20 @@ async function addHostsEntry(hostname, ip) {
 async function addDomain() {
   var name = document.getElementById('dom-name').value.trim();
   if (!name) return alert('Enter a domain');
-  await api('domains/add', {domain:name, root:document.getElementById('dom-root').value.trim()||null, app:document.getElementById('dom-app').value.trim()||null, tls:document.getElementById('dom-tls').value});
-  document.getElementById('dom-name').value=''; loadDomains();
+  var r = await domainPost('domains/add', {domain:name, root:document.getElementById('dom-root').value.trim()||null, app:document.getElementById('dom-app').value.trim()||null, tls:document.getElementById('dom-tls').value});
+  if (r) { document.getElementById('dom-name').value=''; previewDomainRoot(); }
+}
+// Show the standard root a new domain (or subdomain) gets when none is typed.
+async function previewDomainRoot(domain, name, input) {
+  input = input || document.getElementById('dom-root');
+  domain = domain !== undefined ? domain : (document.getElementById('dom-name') || {}).value || '';
+  if (!input) return;
+  if (!domain.trim() || (name !== undefined && !String(name).trim())) { input.placeholder = input.getAttribute('data-ph') || input.placeholder; return; }
+  if (!input.getAttribute('data-ph')) input.setAttribute('data-ph', input.placeholder);
+  try {
+    var r = await api('domains/defaults', name !== undefined ? {domain: domain.trim(), name: String(name).trim()} : {domain: domain.trim()});
+    if (r && r.root) input.placeholder = 'Default: ' + r.root + (r.exists ? '' : ' (will be created)');
+  } catch (e) {}
 }
 async function removeDomain(n) { if(!confirm('Remove '+n+'?'))return; var r = await api('domains/remove',{domain:n, confirm:true}); if (r && r.error) alert(r.error); loadDomains(); }
 async function provisionCert(n) { alert('Provisioning '+n+'...'); var r=await api('domains/provision',{domain:n}); alert(r.success?'Done!':r.error||'Failed'); loadDomains(); }

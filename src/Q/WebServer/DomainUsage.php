@@ -123,6 +123,10 @@ class Q_WebServer_DomainUsage
 		foreach ($records as $name => $rec) {
 			$add($name, 'record', ($rec['status'] ?? 'active') . ' (' . ($rec['source'] ?? 'panel') . ')');
 			foreach ((array) ($rec['aliases'] ?? array()) as $alias) $add($alias, 'record alias', $name);
+			foreach ((array) ($rec['subdomains'] ?? array()) as $sub => $subRoot) {
+				$subHost = Q_WebServer_Domains::subdomainHost($sub, $name);
+				if ($subHost !== null) $add($subHost, 'record subdomain', $name);
+			}
 		}
 
 		// Providers (an application's host map).
@@ -146,6 +150,8 @@ class Q_WebServer_DomainUsage
 		}
 
 		// States.
+		$hasTls = false;
+		foreach ($listeners as $l) { if ($l['scheme'] === 'https') $hasTls = true; }
 		foreach ($hosts as $h => &$row) {
 			$configured = false;
 			foreach ($row['sources'] as $s) {
@@ -169,9 +175,20 @@ class Q_WebServer_DomainUsage
 					}
 				}
 			}
+			if ($hit === null) {
+				foreach ($records as $name => $rec) {
+					foreach ((array) ($rec['subdomains'] ?? array()) as $sub => $subRoot) {
+						if (Q_WebServer_Domains::subdomainHost($sub, $name) === $h) { $hit = array($name, $rec); break 2; }
+					}
+				}
+			}
 			$row['record'] = $hit ? $hit[0] : null;
 			$row['status'] = $hit ? ($hit[1]['status'] ?? 'active') : null;
 			$row['states'] = $states;
+			// A bare address is not a name a record can hold, and "Open" can
+			// only offer https:// where there is a listener and a certificate.
+			$row['ip'] = filter_var(trim($h, '[]'), FILTER_VALIDATE_IP) !== false;
+			$row['https'] = $hasTls and in_array('covered', $states, true);
 		}
 		unset($row);
 		ksort($hosts);

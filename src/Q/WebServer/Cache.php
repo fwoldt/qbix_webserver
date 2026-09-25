@@ -1336,6 +1336,12 @@ class Q_WebServer_Cache
 	{
 		$host = $parsed['headers']['host'] ?? '';
 		$parts = $host . $parsed['path'] . '?' . ($parsed['query'] ?? '');
+		// The document root the host is served from, so two names routed to
+		// different roots never share an entry, whatever else the key holds.
+		if (class_exists('Q_WebServer_Domains')) {
+			$root = Q_WebServer_Domains::resolveRoot($host);
+			if ($root !== null) $parts .= '|root=' . $root;
+		}
 
 		// Include Accept-Encoding in key for compressed variants
 		$ae = $parsed['headers']['accept-encoding'] ?? '';

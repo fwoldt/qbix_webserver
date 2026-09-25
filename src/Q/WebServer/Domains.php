@@ -13,16 +13,27 @@
  *     "status":  "active" | "suspended" | "disabled",   (default active)
  *     "since":   unix time the status last changed,
  *     "note":    free text shown in the panel,
- *     "root":    document root                (read by the virtual hosts)
+ *     "root":    document root for the domain and its aliases
  *     "app":     application name,
  *     "tls":     "auto" | "manual" | "none",
- *     "aliases": [ "www.example.com", ... ]    (gated with the domain)
+ *     "aliases": [ "www.example.com", ... ]    (served and gated as the domain)
+ *     "subdomains": { "blog": "blog", "shop.example.com": "/srv/shop" }
+ *                label or full host => document root; a relative root is
+ *                taken under the domain's root, and must stay inside it
  *   }
  *
- * Reserved for later, so records written now stay valid: "subdomains"
- * (host => root), "redirects" (https, preferredHost, rules), "hsts"
- * (enabled, maxAge), "errorDocs" (status => path), "certificate".
- * Unknown fields are kept as they are when a record is updated.
+ * Routing: a request's Host (port and case ignored) is looked up as the
+ * domain, an alias, or a subdomain, and its document root replaces the
+ * server's default root for that request. A root that does not resolve to
+ * an existing directory -- or, for a subdomain, resolves outside the
+ * domain's root, a symlink included -- is not used; the request is then
+ * served from the default root, as an unknown host always is. The server's
+ * own /Q/ and /.well-known/ paths are never rerouted.
+ *
+ * Reserved for later, so records written now stay valid: "redirects"
+ * (https, preferredHost, rules), "hsts" (enabled, maxAge), "errorDocs"
+ * (status => path), "certificate". Unknown fields are kept as they are
+ * when a record is updated.
  *
  * Status, as the gate applies it (the server's own /Q/ and /.well-known/
  * paths are never gated, so the panel and certificate renewals keep
@@ -135,22 +146,216 @@ class Q_WebServer_Domains
 		self::$cache = null;
 	}
 
-	/** host => array(name, record) for every name and alias, cached briefly. */
+	/**
+	 * host => array(name, record, root) for every name, alias and subdomain,
+	 * cached briefly; root is the resolved document root, or null.
+	 */
 	protected static function index()
 	{
 		$now = microtime(true);
 		if (self::$cache !== null and $now - self::$cachedAt < self::TTL) return self::$cache;
 		$index = array();
 		foreach (self::records() as $name => $rec) {
-			$index[$name] = array($name, $rec);
+			$root = self::realDir($rec['root'] ?? null);
+			$index[$name] = array($name, $rec, $root);
 			foreach ((array) ($rec['aliases'] ?? array()) as $alias) {
 				$alias = self::normalize($alias);
-				if ($alias !== '' and !isset($index[$alias])) $index[$alias] = array($name, $rec);
+				if ($alias !== '' and !isset($index[$alias])) $index[$alias] = array($name, $rec, $root);
+			}
+			foreach ((array) ($rec['subdomains'] ?? array()) as $sub => $subRoot) {
+				$host = self::subdomainHost($sub, $name);
+				if ($host === null or isset($index[$host])) continue;
+				$index[$host] = array($name, $rec, self::subdomainRoot($subRoot, $root, $why, self::fence($root)));
 			}
 		}
 		self::$cache = $index;
 		self::$cachedAt = $now;
 		return $index;
+	}
+
+	/** A subdomain key ("blog" or "blog.example.com") as a full host under $domain, or null. */
+	static function subdomainHost($sub, $domain)
+	{
+		$sub = self::normalize($sub);
+		if ($sub === '') return null;
+		$host = (substr($sub, -strlen('.' . $domain)) === '.' . $domain) ? $sub : $sub . '.' . $domain;
+		return self::validName($host) ? $host : null;
+	}
+
+	/** An existing directory, resolved (symlinks followed), or null. */
+	static function realDir($path)
+	{
+		if (!is_string($path) or $path === '' or strpos($path, "\0") !== false) return null;
+		$real = realpath($path);
+		return ($real !== false and is_dir($real)) ? rtrim($real, DIRECTORY_SEPARATOR) : null;
+	}
+
+	/**
+	 * A subdomain's root, resolved: relative to the domain's root when it
+	 * is not absolute, and required to stay inside it (after symlinks) when
+	 * the domain has a root. Null, with the reason in $why, otherwise.
+	 */
+	static function subdomainRoot($subRoot, $domainRoot, &$why = null, $fence = null)
+	{
+		$why = null;
+		if ($fence === null) $fence = $domainRoot;
+		if (!is_string($subRoot) or trim($subRoot) === '') { $why = 'no document root given'; return null; }
+		$path = $subRoot;
+		if ($path[0] !== '/' and !preg_match('#^[A-Za-z]:[\\\\/]#', $path)) {
+			if ($domainRoot === null) { $why = 'a relative root needs the domain to have a root'; return null; }
+			$path = $domainRoot . DIRECTORY_SEPARATOR . $path;
+		}
+		$real = self::realDir($path);
+		if ($real === null) { $why = 'not an existing directory'; return null; }
+		if ($fence !== null and $real !== $fence
+			and strncmp($real, $fence . DIRECTORY_SEPARATOR, strlen($fence) + 1) !== 0) {
+			$why = 'outside the domain\'s document root';
+			return null;
+		}
+		return $real;
+	}
+
+	/**
+	 * What a subdomain's root must stay inside: the domain's folder when its
+	 * root follows the standard layout (<base>/<domain>/<docDirName>), so
+	 * <base>/<domain>/<sub>/<docDirName> qualifies; the root itself otherwise.
+	 */
+	static function fence($domainRoot)
+	{
+		if ($domainRoot === null) return null;
+		return basename($domainRoot) === self::docDirName() ? dirname($domainRoot) : $domainRoot;
+	}
+
+	/**
+	 * The name of a domain's document root directory in the standard
+	 * layout: Q.domains.docDirName, "doc" by default. A value that is not a
+	 * single plain directory name is ignored.
+	 */
+	static function docDirName()
+	{
+		$name = class_exists('Q_Config', false) ? Q_Config::get('Q', 'domains', 'docDirName', 'doc') : 'doc';
+		return (is_string($name) and preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $name) and $name !== '..') ? $name : 'doc';
+	}
+
+	/**
+	 * Where new domains live: Q.domains.baseDir, else the folder above the
+	 * server's own domain folder when its document root follows the
+	 * <base>/<domain>/... pattern, else /var/www/vhosts.
+	 */
+	static function baseDir()
+	{
+		$set = class_exists('Q_Config', false) ? Q_Config::get('Q', 'domains', 'baseDir', null) : null;
+		if (is_string($set) and $set !== '' and $set[0] === '/') return rtrim($set, '/');
+		$own = class_exists('Q_WebServer', false) ? rtrim((string) Q_WebServer::$rootDir, '/') : '';
+		$parts = $own === '' ? array() : explode('/', ltrim($own, '/'));
+		foreach ($parts as $i => $seg) {
+			if ($i > 0 and strpos($seg, '.') !== false and self::validName(strtolower($seg))) {
+				return '/' . implode('/', array_slice($parts, 0, $i));
+			}
+		}
+		return '/var/www/vhosts';
+	}
+
+	/** The standard root for a new domain: <base>/<domain>/<docDirName>. */
+	static function defaultRoot($domain)
+	{
+		return self::baseDir() . '/' . self::normalize($domain) . '/' . self::docDirName();
+	}
+
+	/** The standard root for a new subdomain: <base>/<domain>/<label>/<docDirName>. */
+	static function defaultSubdomainRoot($domain, $sub)
+	{
+		$domain = self::normalize($domain);
+		$label = self::normalize($sub);
+		if (substr($label, -strlen('.' . $domain)) === '.' . $domain) $label = substr($label, 0, -strlen('.' . $domain));
+		return self::baseDir() . '/' . $domain . '/' . $label . '/' . self::docDirName();
+	}
+
+	/**
+	 * Create a missing directory (and missing parents), 0755, each owned like
+	 * the nearest existing parent. Never touches anything that exists.
+	 * @return {bool} true when it now exists as a directory made here
+	 */
+	static function createDir($path, &$why = null)
+	{
+		$why = null;
+		if (!is_string($path) or $path === '' or $path[0] !== '/' or strpos($path, "\0") !== false or strpos('/' . $path . '/', '/../') !== false) {
+			$why = 'not a plain absolute path';
+			return false;
+		}
+		if (file_exists($path) or is_link($path)) { $why = 'already exists'; return false; }
+		$missing = array();
+		$p = $path;
+		while ($p !== '/' and !file_exists($p) and !is_link($p)) { array_unshift($missing, $p); $p = dirname($p); }
+		if (!is_dir($p)) { $why = "$p is not a directory"; return false; }
+		$uid = @fileowner($p); $gid = @filegroup($p);
+		foreach ($missing as $dir) {
+			if (!@mkdir($dir, 0755)) { $why = "could not create $dir"; return false; }
+			@chmod($dir, 0755);
+			if ($uid !== false) @chown($dir, $uid);
+			if ($gid !== false) @chgrp($dir, $gid);
+		}
+		return is_dir($path);
+	}
+
+	/**
+	 * The document root a request's Host is served from, or null for the
+	 * server's default root.
+	 * @param {string} $host
+	 * @return {string|null} without a trailing separator
+	 */
+	static function resolveRoot($host)
+	{
+		$host = self::normalize($host);
+		if ($host === '') return null;
+		$index = self::index();
+		return isset($index[$host]) ? $index[$host][2] : null;
+	}
+
+	/** Set a domain's document root (null clears it). */
+	static function setRoot($name, $root)
+	{
+		return self::update($name, function ($rec) use ($root) {
+			if ($root === null) unset($rec['root']);
+			else $rec['root'] = $root;
+			$rec['status'] = $rec['status'] ?? 'active';
+			return $rec;
+		});
+	}
+
+	/** Add or remove an alias. */
+	static function setAlias($name, $alias, $add = true)
+	{
+		$alias = self::normalize($alias);
+		return self::update($name, function ($rec) use ($alias, $add) {
+			$list = array_values(array_filter(array_map(array(__CLASS__, 'normalize'), (array) ($rec['aliases'] ?? array())), 'strlen'));
+			$list = array_values(array_diff($list, array($alias)));
+			if ($add) $list[] = $alias;
+			$rec['aliases'] = $list;
+			$rec['status'] = $rec['status'] ?? 'active';
+			return $rec;
+		});
+	}
+
+	/** Set a subdomain's root, or remove the subdomain with a null root. */
+	static function setSubdomain($name, $sub, $root)
+	{
+		return self::update($name, function ($rec) use ($sub, $root) {
+			$subs = is_array($rec['subdomains'] ?? null) ? $rec['subdomains'] : array();
+			if ($root === null) unset($subs[$sub]);
+			else $subs[$sub] = $root;
+			if ($subs) $rec['subdomains'] = $subs;
+			else unset($rec['subdomains']);
+			$rec['status'] = $rec['status'] ?? 'active';
+			return $rec;
+		});
+	}
+
+	/** Which domain already answers to $host (as itself, an alias or a subdomain), or null. */
+	static function owner($host)
+	{
+		$hit = self::lookup($host);
+		return $hit ? $hit[0] : null;
 	}
 
 	/** The record a host belongs to, as array(name, record), or null. */

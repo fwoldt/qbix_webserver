@@ -147,7 +147,44 @@ domain.
 
 API (signed in): `GET domains/usage`, `GET domains`, `POST domains/status`
 `{domain, status, note?, confirm}`, `POST domains/add`, `POST domains/remove`
-`{domain, confirm}`.
+`{domain, confirm}`, `POST domains/alias {domain, add|remove}`,
+`POST domains/subdomain {domain, name, root?, remove?, create?, confirm?}`,
+`POST domains/root {domain, root, confirm?}`, `POST domains/defaults
+{domain, name?}` (the root a new domain or subdomain would get, and whether it
+exists). Changing or clearing a root, or removing a subdomain, answers 409
+without `confirm`; a bad name or root answers 400 with the reason.
+
+**Aliases, subdomains and document roots.** Each domain card has an editor for
+its document root, its aliases and its subdomains. Routing follows the
+request's Host, port and case ignored:
+
+| Host | Served from |
+|---|---|
+| the domain, or one of its aliases | the domain's `root` |
+| a subdomain (`blog` → `blog.example.com`) | that subdomain's root |
+| anything else | the server's default root, as before |
+
+A subdomain's root may be relative (taken under the domain's root) or
+absolute. It must resolve, symlinks followed, to an existing directory inside
+the domain's folder: the domain's root, or the folder above it when the root
+follows the standard layout below. A root that fails that, or no longer exists,
+is not used: the request is served from the default root. The response cache
+keys on the resolved root, so two domains never share a cached page. The
+server's own `/Q/` and `/.well-known/` paths are never rerouted.
+
+**The standard layout for new domains.** Adding a domain without a root gives
+it `<base>/<domain>/doc`, and a subdomain without one gets
+`<base>/<domain>/<name>/doc`. The form shows the path before you save.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Q.domains.baseDir` | the folder above the server's own domain folder, when its document root looks like `<base>/<domain>/...`; otherwise `/var/www/vhosts` | where domain folders live |
+| `Q.domains.docDirName` | `doc` | the document root's directory name (a plain name; anything else is ignored) |
+
+When the default folder does not exist the panel offers to create it (0755,
+each new folder owned like its parent). Creating needs `create` and `confirm`;
+nothing that already exists is ever touched, and a file in the way is refused.
+Existing domains keep the roots they have; nothing is migrated.
 
 **The domain record**, stored under `domains` in the panel's credential store
 (`acl/panel.json`, written under its lock):
@@ -158,13 +195,13 @@ API (signed in): `GET domains/usage`, `GET domains`, `POST domains/status`
 | `since` | when the status last changed (unix time) |
 | `note` | free text |
 | `root`, `app`, `tls`, `aliases` | as `Q.webserver.domains` |
-| reserved | `subdomains`, `redirects`, `hsts`, `errorDocs`, `certificate` |
+| `subdomains` | `{ name or full host: root }` |
+| reserved | `redirects`, `hsts`, `errorDocs`, `certificate` |
 
 Unknown fields are kept when a record is updated, so later versions can add
 to it without migrating anything.
 
-**Planned** (not built yet): per-domain aliases, subdomains and document roots
-with host routing; HTTP→HTTPS and preferred-host redirects, custom forwarding,
+**Planned** (not built yet): HTTP→HTTPS and preferred-host redirects, custom forwarding,
 HSTS and custom error documents; issuing and renewing a certificate for one
 domain; per-domain logs and traffic. Further out: password-protected
 directories, hotlink protection, a PHP version and settings per domain, limits,

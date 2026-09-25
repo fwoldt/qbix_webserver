@@ -64,8 +64,8 @@
   <div id="domains-list"></div>
   <div class="card" style="margin-top:16px">
     <h3 style="font-size:14px;margin-bottom:12px">Add Domain</h3>
-    <div class="form-row"><label>Domain</label><input id="dom-name" placeholder="example.com"></div>
-    <div class="form-row"><label>Root</label><input id="dom-root" placeholder="/var/www/myapp/web"></div>
+    <div class="form-row"><label>Domain</label><input id="dom-name" placeholder="example.com" oninput="previewDomainRoot()"></div>
+    <div class="form-row"><label>Root</label><input id="dom-root" placeholder="empty: the standard folder, &lt;base&gt;/&lt;domain&gt;/doc"></div>
     <div class="form-row"><label>App dir</label><input id="dom-app" placeholder="/var/www/myapp (optional)"></div>
     <div class="form-row"><label>TLS</label><select id="dom-tls"><option value="auto">Auto (ACME)</option><option value="manual">Manual (drop certs)</option><option value="self-signed">Self-signed</option><option value="">HTTP only</option></select></div>
     <button onclick="addDomain()">Add Domain</button>

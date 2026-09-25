@@ -335,6 +335,14 @@ class Q_WebServer_Panel
 				return self::apiDomainUsage();
 			case 'domains/status':
 				return self::apiDomainStatus($parsed);
+			case 'domains/alias':
+				return self::apiDomainAlias($parsed);
+			case 'domains/subdomain':
+				return self::apiDomainSubdomain($parsed);
+			case 'domains/root':
+				return self::apiDomainRoot($parsed);
+			case 'domains/defaults':
+				return self::apiDomainDefaults($parsed);
 			case 'domains/provision':
 				return self::apiProvisionCert($parsed);
 			case 'domains/hosts':
@@ -2122,6 +2130,8 @@ class Q_WebServer_Panel
 				'app' => $conf['app'] ?? null,
 				'tls' => $conf['tls'] ?? 'none',
 				'aliases' => $conf['aliases'] ?? [],
+				'subdomains' => (object) ($conf['subdomains'] ?? []),
+				'rootResolved' => Q_WebServer_Domains::realDir($conf['root'] ?? null),
 				'status' => $conf['status'] ?? 'active',
 				'since' => $conf['since'] ?? null,
 				'note' => $conf['note'] ?? '',
@@ -2173,9 +2183,19 @@ class Q_WebServer_Panel
 		if (!$domain || !Q_WebServer_Autohost::validateHostname($domain)) {
 			return ['status' => 400, 'error' => 'Invalid domain name'];
 		}
+		// No root given: the standard layout, <base>/<domain>/<docDirName>.
+		// A missing default folder is only created when asked, with confirm.
+		$domainKey = strtolower($domain);
+		$records = Q_WebServer_Domains::records();
+		if (empty($body['root']) and empty($records[$domainKey]['root'])) {
+			$default = Q_WebServer_Domains::defaultRoot($domainKey);
+			$made = self::ensureDefaultDir($default, $body);
+			if ($made !== true) return $made;
+			$body['root'] = $default;
+		}
 		// Through the store, under its lock; fields this form does not know
 		// (status, and those later versions add) are kept.
-		$ok = Q_WebServer_Domains::update(strtolower($domain), function ($rec) use ($body) {
+		$ok = Q_WebServer_Domains::update($domainKey, function ($rec) use ($body) {
 			$rec['root'] = $body['root'] ?? ($rec['root'] ?? null);
 			$rec['app'] = $body['app'] ?? ($rec['app'] ?? null);
 			$rec['tls'] = $body['tls'] ?? ($rec['tls'] ?? 'auto');
@@ -2228,6 +2248,140 @@ class Q_WebServer_Panel
 			return ['status' => 503, 'error' => 'The panel store cannot be written'];
 		}
 		return ['domain' => $domain, 'status' => $status];
+	}
+
+	/**
+	 * POST domains/alias {domain, add|remove}: an extra name served as the
+	 * domain. A name another domain already answers to is refused.
+	 */
+	static function apiDomainAlias($parsed)
+	{
+		$body = json_decode($parsed['body'] ?? '{}', true);
+		$domain = Q_WebServer_Domains::normalize($body['domain'] ?? '');
+		if (!Q_WebServer_Domains::validName($domain)) return ['status' => 400, 'error' => 'Invalid domain name'];
+		$add = isset($body['add']);
+		$alias = Q_WebServer_Domains::normalize($add ? $body['add'] : ($body['remove'] ?? ''));
+		if (!Q_WebServer_Domains::validName($alias)) return ['status' => 400, 'error' => 'Invalid alias: give add or remove with a host name'];
+		if ($alias === $domain) return ['status' => 400, 'error' => 'An alias cannot be the domain itself'];
+		if ($add) {
+			$owner = Q_WebServer_Domains::owner($alias);
+			if ($owner !== null and $owner !== $domain) {
+				return ['status' => 400, 'error' => "$alias already belongs to $owner"];
+			}
+		}
+		if (!Q_WebServer_Domains::setAlias($domain, $alias, $add)) {
+			return ['status' => 503, 'error' => 'The panel store cannot be written'];
+		}
+		return ['domain' => $domain, ($add ? 'added' : 'removed') => $alias];
+	}
+
+	/**
+	 * POST domains/subdomain {domain, name, root, remove?, confirm?}: a host
+	 * under the domain served from its own root (relative roots are taken
+	 * under the domain's root and must stay inside it). Changing an
+	 * existing subdomain's root, or removing it, needs confirm.
+	 */
+	static function apiDomainSubdomain($parsed)
+	{
+		$body = json_decode($parsed['body'] ?? '{}', true);
+		$domain = Q_WebServer_Domains::normalize($body['domain'] ?? '');
+		if (!Q_WebServer_Domains::validName($domain)) return ['status' => 400, 'error' => 'Invalid domain name'];
+		$records = Q_WebServer_Domains::records();
+		$rec = $records[$domain] ?? null;
+		if ($rec === null) return ['status' => 400, 'error' => "No record for $domain; add the domain first"];
+		$name = Q_WebServer_Domains::normalize($body['name'] ?? '');
+		$host = Q_WebServer_Domains::subdomainHost($name, $domain);
+		if ($host === null) return ['status' => 400, 'error' => 'Invalid subdomain name'];
+		$key = $name;
+		$existing = (array) ($rec['subdomains'] ?? array());
+		if (!empty($body['remove'])) {
+			if (!array_key_exists($key, $existing)) return ['status' => 400, 'error' => "No subdomain $name on $domain"];
+			if (empty($body['confirm'])) return ['status' => 409, 'error' => "Removing $host stops serving it; send confirm to proceed", 'confirm' => true];
+			if (!Q_WebServer_Domains::setSubdomain($domain, $key, null)) return ['status' => 503, 'error' => 'The panel store cannot be written'];
+			return ['domain' => $domain, 'removed' => $host];
+		}
+		$root = trim((string) ($body['root'] ?? ''));
+		$domainRoot = Q_WebServer_Domains::realDir($rec['root'] ?? null);
+		if ($root === '') {
+			// No root given: <base>/<domain>/<name>/<docDirName>.
+			$root = Q_WebServer_Domains::defaultSubdomainRoot($domain, $name);
+			$made = self::ensureDefaultDir($root, $body);
+			if ($made !== true) return $made;
+		}
+		Q_WebServer_Domains::subdomainRoot($root, $domainRoot, $why, Q_WebServer_Domains::fence($domainRoot));
+		if ($why !== null) return ['status' => 400, 'error' => "Root for $host: $why"];
+		$owner = Q_WebServer_Domains::owner($host);
+		if ($owner !== null and !array_key_exists($key, $existing)) return ['status' => 400, 'error' => "$host already belongs to $owner"];
+		if (array_key_exists($key, $existing) and $existing[$key] !== $root and empty($body['confirm'])) {
+			return ['status' => 409, 'error' => "Changing the root of $host changes what it serves; send confirm to proceed", 'confirm' => true];
+		}
+		if (!Q_WebServer_Domains::setSubdomain($domain, $key, $root)) return ['status' => 503, 'error' => 'The panel store cannot be written'];
+		return ['domain' => $domain, 'subdomain' => $host, 'root' => $root];
+	}
+
+	/**
+	 * A defaulted document root: true when it exists (or was just created
+	 * with create + confirm); otherwise the 409 that offers to create it.
+	 * Nothing that exists is ever touched.
+	 */
+	protected static function ensureDefaultDir($path, array $body)
+	{
+		if (is_dir($path)) return true;
+		if (file_exists($path) or is_link($path)) {
+			return ['status' => 400, 'error' => "$path exists and is not a directory", 'root' => $path];
+		}
+		if (empty($body['create']) or empty($body['confirm'])) {
+			return ['status' => 409, 'error' => "$path does not exist; send create and confirm to create it (0755, owned like its parent)",
+				'confirm' => true, 'create' => true, 'root' => $path];
+		}
+		if (!Q_WebServer_Domains::createDir($path, $why)) {
+			return ['status' => 400, 'error' => "Could not create $path: $why", 'root' => $path];
+		}
+		return true;
+	}
+
+	/**
+	 * POST domains/defaults {domain, name?}: the root a new domain (or, with
+	 * name, a new subdomain) would get, and whether it exists yet.
+	 */
+	static function apiDomainDefaults($parsed)
+	{
+		$body = json_decode($parsed['body'] ?? '{}', true);
+		$domain = Q_WebServer_Domains::normalize($body['domain'] ?? '');
+		if (!Q_WebServer_Domains::validName($domain)) return ['status' => 400, 'error' => 'Invalid domain name'];
+		$name = Q_WebServer_Domains::normalize($body['name'] ?? '');
+		if ($name !== '' and Q_WebServer_Domains::subdomainHost($name, $domain) === null) {
+			return ['status' => 400, 'error' => 'Invalid subdomain name'];
+		}
+		$root = $name === '' ? Q_WebServer_Domains::defaultRoot($domain) : Q_WebServer_Domains::defaultSubdomainRoot($domain, $name);
+		return ['root' => $root, 'exists' => is_dir($root), 'baseDir' => Q_WebServer_Domains::baseDir(),
+			'docDirName' => Q_WebServer_Domains::docDirName()];
+	}
+
+	/**
+	 * POST domains/root {domain, root, confirm?}: the domain's own document
+	 * root (an empty root clears it). Changing or clearing an existing root
+	 * needs confirm.
+	 */
+	static function apiDomainRoot($parsed)
+	{
+		$body = json_decode($parsed['body'] ?? '{}', true);
+		$domain = Q_WebServer_Domains::normalize($body['domain'] ?? '');
+		if (!Q_WebServer_Domains::validName($domain)) return ['status' => 400, 'error' => 'Invalid domain name'];
+		$root = trim((string) ($body['root'] ?? ''));
+		if ($root !== '') {
+			if ($root[0] !== '/' and !preg_match('#^[A-Za-z]:[\\\\/]#', $root)) return ['status' => 400, 'error' => 'The root must be an absolute path'];
+			if (Q_WebServer_Domains::realDir($root) === null) return ['status' => 400, 'error' => "$root is not an existing directory"];
+		}
+		$records = Q_WebServer_Domains::records();
+		$current = (string) ($records[$domain]['root'] ?? '');
+		if ($current !== '' and $current !== $root and empty($body['confirm'])) {
+			return ['status' => 409, 'error' => ($root === '' ? "Clearing" : "Changing") . " the root of $domain changes what it serves; send confirm to proceed", 'confirm' => true];
+		}
+		if (!Q_WebServer_Domains::setRoot($domain, $root === '' ? null : $root)) {
+			return ['status' => 503, 'error' => 'The panel store cannot be written'];
+		}
+		return ['domain' => $domain, 'root' => $root === '' ? null : $root];
 	}
 
 	static function apiProvisionCert($parsed)

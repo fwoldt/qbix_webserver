@@ -935,194 +935,216 @@ class Q_WebServer
 			strlen($root) + 1) === 0;
 	}
 
+	/**
+	 * Point the document root at the request's domain (its own root, an
+	 * alias's or a subdomain's), leaving /Q/ and /.well-known/ alone.
+	 * @param {array} $parsed
+	 */
+	private static function applyDomainRoot(array $parsed)
+	{
+		$path = (string) ($parsed['path'] ?? '/');
+		if (strncmp($path, '/Q/', 3) === 0 or strncmp($path, '/.well-known/', 13) === 0) return;
+		$root = Q_WebServer_Domains::resolveRoot($parsed['headers']['host'] ?? '');
+		if ($root !== null) self::$rootDir = $root . DS;
+	}
+
 	static function http2Route($key, $request)
 	{
-		if (!isset(self::$http2[$key])) {
-			return Q_WebServer_Http2_ErrorPage::response(
-				'the connection was closed before the request could be answered', 0
-			);
-		}
-		$conn = self::$http2[$key];
-		$stream = $request['stream'];
+		// The domain's document root holds for the synchronous part of the
+		// route -- which is where a worker's document root is taken -- and
+		// the default root is restored whatever happens.
+		$savedRoot = self::$rootDir;
+		try {
+			if (!isset(self::$http2[$key])) {
+				return Q_WebServer_Http2_ErrorPage::response(
+					'the connection was closed before the request could be answered', 0
+				);
+			}
+			$conn = self::$http2[$key];
+			$stream = $request['stream'];
 
-		// A suspended or disabled domain: see handleRequest().
-		if (($gate = Q_WebServer_Domains::gate($request)) !== null) {
-			return $gate;
-		}
+			// A suspended or disabled domain: see handleRequest().
+			if (($gate = Q_WebServer_Domains::gate($request)) !== null) {
+				return $gate;
+			}
+			self::applyDomainRoot($request);
 
-		$path = $request['path'];
-		$query = '';
-		if (($q = strpos($path, '?')) !== false) {
-			$query = substr($path, $q + 1);
-			$path = substr($path, 0, $q);
-		}
+			$path = $request['path'];
+			$query = '';
+			if (($q = strpos($path, '?')) !== false) {
+				$query = substr($path, $q + 1);
+				$path = substr($path, 0, $q);
+			}
 
-		$root = rtrim(self::$rootDir, '/\\');
-		$decoded = rawurldecode($path);
+			$root = rtrim(self::$rootDir, '/\\');
+			$decoded = rawurldecode($path);
 
-		// A path that climbs out of the document root is refused before it is
-		// touched, not after realpath() has been asked about it.
-		if (self::pathEscapesRoot($decoded)) {
-			return array('status' => 400, 'headers' => array(), 'body' => 'Bad Request');
-		}
+			// A path that climbs out of the document root is refused before it is
+			// touched, not after realpath() has been asked about it.
+			if (self::pathEscapesRoot($decoded)) {
+				return array('status' => 400, 'headers' => array(), 'body' => 'Bad Request');
+			}
 
-		$fsPath = $root . str_replace('/', DIRECTORY_SEPARATOR, $decoded);
+			$fsPath = $root . str_replace('/', DIRECTORY_SEPARATOR, $decoded);
 
-		if (is_file($fsPath) and !self::insideRoot($fsPath)) {
-			return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
-		}
-
-		// The same two refusals HTTP/1.1 makes, which this route did not.
-		//
-		// A browser speaks HTTP/2 by default, so this is the ordinary path and
-		// the other one is the exception -- yet /settings/site.ini answered 403
-		// over HTTP/1.1 and 200 with the file over HTTP/2, and so did
-		// /.git/config. Anything the allow-list and the blocked list were
-		// protecting was protected only from clients old enough to ask for it
-		// in the older protocol.
-		if (self::isBlocked($decoded)) {
-			return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
-		}
-
-		if (is_file($fsPath)) {
-			$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
-			if ($ext !== 'php' and !in_array($ext, self::$allowedExtensions)) {
+			if (is_file($fsPath) and !self::insideRoot($fsPath)) {
 				return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
 			}
-			if ($ext !== 'php') {
-				$built = self::buildFileResponse(
-					$fsPath, $ext, $request['method'], $request['headers']
-				);
-				if (is_array($built)) return $built;
+
+			// The same two refusals HTTP/1.1 makes, which this route did not.
+			//
+			// A browser speaks HTTP/2 by default, so this is the ordinary path and
+			// the other one is the exception -- yet /settings/site.ini answered 403
+			// over HTTP/1.1 and 200 with the file over HTTP/2, and so did
+			// /.git/config. Anything the allow-list and the blocked list were
+			// protecting was protected only from clients old enough to ask for it
+			// in the older protocol.
+			if (self::isBlocked($decoded)) {
+				return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
 			}
-		}
 
-		// And only now the server's own routes -- /Q/dashboard, /Q/health,
-		// /Q/metrics and the rest. handleRequest() answers them on HTTP/1.1 and
-		// this route did not answer them at all, so the dashboard returned the
-		// application's 404 to every browser that ever asked for it while
-		// answering 200 to curl --http1.1. A browser negotiates HTTP/2, which
-		// makes that the ordinary case rather than the exception.
-		//
-		// route() returns response arrays, which is this route's contract
-		// exactly; it was written for that and then left unwired. Only the two
-		// prefixes it owns are handed to it, so an ordinary content path never
-		// reaches it.
-		//
-		// The position matters as much as the call. route() can fall through to
-		// resolveStatic(), so it belongs behind every refusal above rather than
-		// in front of them -- ahead of them, a document root that happened to
-		// contain a Q directory would have its files served around the
-		// allow-list and the blocked list.
-		// Who is asking, before the server's own routes: the panel and the
-		// dashboard decide by the client's address, and without one route()
-		// could not tell this machine from anyone else. See below for why the
-		// address comes off the socket.
-		$peer = @stream_socket_get_name($conn->socket, true);
-		$directIp = self::$clientInfo[$key]['ip']
-			?? ($peer ? trim(substr($peer, 0, strrpos($peer, ':')), '[]') : '0.0.0.0');
-		$clientIp = Q_WebServer_Proxy::clientIp($directIp, $request['headers']);
+			if (is_file($fsPath)) {
+				$ext = strtolower(pathinfo($fsPath, PATHINFO_EXTENSION));
+				if ($ext !== 'php' and !in_array($ext, self::$allowedExtensions)) {
+					return array('status' => 403, 'headers' => array(), 'body' => 'Forbidden');
+				}
+				if ($ext !== 'php') {
+					$built = self::buildFileResponse(
+						$fsPath, $ext, $request['method'], $request['headers']
+					);
+					if (is_array($built)) return $built;
+				}
+			}
 
-		if (strpos($decoded, '/Q/') === 0 or strpos($decoded, '/.well-known/') === 0) {
-			$builtin = self::route(array(
+			// And only now the server's own routes -- /Q/dashboard, /Q/health,
+			// /Q/metrics and the rest. handleRequest() answers them on HTTP/1.1 and
+			// this route did not answer them at all, so the dashboard returned the
+			// application's 404 to every browser that ever asked for it while
+			// answering 200 to curl --http1.1. A browser negotiates HTTP/2, which
+			// makes that the ordinary case rather than the exception.
+			//
+			// route() returns response arrays, which is this route's contract
+			// exactly; it was written for that and then left unwired. Only the two
+			// prefixes it owns are handed to it, so an ordinary content path never
+			// reaches it.
+			//
+			// The position matters as much as the call. route() can fall through to
+			// resolveStatic(), so it belongs behind every refusal above rather than
+			// in front of them -- ahead of them, a document root that happened to
+			// contain a Q directory would have its files served around the
+			// allow-list and the blocked list.
+			// Who is asking, before the server's own routes: the panel and the
+			// dashboard decide by the client's address, and without one route()
+			// could not tell this machine from anyone else. See below for why the
+			// address comes off the socket.
+			$peer = @stream_socket_get_name($conn->socket, true);
+			$directIp = self::$clientInfo[$key]['ip']
+				?? ($peer ? trim(substr($peer, 0, strrpos($peer, ':')), '[]') : '0.0.0.0');
+			$clientIp = Q_WebServer_Proxy::clientIp($directIp, $request['headers']);
+
+			if (strpos($decoded, '/Q/') === 0 or strpos($decoded, '/.well-known/') === 0) {
+				$builtin = self::route(array(
+					'method' => $request['method'],
+					'path' => $decoded,
+					'query' => $query,
+					'headers' => $request['headers'],
+					'body' => $request['body'] ?? '',
+					'clientIp' => $clientIp,
+					'_remoteAddr' => $clientIp,
+					'cookies' => isset($request['headers']['cookie'])
+						? self::parseCookieHeader($request['headers']['cookie']) : array(),
+					// The server's own routes only; the rest goes to a worker below.
+					'_builtinOnly' => true,
+				));
+				if (is_array($builtin)) return $builtin;
+			}
+
+			// Anything else is the application's. Resolve it the way the HTTP/1.1
+			// path does, then hand it to a worker.
+			$scriptPath = self::resolveScript($decoded, $fsPath);
+			if ($scriptPath === null or !self::$pool) {
+				return array(
+					'status' => 404,
+					'headers' => array('content-type' => 'text/plain'),
+					'body' => "Not Found\n"
+				);
+			}
+
+			// Who is asking, worked out the way the HTTP/1.1 path works it out:
+			// the address of the connection, replaced by a forwarded one only
+			// when the connection comes from a configured trusted proxy.
+			//
+			// This used to take X-Real-IP from the request, from anyone, and
+			// fall back to 127.0.0.1. So any client speaking HTTP/2 could name
+			// its own address -- to the rate limiter, the panel's address rules,
+			// the access log and the application -- and every client that did
+			// not was reported as the server itself.
+			//
+			// The address ($clientIp, above) comes off the socket: clientInfo is filled in when a
+			// plain connection is accepted, and a TLS one never passes there.
+
+			$parsed = array(
 				'method' => $request['method'],
-				'path' => $decoded,
+				'uri' => $request['path'],
+				'path' => $path,
 				'query' => $query,
 				'headers' => $request['headers'],
-				'body' => $request['body'] ?? '',
+				'rawHeaders' => array(),
+				'body' => $request['body'],
+				'httpVersion' => '2',
+				// Carried so the worker and the log see what the HTTP/1.1 path
+				// gives them.
 				'clientIp' => $clientIp,
 				'_remoteAddr' => $clientIp,
+				'_remotePort' => $peer ? (int) substr(strrchr($peer, ':'), 1) : 0,
 				'cookies' => isset($request['headers']['cookie'])
 					? self::parseCookieHeader($request['headers']['cookie']) : array(),
-				// The server's own routes only; the rest goes to a worker below.
-				'_builtinOnly' => true,
-			));
-			if (is_array($builtin)) return $builtin;
-		}
-
-		// Anything else is the application's. Resolve it the way the HTTP/1.1
-		// path does, then hand it to a worker.
-		$scriptPath = self::resolveScript($decoded, $fsPath);
-		if ($scriptPath === null or !self::$pool) {
-			return array(
-				'status' => 404,
-				'headers' => array('content-type' => 'text/plain'),
-				'body' => "Not Found\n"
 			);
-		}
 
-		// Who is asking, worked out the way the HTTP/1.1 path works it out:
-		// the address of the connection, replaced by a forwarded one only
-		// when the connection comes from a configured trusted proxy.
-		//
-		// This used to take X-Real-IP from the request, from anyone, and
-		// fall back to 127.0.0.1. So any client speaking HTTP/2 could name
-		// its own address -- to the rate limiter, the panel's address rules,
-		// the access log and the application -- and every client that did
-		// not was reported as the server itself.
-		//
-		// The address ($clientIp, above) comes off the socket: clientInfo is filled in when a
-		// plain connection is accepted, and a TLS one never passes there.
-
-		$parsed = array(
-			'method' => $request['method'],
-			'uri' => $request['path'],
-			'path' => $path,
-			'query' => $query,
-			'headers' => $request['headers'],
-			'rawHeaders' => array(),
-			'body' => $request['body'],
-			'httpVersion' => '2',
-			// Carried so the worker and the log see what the HTTP/1.1 path
-			// gives them.
-			'clientIp' => $clientIp,
-			'_remoteAddr' => $clientIp,
-			'_remotePort' => $peer ? (int) substr(strrchr($peer, ':'), 1) : 0,
-			'cookies' => isset($request['headers']['cookie'])
-				? self::parseCookieHeader($request['headers']['cookie']) : array(),
-		);
-
-		// Ask the response cache before waking a worker.
-		//
-		// This is where HTTP/2 was losing, and by an enormous margin. The
-		// HTTP/1.1 path consults this cache; this one did not, so every
-		// request rendered the page from scratch while the same page over
-		// HTTP/1.1 was answered from store. Measured on this installation:
-		// 2ms against roughly 1000ms, and the worker's own log confirmed it
-		// was doing the full render every single time.
-		//
-		// The cache is on by default in this server and honours the response's
-		// own Cache-Control, so a page that says it may be held is held, and a
-		// request carrying a session cookie bypasses it.
-		$cached = Q_WebServer_Cache::get($parsed);
-		if ($cached !== null) {
-			// A returning visitor who already holds this gets told so, rather
-			// than being sent it again. The body is the part that scales with
-			// the page; without it a reload is a round trip and a couple of
-			// hundred bytes, whatever the page weighs.
-			$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
-			return $fresh !== null ? $fresh : $cached;
-		}
-
-		self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
-			function ($resp) use ($key, $stream, $parsed) {
-				if (!isset(Q_WebServer::$http2[$key])) return;
-				if (!is_array($resp)
-					or (($resp['status'] ?? 200) >= 500 and ($resp['body'] ?? '') === '')
-				) {
-					$resp = Q_WebServer_Http2_ErrorPage::response(
-						'the worker returned no usable response', $stream
-					);
-				}
-				// Offer it to the cache, exactly as the HTTP/1.1 path does.
-				// Without this the store is never filled from HTTP/2 and every
-				// request pays the full render.
-				$resp = Q_WebServer_Cache::put($parsed, $resp);
-				Q_WebServer::$http2[$key]->respond($stream, $resp);
+			// Ask the response cache before waking a worker.
+			//
+			// This is where HTTP/2 was losing, and by an enormous margin. The
+			// HTTP/1.1 path consults this cache; this one did not, so every
+			// request rendered the page from scratch while the same page over
+			// HTTP/1.1 was answered from store. Measured on this installation:
+			// 2ms against roughly 1000ms, and the worker's own log confirmed it
+			// was doing the full render every single time.
+			//
+			// The cache is on by default in this server and honours the response's
+			// own Cache-Control, so a page that says it may be held is held, and a
+			// request carrying a session cookie bypasses it.
+			$cached = Q_WebServer_Cache::get($parsed);
+			if ($cached !== null) {
+				// A returning visitor who already holds this gets told so, rather
+				// than being sent it again. The body is the part that scales with
+				// the page; without it a reload is a round trip and a couple of
+				// hundred bytes, whatever the page weighs.
+				$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
+				return $fresh !== null ? $fresh : $cached;
 			}
-		);
 
-		return null; // answered later, on this stream
+			self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
+				function ($resp) use ($key, $stream, $parsed) {
+					if (!isset(Q_WebServer::$http2[$key])) return;
+					if (!is_array($resp)
+						or (($resp['status'] ?? 200) >= 500 and ($resp['body'] ?? '') === '')
+					) {
+						$resp = Q_WebServer_Http2_ErrorPage::response(
+							'the worker returned no usable response', $stream
+						);
+					}
+					// Offer it to the cache, exactly as the HTTP/1.1 path does.
+					// Without this the store is never filled from HTTP/2 and every
+					// request pays the full render.
+					$resp = Q_WebServer_Cache::put($parsed, $resp);
+					Q_WebServer::$http2[$key]->respond($stream, $resp);
+				}
+			);
+
+			return null; // answered later, on this stream
+		} finally {
+			self::$rootDir = $savedRoot;
+		}
 	}
 
 	/**
@@ -2613,6 +2635,10 @@ class Q_WebServer
 			self::sendResponse($client, $gate['status'], $gate['body'], $gateType, $gateHeaders);
 			return false;
 		}
+
+		// The domain's document root, for this request (restored by the
+		// caller's finally). Before the reverse cache, whose key carries it.
+		self::applyDomainRoot($parsed);
 
 		// Reverse cache, before anything else this method would do.
 		//
