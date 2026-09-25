@@ -194,7 +194,11 @@ function qshell_become($name)
 	if (!$pw) return 'no such user: ' . $name;
 	if ((int) $pw['uid'] === 0) return 'refusing to switch to a root user';
 	if (posix_geteuid() !== 0) return (posix_geteuid() === (int) $pw['uid']) ? null : 'the server is not root, so it cannot switch to ' . $name;
-	if (function_exists('posix_initgroups')) @posix_initgroups($name, (int) $pw['gid']);
+	// The user's own groups, not root's: without them the command would keep
+	// root's supplementary groups (disk, adm, wheel ...) after the switch.
+	if (!function_exists('posix_initgroups') || !@posix_initgroups($name, (int) $pw['gid'])) {
+		return 'could not set the groups of ' . $name;
+	}
 	if (!posix_setgid((int) $pw['gid']) || !posix_setuid((int) $pw['uid']) || posix_geteuid() !== (int) $pw['uid']) {
 		return 'could not switch to ' . $name;
 	}

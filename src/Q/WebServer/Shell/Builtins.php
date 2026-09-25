@@ -470,6 +470,15 @@ class Q_WebServer_Shell_Builtins
 				: 'root use is off on this server (Q.shell.allowRoot)')
 				. '; this runs as ' . ($opts['runsAs'] !== '' ? $opts['runsAs'] : 'the shell user') . "\n");
 		}
+		if (!empty($opts['root'])) {
+			// As root, never a script someone other than root could have edited.
+			$r = $this->shell->registry->resolve($a);
+			$path = $r ? (string) ($r[0]['path'] ?? '') : '';
+			if ($path !== '' && ($weak = Q_WebServer_Shell::untrustedPath(dirname($path))) !== null) {
+				$sink->error('qsh: sudo: ' . $a[0] . ' is a script under ' . $weak . ", which a user other than root can change; not run as root\n");
+				return 1;
+			}
+		}
 		return $this->shell->dispatch($a, $in, $sink);
 	}
 	private function b_exit(array $a, $in, $sink) { $this->shell->io->ctl(array('op' => 'hide')); return 0; }

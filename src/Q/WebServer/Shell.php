@@ -40,7 +40,7 @@ class Q_WebServer_Shell
 	static function config($name)
 	{
 		$defaults = array('enabled' => true, 'allowSystem' => false, 'tier' => 'advanced', 'timeout' => 120,
-			'toggleKey' => '`', 'scriptsDir' => null, 'maxOutput' => 8388608, 'maxJobs' => 8, 'elevateMinutes' => 5, 'user' => null, 'allowRoot' => false);
+			'toggleKey' => '`', 'scriptsDir' => null, 'maxOutput' => 8388608, 'maxJobs' => 8, 'elevateMinutes' => 5, 'user' => null, 'allowRoot' => false, 'allowedOrigins' => array());
 		$v = class_exists('Q_Config', false) ? Q_Config::get('Q', 'shell', $name, $defaults[$name] ?? null) : ($defaults[$name] ?? null);
 		if ($name === 'tier' && !isset(Q_WebServer_Shell_Interpreter::TIERS[$v])) $v = 'basic';
 		if ($name === 'toggleKey' && (!is_string($v) || $v === '' || strlen($v) > 12)) $v = '`';
@@ -55,6 +55,32 @@ class Q_WebServer_Shell
 	 * @method dataDir
 	 * @static
 	 */
+	/**
+	 * When the server runs as root: the first directory, from the shell's
+	 * data directory up to /, that someone other than root could change --
+	 * owned by another user, or writable by group or others without the
+	 * sticky bit. Such a user could swap the directory for their own, with
+	 * their own panel password and autoexec, and be let in. Null when the
+	 * path is sound, or the server is not root.
+	 * @method untrustedPath
+	 * @static
+	 * @param {string} [$dir] default dataDir()
+	 * @return {string|null}
+	 */
+	static function untrustedPath($dir = null)
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) return null;
+		$dir = $dir ?? self::dataDir();
+		$path = realpath(is_dir($dir) ? $dir : dirname($dir));
+		while ($path !== false && $path !== '') {
+			$st = @stat($path);
+			if ($st && ($st['uid'] !== 0 || (($st['mode'] & 0022) && !($st['mode'] & 01000)))) return $path;
+			if ($path === '/' || $path === dirname($path)) break;
+			$path = dirname($path);
+		}
+		return null;
+	}
+
 	static function dataDir()
 	{
 		$panel = (class_exists('Q_WebServer_Panel') and (defined('APP_DIR') or function_exists('qbix_data_path')))

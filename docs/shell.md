@@ -120,6 +120,22 @@ The shell's own security settings (below) cannot be changed from the shell.
 - **sudo.** `sudo <command>` runs a single command as root only when
   `Q.shell.allowRoot` is `true` (default `false`), after the password
   check, and the status bar turns red while it runs.
+- **Nothing of the server's.** A command gets none of the server's open
+  sockets or files (only its own three pipes) and only the path, locale
+  and `QBIX_*`/`VC_*` variables of its environment — no credentials or
+  tokens the server was started with. It also drops root's supplementary
+  groups.
+- **Same origin only.** The WebSocket opens only from a page with the same
+  scheme, host and port as the server — another port on the same host is
+  another site, even though browsers send it the same cookies. Behind a
+  proxy, list the public origin in `Q.shell.allowedOrigins`
+  (`["https://example.com"]`).
+- **A root-only data directory.** When the server runs as root, the panel's
+  data directory (and the shell's beneath it) and every directory above it
+  must be changeable by root alone; otherwise the shell says so, skips
+  `autoexec.qsh`, and `sudo` will not run scripts from such a directory as
+  root. A user who could replace that directory could set the panel
+  password.
 - **Limits.** Commands time out after `Q.shell.timeout` seconds (default
   120: TERM, then KILL); output is capped at `Q.shell.maxOutput` bytes
   (8 MB); a session holds at most `Q.shell.maxJobs` jobs (8).
@@ -173,6 +189,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -d '{"command":"uptime"}' https://host
 | `Q.shell.maxJobs` | `8` | jobs per session |
 | `Q.shell.scriptsDir` | none | directory of scripts the shell can run |
 | `Q.shell.toggleKey` | `` ` `` | the key that opens the console |
+| `Q.shell.allowedOrigins` | `[]` | more origins allowed to open the shell's WebSocket (a proxy's public URL) |
 
 At a terminal, `php qshell.php` starts the same shell without a server, and
 `php qshell.php -c 'health'` runs one line.

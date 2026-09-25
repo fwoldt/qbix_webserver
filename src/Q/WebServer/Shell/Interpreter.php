@@ -364,6 +364,8 @@ class Q_WebServer_Shell_Interpreter
 		} elseif (!$this->confirm('OS command "' . $command . '"', false, $sink)) {
 			return 1;
 		}
+		// The server records it, wherever on the line it was.
+		if ($this->io instanceof Q_WebServer_Shell_JsonIo) $this->io->send(array('t' => 'sys', 'd' => (string) $command));
 		return Q_WebServer_Shell_Exec::run(array('/bin/sh', '-c', $command), $stdin, $sink);
 	}
 

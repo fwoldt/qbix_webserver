@@ -28,8 +28,9 @@ class Q_WebServer_Shell_Exec
 		if (!$argv || $argv[0] === '') return 127;
 		$environment = self::environment($env);
 		$pipes = array();
-		$proc = @proc_open($argv, array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w')),
+		$proc = @proc_open($argv, self::descriptors(array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w'))),
 			$pipes, $cwd, $environment);
+		self::closeExtra($pipes);
 		if (!is_resource($proc)) {
 			$sink->error('qsh: cannot run ' . $argv[0] . "\n");
 			return 127;
@@ -64,19 +65,75 @@ class Q_WebServer_Shell_Exec
 	}
 
 	/**
-	 * The environment a command gets: the server's own, so its tools find
-	 * their configuration, plus the shell's exported variables, and colour on
-	 * even though no terminal is attached.
+	 * Variables a command inherits from the server; everything else in the
+	 * server's environment (credentials, agent sockets, tokens of the
+	 * process that started it) stays behind.
+	 */
+	const KEEP_ENV = '/^(PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|HOME|USER|LOGNAME|SHELL|QBIX_[A-Z0-9_]+|VC_[A-Z0-9_]+)$/';
+
+	/**
+	 * The environment a command gets: the server's locale, path and its own
+	 * configuration variables (KEEP_ENV), plus the shell's exported
+	 * variables, and colour on even though no terminal is attached.
+	 * @method environment
+	 * @static
+	 * @param {array} $extra name => value
+	 * @return {array}
 	 */
 	static function environment(array $extra)
 	{
-		$env = getenv();
-		if (!is_array($env)) $env = array();
+		$env = array();
+		foreach ((array) getenv() as $k => $v) {
+			if (preg_match(self::KEEP_ENV, (string) $k)) $env[$k] = $v;
+		}
+		if (!isset($env['PATH'])) $env['PATH'] = '/usr/local/bin:/usr/bin:/bin';
 		$env['QBIX_FORCE_COLOR'] = '1';
 		$env['TERM'] = 'xterm-256color';
 		foreach ($extra as $k => $v) {
 			if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string) $k)) $env[$k] = (string) $v;
 		}
 		return $env;
+	}
+
+	/**
+	 * A proc_open() descriptor spec that also covers every other descriptor
+	 * this process holds, replacing it in the child with the read end of an
+	 * empty pipe (closeExtra() closes ours at once). Without it the child
+	 * inherits the server's listening sockets and its clients' connections,
+	 * and could accept or answer them as the server. (A pipe, not
+	 * /dev/null: the server's own file:// wrapper would open that in user
+	 * space, which proc_open() cannot hand to a child.)
+	 * @method descriptors
+	 * @static
+	 * @param {array} $spec fd => descriptor, for the ones the child should get
+	 * @return {array}
+	 */
+	static function descriptors(array $spec)
+	{
+		if (DIRECTORY_SEPARATOR === '\\') return $spec;
+		$fds = array();
+		$list = @scandir('/proc/self/fd') ?: @scandir('/dev/fd');
+		if ($list) {
+			foreach ($list as $f) if (ctype_digit($f)) $fds[] = (int) $f;
+		} else {
+			$fds = range(3, 255);
+		}
+		foreach ($fds as $fd) {
+			if ($fd > 2 && !isset($spec[$fd])) $spec[$fd] = array('pipe', 'r');
+		}
+		return $spec;
+	}
+
+	/**
+	 * Close our ends of the pipes descriptors() added (every pipe above 2).
+	 * @method closeExtra
+	 * @static
+	 * @param {array} $pipes from proc_open()
+	 */
+	static function closeExtra(array &$pipes)
+	{
+		foreach ($pipes as $fd => $p) {
+			if ($fd > 2) { if (is_resource($p)) @fclose($p); unset($pipes[$fd]); }
+		}
 	}
 }

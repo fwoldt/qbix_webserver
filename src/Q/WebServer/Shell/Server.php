@@ -110,10 +110,14 @@ class Q_WebServer_Shell_Server
 			'timeout' => (int) Q_WebServer_Shell::config('timeout'), 'themes' => $themes, 'context' => (object) $s['context'],
 			'brand' => Q_WebServer::brand(), 'user' => Q_WebServer_Shell::user()['name'], 'root' => Q_WebServer_Shell::user()['uid'] === 0,
 			'allowRoot' => Q_WebServer_Shell::rootAllowed(), 'userError' => Q_WebServer_Shell::user()['error']);
+		$weak = Q_WebServer_Shell::untrustedPath();
+		if ($weak !== null) {
+			$msg['warning'] = $weak . ' can be changed by a user other than root, so the control panel\'s password file and the shell\'s data beneath it are only as safe as that user; move them to a root-only directory.';
+		}
 		// The per-user autoexec runs once, when a session first opens.
 		if (!empty($s['new'])) {
 			$s['new'] = false;
-			if (is_file(Q_WebServer_Shell::dataDir() . '/autoexec.qsh')) {
+			if ($weak === null && is_file(Q_WebServer_Shell::dataDir() . '/autoexec.qsh')) {
 				self::exec($key, 'source autoexec.qsh', array('source' => 'autoexec.qsh', 'interactive' => false, 'quiet' => true));
 			}
 		}
@@ -221,8 +225,12 @@ class Q_WebServer_Shell_Server
 		$runner = self::runnerScript();
 		if ($runner === null) return array('ok' => false, 'error' => 'the shell runner (qshell.php) is missing from this installation');
 		$pipes = array();
-		$proc = @proc_open(array(PHP_BINARY, $runner, '--exec'), array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w')), $pipes);
+		// Only its three pipes and a trimmed environment: none of the server's
+		// sockets or secrets reach a process that will run as another user.
+		$proc = @proc_open(array(PHP_BINARY, $runner, '--exec'), Q_WebServer_Shell_Exec::descriptors(array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w'))),
+			$pipes, null, Q_WebServer_Shell_Exec::environment(array()));
 		if (!is_resource($proc)) return array('ok' => false, 'error' => 'could not start the shell runner');
+		Q_WebServer_Shell_Exec::closeExtra($pipes);
 		fwrite($pipes[0], json_encode($request, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n");
 		stream_set_blocking($pipes[1], false);
 		stream_set_blocking($pipes[2], false);
@@ -359,14 +367,28 @@ class Q_WebServer_Shell_Server
 				return;
 			case 'state':
 				if (isset(self::$sessions[$key])) {
-					self::$sessions[$key]['vars'] = array_map('strval', (array) ($m['vars'] ?? array()));
-					self::$sessions[$key]['exported'] = array_values(array_filter((array) ($m['exported'] ?? array()), 'is_string'));
+					// Bounded: what a runner says is kept for the session's life.
+					$vars = array();
+					foreach (array_slice((array) ($m['vars'] ?? array()), 0, 512, true) as $k => $v) {
+						if (is_string($k) && preg_match('/^[A-Za-z_][A-Za-z0-9_]{0,63}$/', $k) && is_scalar($v)) $vars[$k] = substr((string) $v, 0, 8192);
+					}
+					self::$sessions[$key]['vars'] = $vars;
+					self::$sessions[$key]['exported'] = array_slice(array_values(array_filter((array) ($m['exported'] ?? array()), 'is_string')), 0, 512);
 					self::$sessions[$key]['context'] = (array) ($m['context'] ?? array());
 					self::$sessions[$key]['status'] = (int) ($m['status'] ?? 0);
 				}
 				return;
 			case 'exit':
 				$j['code'] = (int) ($m['code'] ?? 0);
+				return;
+			case 'sys':
+				// An OS command about to run, wherever it was on the line (after
+				// &&, in a loop, in an alias): the audit marks the job, and the
+				// server's log gets the command itself.
+				$j['system'] = true;
+				if (class_exists('Q_WebServer_Log', false) && method_exists('Q_WebServer_Log', 'error')) {
+					@Q_WebServer_Log::error('shell: OS command from ' . $j['ip'] . ': ' . substr((string) ($m['d'] ?? ''), 0, 4096));
+				}
 				return;
 			case 'hist':
 			case 'hist_clear':
@@ -433,7 +455,10 @@ class Q_WebServer_Shell_Server
 		$ms = (int) round((microtime(true) - $j['started']) * 1000);
 		$j['ms'] = $ms;
 		$j['ended'] = microtime(true);
-		if (!$j['quiet']) self::audit($j['session'], ($j['asRoot'] ? '[root] ' : '') . ($j['expanded'] ?? $j['line']), $j['code'], $ms, $j['tier'], $j['ip']);
+		// Every job is recorded, the quiet autoexec included: what runs at
+		// sign-in is exactly what an audit must not miss.
+		self::audit($j['session'], ($j['asRoot'] ? '[root] ' : '') . ($j['quiet'] ? '[autoexec] ' : '') . ($j['expanded'] ?? $j['line']),
+			$j['code'], $ms, $j['tier'], $j['ip'], !empty($j['system']));
 		if ($j['bg']) self::emit($j['session'], array('t' => 'out', 'id' => $id, 'd' => '[' . $j['n'] . ']  + done (' . $j['code'] . ')  ' . $j['line'] . "\n", 'job' => true));
 		self::emit($j['session'], array('t' => 'exit', 'id' => $id, 'code' => $j['code'], 'ms' => $ms, 'bg' => $j['bg']));
 	}
@@ -445,8 +470,10 @@ class Q_WebServer_Shell_Server
 	static function signal($id, $sig)
 	{
 		if (!isset(self::$jobs[$id]) || self::$jobs[$id]['state'] !== 'running') return false;
-		$map = array('INT' => 2, 'TERM' => 15, 'KILL' => 9, 'HUP' => 1, 'STOP' => 19, 'CONT' => 18);
-		$n = ctype_digit((string) $sig) ? (int) $sig : ($map[strtoupper($sig)] ?? 15);
+		$map = array('INT' => 2, 'TERM' => 15, 'KILL' => 9, 'HUP' => 1, 'STOP' => 19, 'CONT' => 18, 'QUIT' => 3, 'USR1' => 10, 'USR2' => 12);
+		$sig = strtoupper(preg_replace('/^SIG/i', '', (string) $sig));
+		// Only these, by name or number; anything else is TERM.
+		$n = ctype_digit($sig) ? (in_array((int) $sig, $map, true) ? (int) $sig : 15) : ($map[$sig] ?? 15);
 		$pid = self::$jobs[$id]['pid'];
 		if ($pid > 0 && function_exists('posix_kill')) {
 			// The runner leads its own group (setsid): the group gets it all.
@@ -488,7 +515,8 @@ class Q_WebServer_Shell_Server
 	static function input($id, $data)
 	{
 		if (!isset(self::$jobs[$id]) || self::$jobs[$id]['state'] !== 'running') return false;
-		@fwrite(self::$jobs[$id]['pipes'][0], json_encode(array('t' => 'stdin', 'd' => (string) $data)) . "\n");
+		if (strlen((string) $data) > 65536) return false;
+		@fwrite(self::$jobs[$id]['pipes'][0], json_encode(array('t' => 'stdin', 'd' => (string) $data), JSON_INVALID_UTF8_SUBSTITUTE) . "\n");
 		return true;
 	}
 
@@ -620,6 +648,11 @@ class Q_WebServer_Shell_Server
 		$t = Q_WebServer_Shell_Settings::TABLE[$name];
 		if ($t[5]) return $name . ' cannot be changed from the shell';
 		if ($t[2] !== 'runtime') return null;
+		// Checked again here: the runner runs as another user, so what it
+		// sends is a request, not a decision.
+		if (!is_scalar($value)) return 'bad value for ' . $name;
+		list($value, $error) = Q_WebServer_Shell_Settings::parse($name, is_bool($value) ? ($value ? 'on' : 'off') : (string) $value);
+		if ($error !== null) return $error;
 		if ($name === 'workers') {
 			$pool = Q_WebServer::$pool ?? null;
 			if (!$pool || !method_exists($pool, 'resize')) return 'no worker pool to resize (fork-per-request mode)';
@@ -633,12 +666,12 @@ class Q_WebServer_Shell_Server
 	// ── Audit ───────────────────────────────────────────────────────────
 
 	/** Record a command: who, where, what, how it ended. */
-	static function audit($key, $line, $code, $ms, $tier, $ip = null)
+	static function audit($key, $line, $code, $ms, $tier, $ip = null, $system = false)
 	{
 		$s = self::$sessions[$key] ?? array();
 		$rec = array('time' => gmdate('c'), 'user' => 'panel', 'session' => substr((string) $key, 0, 8),
 			'ip' => (string) ($ip ?? ($s['ip'] ?? '')), 'tier' => (string) $tier, 'line' => (string) $line,
-			'exit' => (int) $code, 'ms' => (int) $ms, 'system' => (bool) preg_match('/^\s*(!\s|sys\s)/', (string) $line));
+			'exit' => (int) $code, 'ms' => (int) $ms, 'system' => $system || (bool) preg_match('/^\s*(!\s|sys\s)/', (string) $line));
 		self::$audit[] = $rec;
 		if (count(self::$audit) > 50) array_shift(self::$audit);
 		// Beside the shell's directory, not in it: the shell user owns that
@@ -704,7 +737,8 @@ class Q_WebServer_Shell_Server
 					if (!empty($start[$k])) $argv[] = '--' . $o . '=' . $start[$k];
 				}
 				$pipes = array();
-				$p = @proc_open($argv, array(1 => array('pipe', 'w'), 2 => array('pipe', 'w')), $pipes);
+				$p = @proc_open($argv, Q_WebServer_Shell_Exec::descriptors(array(1 => array('pipe', 'w'), 2 => array('pipe', 'w'))), $pipes, null, Q_WebServer_Shell_Exec::environment(array()));
+				Q_WebServer_Shell_Exec::closeExtra($pipes);
 				if (is_resource($p)) {
 					// Bounded: completion must never hold the loop for long.
 					stream_set_timeout($pipes[1], 3);

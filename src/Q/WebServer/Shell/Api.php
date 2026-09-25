@@ -131,12 +131,7 @@ class Q_WebServer_Shell_Api
 		$h = (array) ($parsed['headers'] ?? array());
 		// Only this server's own pages may open it: a page elsewhere cannot
 		// ride a visitor's cookie into the shell.
-		$origin = (string) ($h['origin'] ?? '');
-		$host = strtolower((string) ($h['host'] ?? ''));
-		$originHost = strtolower((string) parse_url($origin, PHP_URL_HOST));
-		$originPort = parse_url($origin, PHP_URL_PORT);
-		if ($origin === '' || $originHost === '' || $originHost . ($originPort ? ':' . $originPort : '') !== $host
-			&& $originHost !== preg_replace('/:\d+$/', '', $host)) {
+		if (!self::originAllowed($parsed)) {
 			return array(403, 'Forbidden: the shell opens only from this server\'s own pages.');
 		}
 		if (!Q_WebServer_Panel::allowed($parsed)) return array(403, 'Forbidden.');
@@ -149,6 +144,39 @@ class Q_WebServer_Shell_Api
 			Q_WebServer_Shell_Api::onMessage($sk, $raw, $token, $ip);
 		}, null, '/Q/ws/shell');
 		return $ok ? true : array(400, 'Bad WebSocket request.');
+	}
+
+	/**
+	 * Whether a WebSocket request comes from this server's own pages: the
+	 * same scheme, host and port as the request itself. Another port on the
+	 * same host is another site -- browsers send it the same cookies, so a
+	 * page there must not be able to open the shell. Q.shell.allowedOrigins
+	 * lists more (for a proxy in front), as "https://host[:port]".
+	 * @method originAllowed
+	 * @static
+	 * @param {array} $parsed the request
+	 * @return {boolean}
+	 */
+	static function originAllowed(array $parsed)
+	{
+		$h = (array) ($parsed['headers'] ?? array());
+		$origin = strtolower(trim((string) ($h['origin'] ?? '')));
+		$host = strtolower(trim((string) ($h['host'] ?? '')));
+		if ($origin === '' || $origin === 'null' || $host === '') return false;
+		$o = parse_url($origin);
+		if (!is_array($o) || empty($o['scheme']) || empty($o['host']) || isset($o['path']) && $o['path'] !== '') return false;
+		$norm = function ($scheme, $hostname, $port) {
+			$port = $port ?: ($scheme === 'https' || $scheme === 'wss' ? 443 : 80);
+			return $scheme . '://' . trim($hostname, '[]') . ':' . (int) $port;
+		};
+		$want = $norm($o['scheme'], $o['host'], $o['port'] ?? null);
+		foreach ((array) Q_WebServer_Shell::config('allowedOrigins') as $extra) {
+			$e = parse_url(strtolower(trim((string) $extra)));
+			if (is_array($e) && !empty($e['scheme']) && !empty($e['host']) && $norm($e['scheme'], $e['host'], $e['port'] ?? null) === $want) return true;
+		}
+		$scheme = !empty($parsed['https']) ? 'https' : 'http';
+		if (!preg_match('/^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::(\d+))?$/', $host, $m)) return false;
+		return $norm($scheme, $m[1], $m[2] ?? null) === $want;
 	}
 
 	/** A message from the terminal. */
