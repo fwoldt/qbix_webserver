@@ -62,7 +62,63 @@ The `/Q/stats` JSON includes everything the dashboard shows, plus `sparkline` (6
 
 Password-protected admin panel at `/Q/panel`. Until a password is chosen it signs in with the default key `panel` and asks for a new one straight away; or set one with `qbixctl panel:password` (below).
 
-**Apps tab** — discovers sibling app directories (any folder with `web/` or `config/app.json`). Create new apps, serve them (hot-switches the document root), open in VS Code, run configure scripts. Editable apps directory path.
+**Apps tab** — two lists:
+
+- **Installations**: every PHP application the server can see, whatever it is
+  built on, with the one it is serving first ("serving on this port"). Each
+  card shows the name and release (for example *Laravel 11.9.2*), where it
+  lives, its web root, and what it says about itself.
+- **Your Apps**: the apps directory's Qbix apps, which can be created, served
+  (hot-switches the document root), configured and opened from here. The apps
+  directory path is editable.
+
+**Frameworks tab** — the same detections, minus plain PHP sites, each with the
+tools its own command line offers (clear caches, migrations, route lists, …)
+and its installed packages. A command marked `…` changes the running
+installation and asks before it runs; the server refuses it without that
+confirmation too.
+
+### What is detected, and how
+
+One registry (`Q_WebServer_Framework`) answers the Apps tab, the Frameworks
+tab and the autohost, so the three always agree. It looks in:
+
+1. the document root being served, and its parent (a `public/` or `web/` root
+   inside a project counts as that project);
+2. the panel's apps directory and each directory directly inside it;
+3. every directory in `Q.panel.appRoots`, and each directory directly inside.
+
+It never walks deeper, and stops after 400 directories in one scan.
+
+| Recognised | By | Release read from |
+|---|---|---|
+| Laravel | `artisan` | `vendor/laravel/framework/…/Application.php` (`VERSION`), else `composer.lock` |
+| Symfony | `bin/console` + Symfony in `composer.json` | `vendor/symfony/http-kernel/Kernel.php` (`VERSION`) |
+| WordPress | `wp-config.php` or `wp-includes/version.php` | `$wp_version` in `wp-includes/version.php` |
+| Drupal | `core/lib/Drupal.php` (in the root or `web/`) | `Drupal::VERSION` |
+| Joomla | `administrator/` + `configuration.php` | `libraries/src/Version.php` |
+| Magento, TYPO3, Craft CMS, Moodle, MediaWiki, Nextcloud, PrestaShop, Laminas, FuelPHP | each one's own layout | each one's own version file or `composer.lock` |
+| Qbix | `config/app.json` or `web/Q.php` | — |
+| Composer app | `composer.json` + an `index.php` to serve | `composer.json` |
+| PHP site | `index.php` | — |
+
+A distribution of the server can add detectors for applications it supports
+(`Q_WebServer_Framework::register()`), and they are tried before the generic
+ones.
+
+Version files are **parsed, never included**: including one would declare its
+class or constants inside the server, where a second installation of the same
+application would then collide. Only literal values are taken — class
+constants, `define()`s, top-level variables, and functions that return a
+literal or a constant.
+
+Commands run as argument lists (no shell) in the application's own
+directory, with a 120-second limit and 1 MB of output; only the commands the
+detector lists can run. Composer is not run from the panel for an application
+whose detector marks it as not composer-managed (its packages may be live
+checkouts), unless `Q.panel.allowComposerWrite` is set.
+
+### The other tabs
 
 **Scripts tab** — list and run PHP scripts from `scripts/Q/` (configure, install, translate, etc.)
 
