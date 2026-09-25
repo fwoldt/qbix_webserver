@@ -174,3 +174,23 @@ body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) #main-conten
 body[data-auth="unknown"] #auth-pending{display:block;max-width:380px;margin:40px auto}
 body[data-auth="unknown"] .tabs,body[data-auth="unknown"] .content[id^="tab-"]{visibility:hidden}
 .auth-pending-card{color:var(--dim);font-size:13px;display:flex;align-items:center;gap:8px}
+
+/* ── Logs viewer ── */
+.log-toolbar select,
+.log-toolbar input[type="text"]{
+  background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;
+  padding:5px 8px;font-size:12px;min-width:70px}
+#log-filter{min-width:160px}
+#log-status{width:70px}
+.log-row{font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.5}
+.log-row:last-child{border-bottom:none !important}
+.log-status-2xx{color:var(--grn)}
+.log-status-3xx{color:var(--cyn)}
+.log-status-4xx{color:var(--yel)}
+.log-status-5xx{color:var(--red)}
+@media(max-width:768px){
+  .log-toolbar{gap:8px !important}
+  .log-toolbar label{display:none}
+  .log-row{flex-wrap:wrap;gap:4px 8px}
+  .log-row span{min-width:auto !important}
+}

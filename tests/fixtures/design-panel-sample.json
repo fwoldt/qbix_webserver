@@ -1,5 +1,6 @@
 {
     "brandHead": "<link rel=\"x\" href=\"/a?b=1&amp;c\"> {{brand}} \\ $y",
     "brand": "Velo<city> & {{brandHead}}",
-    "authState": "panel"
+    "authState": "panel",
+    "viewParams": "{}"
 }

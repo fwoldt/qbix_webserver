@@ -118,6 +118,34 @@ detector lists can run. Composer is not run from the panel for an application
 whose detector marks it as not composer-managed (its packages may be live
 checkouts), unless `Q.panel.allowComposerWrite` is set.
 
+### Bookmarkable tabs
+
+Every tab has its own address: `/Q/panel/(tab)/logs`, `/Q/panel/(tab)/system`
+and so on, `/(name)/value` pairs after `/Q/panel`. Opening one lands on that
+tab; changing tab adds a history entry, so Back and Forward move between tabs.
+The Logs tab keeps its filters in the address too, for example
+`/Q/panel/(tab)/logs/(type)/access/(status)/5xx/(filter)/checkout`, and its
+**Copy link** button copies exactly that.
+
+### Logs tab
+
+The server's access and error logs, newest last, as a table for the access
+log (time, method, path, status coloured by class, size, duration; the user
+agent on hover) and as lines for the error log.
+
+- **Filters**: free text, HTTP method, and status: an exact code (`404`) or
+  a class (`5` or `5xx`). A bad method or status is refused with the reason,
+  not ignored.
+- **How far back**: without a filter the last 50–500 lines are read; with one,
+  the last 2 MB of the file are searched (`Q.panel.logScanBytes`) and the
+  newest matches shown, with how many matched and how much was searched. The
+  whole file is never read into memory.
+- **Tail** refreshes every two seconds while the tab is open; **Download**
+  saves the lines shown.
+
+The log API (`/Q/api/logs?type=access|error&lines=&filter=&method=&status=`)
+needs a signed-in panel session like every other panel API.
+
 ### The other tabs
 
 **Scripts tab** — list and run PHP scripts from `scripts/Q/` (configure, install, translate, etc.)

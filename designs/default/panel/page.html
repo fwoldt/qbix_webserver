@@ -11,19 +11,19 @@
 </div>
 <div id="auth-pending" class="content" aria-live="polite"><div class="card auth-pending-card"><span class="pulse"></span> Checking your session…</div></div>
 <div class="tabs">
-  <div class="tab active" onclick="showTab('apps')">Apps</div>
-  <div class="tab" onclick="showTab('domains')">Domains</div>
-  <div class="tab" onclick="showTab('autohost')">Autohost</div>
-  <div class="tab" onclick="showTab('security')">Security</div>
-  <div class="tab" onclick="showTab('scripts')">Scripts</div>
-  <div class="tab" onclick="showTab('plugins')">Plugins</div>
-  <div class="tab" onclick="showTab('workers')">Workers</div>
-  <div class="tab" onclick="showTab('logs')">Logs</div>
-  <div class="tab" onclick="showTab('cron')">Cron</div>
-  <div class="tab" onclick="showTab('frameworks')">Frameworks</div>
-  <div class="tab" onclick="showTab('playground')">Playground</div>
-  <div class="tab" onclick="showTab('system')">System</div>
-  <div class="tab" onclick="showTab('servers')">Servers</div>
+  <div class="tab active" data-tab="apps" onclick="showTab('apps')">Apps</div>
+  <div class="tab" data-tab="domains" onclick="showTab('domains')">Domains</div>
+  <div class="tab" data-tab="autohost" onclick="showTab('autohost')">Autohost</div>
+  <div class="tab" data-tab="security" onclick="showTab('security')">Security</div>
+  <div class="tab" data-tab="scripts" onclick="showTab('scripts')">Scripts</div>
+  <div class="tab" data-tab="plugins" onclick="showTab('plugins')">Plugins</div>
+  <div class="tab" data-tab="workers" onclick="showTab('workers')">Workers</div>
+  <div class="tab" data-tab="logs" onclick="showTab('logs')">Logs</div>
+  <div class="tab" data-tab="cron" onclick="showTab('cron')">Cron</div>
+  <div class="tab" data-tab="frameworks" onclick="showTab('frameworks')">Frameworks</div>
+  <div class="tab" data-tab="playground" onclick="showTab('playground')">Playground</div>
+  <div class="tab" data-tab="system" onclick="showTab('system')">System</div>
+  <div class="tab" data-tab="servers" onclick="showTab('servers')">Servers</div>
 </div>
 
 <!-- APPS TAB -->
@@ -237,17 +237,39 @@
 <!-- LOGS TAB -->
 <div id="tab-logs" class="content hidden">
   <h2 style="font-size:16px;margin-bottom:16px">Logs</h2>
-  <div style="display:flex;gap:8px;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="loadLogs('access')">Access Log</button>
-    <button class="btn btn-ghost" onclick="loadLogs('error')">Error Log</button>
-    <select id="log-lines" style="margin-left:auto;padding:6px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px">
-      <option value="50">50 lines</option>
-      <option value="100">100 lines</option>
-      <option value="200">200 lines</option>
-      <option value="500">500 lines</option>
-    </select>
+  <div class="card" style="margin-bottom:12px">
+    <div class="log-toolbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <label style="font-size:12px;color:var(--dim)">Log</label>
+      <select id="log-type" onchange="logControlChanged()">
+        <option value="access">Access</option>
+        <option value="error">Error</option>
+      </select>
+      <label style="font-size:12px;color:var(--dim)">Lines</label>
+      <select id="log-lines" onchange="logControlChanged()">
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+      <input id="log-filter" type="text" placeholder="Filter text…" style="min-width:160px" oninput="logFilterChanged()" onchange="logControlChanged()">
+      <select id="log-method" onchange="logControlChanged()">
+        <option value="">Method</option>
+        <option value="GET">GET</option>
+        <option value="POST">POST</option>
+        <option value="PUT">PUT</option>
+        <option value="DELETE">DELETE</option>
+        <option value="HEAD">HEAD</option>
+        <option value="OPTIONS">OPTIONS</option>
+        <option value="PATCH">PATCH</option>
+      </select>
+      <input id="log-status" type="text" placeholder="Status" style="width:70px" onchange="logControlChanged()">
+      <button id="log-tail" class="btn btn-ghost" onclick="toggleLogTail()">Tail: off</button>
+      <button class="btn btn-ghost" onclick="copyLogLink()">Copy link</button>
+      <button class="btn btn-ghost" onclick="downloadLog()">Download</button>
+    </div>
   </div>
-  <pre id="logs-output" style="max-height:500px;overflow:auto;font-size:12px;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;white-space:pre-wrap;word-break:break-all"></pre>
+  <div id="log-stats" style="font-size:12px;color:var(--dim);margin-bottom:8px"></div>
+  <div id="logs-output" style="max-height:500px;overflow:auto;font-size:12px;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;white-space:pre-wrap;word-break:break-all"></div>
 </div>
 
 <!-- CRON TAB -->
@@ -259,4 +281,5 @@
   <div id="cron-list"></div>
 </div>
 
+<script>window.Q_VIEW_PARAMS = {{viewParams}} || {};</script>
 <script>{{@script.js}}</script></body></html>

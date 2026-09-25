@@ -82,7 +82,9 @@ class Q_WebServer_Panel
 			}
 		}
 
-		if ($path === '/Q/panel' || $path === '/Q/panel/') {
+		// The panel page, with optional /(name)/value view parameters that
+		// make a view bookmarkable: /Q/panel/(tab)/logs, /Q/panel/(tab)/system.
+		if (preg_match('#^/Q/panel(?:/|$)#', $path)) {
 			return array('status' => 200, 'body' => self::renderPanel($parsed),
 				// It opens on the view the session calls for (initialAuthState()),
 				// so no cache may keep one visitor's first paint for another.
@@ -2536,20 +2538,64 @@ class Q_WebServer_Panel
 			return ['lines' => [], 'file' => $file, 'exists' => false];
 		}
 
-		// Tail the file efficiently
-		$result = [];
-		$fp = fopen($file, 'r');
-		if ($fp) {
-			$size = filesize($file);
-			$chunk = min($size, $lines * 512); // rough estimate
-			fseek($fp, max(0, $size - $chunk));
-			$content = fread($fp, $chunk);
+		// Filters: free text, HTTP method, status (exact, or a class: 5, 5xx).
+		// Checked here so a bad value is refused, not silently ignored.
+		$filter = substr(trim((string) ($params['filter'] ?? '')), 0, 200);
+		$method = strtoupper(trim((string) ($params['method'] ?? '')));
+		$status = strtolower(trim((string) ($params['status'] ?? '')));
+		if ($method !== '' and !preg_match('/^[A-Z]{1,10}$/', $method)) {
+			return ['status' => 400, 'error' => 'method must be a word such as GET or POST'];
+		}
+		if ($status !== '' and !preg_match('/^[1-5](?:\d\d|xx)?$/', $status)) {
+			return ['status' => 400, 'error' => 'status must be a code such as 404, or a class such as 5 or 5xx'];
+		}
+		$filtering = ($filter !== '' or $method !== '' or $status !== '');
+
+		// Read the end of the file only, never the whole of it: the last few
+		// hundred KB without a filter, up to Q.panel.logScanBytes (2 MB) with
+		// one, so a search reaches further back than the lines it returns.
+		$size = (int) filesize($file);
+		$want = $filtering
+			? max(65536, (int) Q_Config::get('Q', 'panel', 'logScanBytes', 2097152))
+			: min(1048576, $lines * 1024);
+		$from = max(0, $size - $want);
+		$content = '';
+		if ($size > 0 and ($fp = @fopen($file, 'rb'))) {
+			fseek($fp, $from);
+			$content = (string) stream_get_contents($fp, $size - $from);
 			fclose($fp);
-			$allLines = explode("\n", trim($content));
-			$result = array_slice($allLines, -$lines);
+		}
+		$all = $content === '' ? [] : explode("\n", rtrim($content, "\n"));
+		// Started mid-file: the first line is a fragment.
+		if ($from > 0 and $all) array_shift($all);
+
+		$matched = 0;
+		$result = [];
+		if ($filtering) {
+			foreach ($all as $line) {
+				if ($filter !== '' and stripos($line, $filter) === false) continue;
+				if ($method !== '' or $status !== '') {
+					if (!preg_match('/"([A-Z]+)\s+\S+[^"]*"\s+(\d{3})\s/', $line, $m)) continue;
+					if ($method !== '' and $m[1] !== $method) continue;
+					if ($status !== '') {
+						if (ctype_digit($status) and strlen($status) === 3) {
+							if ($m[2] !== $status) continue;          // exact: 404
+						} elseif ($m[2][0] !== $status[0]) {
+							continue;                                 // class: 5 or 5xx
+						}
+					}
+				}
+				$result[] = $line;
+			}
+			$matched = count($result);
+			$result = array_slice($result, -$lines);
+		} else {
+			$result = array_slice($all, -$lines);
+			$matched = count($result);
 		}
 
-		return ['lines' => $result, 'file' => $file, 'exists' => true, 'size' => filesize($file)];
+		return ['lines' => array_values($result), 'file' => $file, 'exists' => true, 'size' => $size,
+			'matched' => $matched, 'scanned' => $size - $from, 'complete' => $from === 0];
 	}
 
 	// ── Cron / Scheduler API ─────────────────────────────
@@ -2692,11 +2738,40 @@ class Q_WebServer_Panel
 		return $s['mustChange'] ? 'mustchange' : 'panel';
 	}
 
+	/**
+	 * Parse /(name)/value view parameters from a panel path.
+	 * /Q/panel/(tab)/system  ->  array('tab' => 'system')
+	 * @method parseViewParams
+	 * @static
+	 * @param {string} $path
+	 * @return {array}
+	 */
+	static function parseViewParams($path)
+	{
+		$params = array();
+		if (strncmp($path, '/Q/panel', 8) !== 0) return $params;
+		$rest = substr($path, 8);
+		if ($rest === '' || $rest === '/') return $params;
+		$rest = trim($rest, '/');
+		$parts = explode('/', $rest);
+		$count = count($parts);
+		for ($i = 0; $i < $count; $i += 2) {
+			if ($i + 1 >= $count) break;
+			$k = $parts[$i];
+			if (strlen($k) > 2 && $k[0] === '(' && substr($k, -1) === ')') {
+				$name = substr($k, 1, -1);
+				if ($name !== '') $params[$name] = urldecode($parts[$i + 1]);
+			}
+		}
+		return $params;
+	}
+
 	static function renderPanel($parsed)
 	{
 		$host = $parsed['headers']['host'] ?? 'localhost:8080';
 		$wsUrl = "ws://$host/Q/ws";
-		return self::panelHtml($host, $wsUrl, self::initialAuthState($parsed));
+		$viewParams = self::parseViewParams($parsed['path'] ?? '/Q/panel');
+		return self::panelHtml($host, $wsUrl, self::initialAuthState($parsed), $viewParams);
 	}
 
 	/**
@@ -2720,7 +2795,7 @@ class Q_WebServer_Panel
 		return $page !== null ? Q_WebServer_Shell::decorate($page) : Q_WebServer::renderErrorPage(403, '/Q/panel', $messageHtml);
 	}
 
-	static function panelHtml($host, $wsUrl, $authState = 'unknown')
+	static function panelHtml($host, $wsUrl, $authState = 'unknown', array $viewParams = array())
 	{
 		$brand = class_exists('Q_WebServer', false)
 			? Q_WebServer::brand() : 'Qbix';
@@ -2729,12 +2804,42 @@ class Q_WebServer_Panel
 		// directory's designs/ -- byte for byte what this method used to
 		// return from a nowdoc here (see tests/unit-design-render.php).
 		// Icons, manifest and link-preview tags; escaped by headTags().
+		$viewParamsJson = json_encode((object) $viewParams, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES);
 		$page = Q_WebServer_Design::render('panel', array(
 			'brandHead' => Q_WebServer_Brand::headTags($brand . ' Control Panel', '/Q/panel'),
 			'brand'     => htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'),
 			'authState' => in_array($authState, array('panel', 'mustchange', 'signin'), true) ? $authState : 'unknown',
+			'viewParams' => $viewParamsJson,
 		));
+		if ($page !== null and isset($viewParams['tab']) and is_string($viewParams['tab'])) {
+			$page = self::openOnTab($page, $viewParams['tab']);
+		}
 		return $page !== null ? Q_WebServer_Shell::decorate($page)
 			: '<!DOCTYPE html><html><body><p>The panel design is missing (designs/default/panel).</p></body></html>';
+	}
+
+	/**
+	 * The panel page opened on a tab other than its default, in the HTML
+	 * itself: the tab marked active and its section shown before any script
+	 * runs, so /Q/panel/(tab)/logs paints the Logs tab first instead of the
+	 * Apps tab and then switching. A name that is not one of the page's tabs,
+	 * or a design without the markers, leaves the page as it is.
+	 * @method openOnTab
+	 * @static
+	 * @param {string} $page
+	 * @param {string} $tab
+	 * @return {string}
+	 */
+	static function openOnTab($page, $tab)
+	{
+		if (!preg_match('/^[a-z0-9_-]+$/', $tab)) return $page;
+		$want = 'id="tab-' . $tab . '" class="content hidden"';
+		$tabOff = 'class="tab" data-tab="' . $tab . '"';
+		if (strpos($page, $want) === false or strpos($page, $tabOff) === false) return $page;
+		// The default tab: whichever section is shown and whichever tab is active.
+		$page = preg_replace('/(id="tab-[a-z0-9_-]+" class="content)"/', '$1 hidden"', $page, 1);
+		$page = preg_replace('/class="tab active" (data-tab="[a-z0-9_-]+")/', 'class="tab" $1', $page, 1);
+		$page = str_replace($want, 'id="tab-' . $tab . '" class="content"', $page);
+		return str_replace($tabOff, 'class="tab active" data-tab="' . $tab . '"', $page);
 	}
 }

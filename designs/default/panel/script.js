@@ -200,7 +200,10 @@ window.addEventListener('pageshow', function (e) {
 
 function initPanel() {
   detectTools();
-  loadApps();
+  var params = getViewParams();
+  var tab = (typeof params.tab === 'string' && /^[a-z0-9_-]+$/.test(params.tab)) ? params.tab : 'apps';
+  if (!document.getElementById('tab-' + tab)) tab = 'apps';
+  showTab(tab, {silent: true});
 }
 
 // Node detection + suggestions
@@ -288,12 +291,65 @@ function showNodeDialog() {
   document.body.appendChild(overlay);
 }
 
+// View parameters: /(name)/value pairs in the path, so a view can be bookmarked.
+function getViewParams() {
+  var params = {};
+  if (typeof window.Q_VIEW_PARAMS === 'object' && window.Q_VIEW_PARAMS !== null) {
+    for (var k in window.Q_VIEW_PARAMS) params[k] = window.Q_VIEW_PARAMS[k];
+  }
+  var fromUrl = parseViewParamsFromUrl(location.pathname);
+  for (var k in fromUrl) params[k] = fromUrl[k];
+  return params;
+}
+function parseViewParamsFromUrl(path) {
+  var params = {};
+  var prefix = '/Q/panel/';
+  if (path.indexOf(prefix) !== 0) return params;
+  var rest = path.slice(prefix.length).replace(/\/$/, '');
+  if (!rest) return params;
+  var parts = rest.split('/');
+  for (var i = 0; i + 1 < parts.length; i += 2) {
+    var k = parts[i];
+    if (k.length > 2 && k[0] === '(' && k[k.length - 1] === ')') {
+      params[k.slice(1, -1)] = decodeURIComponent(parts[i + 1]);
+    }
+  }
+  return params;
+}
+function buildViewParamUrl(params) {
+  var parts = [];
+  for (var k in params) {
+    if (params[k] == null || params[k] === '') continue;
+    parts.push('/(' + encodeURIComponent(k) + ')/' + encodeURIComponent(params[k]));
+  }
+  return '/Q/panel' + (parts.length ? parts.join('') : '');
+}
+// Log filters belong to the Logs tab; any other tab's address is just its name.
+var LOG_PARAMS = ['type', 'lines', 'filter', 'method', 'status'];
+function setViewParam(name, value) {
+  var params = getViewParams();
+  var changed = name === 'tab' && params.tab !== value;
+  params[name] = value;
+  if (name === 'tab' && value !== 'logs') LOG_PARAMS.forEach(function(k) { delete params[k]; });
+  // A new tab is a new history entry, so Back returns to the one before.
+  if (changed) history.pushState({viewParams: params}, '', buildViewParamUrl(params));
+  else history.replaceState({viewParams: params}, '', buildViewParamUrl(params));
+}
+
 // Tabs
-function showTab(name) {
+function showTab(name, opts) {
+  opts = opts || {};
+  if (typeof name !== 'string' || !/^[a-z0-9_-]+$/.test(name)) return;
+  var current = document.querySelector('.tab.active');
+  if (current && current.dataset.tab === 'logs' && name !== 'logs') onLeaveLogs();
+  var target = document.getElementById('tab-' + name);
+  if (!target) return;
   document.querySelectorAll('[id^=tab-]').forEach(function(el) { el.classList.add('hidden'); });
-  document.getElementById('tab-'+name).classList.remove('hidden');
+  target.classList.remove('hidden');
   document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('active'); });
-  event.target.classList.add('active');
+  var tab = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (tab) tab.classList.add('active');
+  if (!opts.silent) setViewParam('tab', name);
   if (name==='apps') loadApps();
   if (name==='plugins') loadPlugins();
   if (name==='system') loadSystem();
@@ -302,11 +358,17 @@ function showTab(name) {
   if (name==='autohost') loadAutohost();
   if (name==='security') loadSecurity();
   if (name==='workers') loadWorkers();
-  if (name==='logs') loadLogs('access');
+  if (name==='logs') { updateLogControls(); loadLogs(); }
   if (name==='cron') loadCron();
   if (name==='frameworks') loadFrameworks();
   if (name==='scripts') loadAppSelect();
 }
+
+window.addEventListener('popstate', function(e) {
+  var params = (e.state && e.state.viewParams) ? e.state.viewParams : parseViewParamsFromUrl(location.pathname);
+  // showTab() reloads the Logs tab from the restored address, filters included.
+  showTab(params.tab || 'apps', {silent: true});
+});
 
 // Apps
 // Text from the server (names, paths, versions a detector read) is escaped
@@ -1086,14 +1148,236 @@ async function recycleAll() {
 }
 
 // ── Logs ────────────────────────────────────────────
-async function loadLogs(type) {
-  type=type||'access';
-  var lines=document.getElementById('log-lines').value;
-  var r=await api('logs?type='+type+'&lines='+lines);
-  var el=document.getElementById('logs-output');
-  if(!r.exists){el.textContent='Log file not found: '+r.file;return;}
-  el.textContent=r.lines.join('\n');
-  el.scrollTop=el.scrollHeight;
+var logTailInterval = null;
+var logTailOn = false;
+var logLastFile = null;
+var logLastLines = [];
+
+function getLogParams() {
+  var p = getViewParams();
+  var lines = parseInt(p.lines, 10);
+  if (!lines || lines < 1) lines = 50;
+  if (lines > 500) lines = 500;
+  return {
+    type: p.type === 'error' ? 'error' : 'access',
+    lines: lines,
+    filter: (p.filter || '').trim(),
+    method: (p.method || '').trim().toUpperCase(),
+    status: (p.status || '').trim()
+  };
+}
+
+function setLogParams(changes) {
+  var params = getViewParams();
+  if (changes.type !== undefined) params.type = changes.type === 'error' ? 'error' : 'access';
+  if (changes.lines !== undefined) params.lines = String(changes.lines);
+  if (changes.filter !== undefined) { if (changes.filter) params.filter = changes.filter; else delete params.filter; }
+  if (changes.method !== undefined) { if (changes.method) params.method = changes.method; else delete params.method; }
+  if (changes.status !== undefined) { if (changes.status) params.status = changes.status; else delete params.status; }
+  history.replaceState({viewParams: params}, '', buildViewParamUrl(params));
+  updateLogControls();
+}
+
+function updateLogControls() {
+  var p = getLogParams();
+  var t = document.getElementById('log-type');
+  if (t) t.value = p.type;
+  var l = document.getElementById('log-lines');
+  if (l) l.value = String(p.lines);
+  var f = document.getElementById('log-filter');
+  if (f) f.value = p.filter;
+  var m = document.getElementById('log-method');
+  if (m) m.value = p.method;
+  var s = document.getElementById('log-status');
+  if (s) s.value = p.status;
+}
+
+function logControlChanged() {
+  setLogParams({
+    type: document.getElementById('log-type').value,
+    lines: document.getElementById('log-lines').value,
+    filter: document.getElementById('log-filter').value,
+    method: document.getElementById('log-method').value,
+    status: document.getElementById('log-status').value
+  });
+  loadLogs();
+}
+
+var logFilterTimer;
+function logFilterChanged() {
+  clearTimeout(logFilterTimer);
+  logFilterTimer = setTimeout(logControlChanged, 250);
+}
+
+async function loadLogs() {
+  var p = getLogParams();
+  var url = 'logs?type=' + encodeURIComponent(p.type)
+    + '&lines=' + encodeURIComponent(p.lines)
+    + '&filter=' + encodeURIComponent(p.filter)
+    + '&method=' + encodeURIComponent(p.method)
+    + '&status=' + encodeURIComponent(p.status);
+  var el = document.getElementById('logs-output');
+  var stats = document.getElementById('log-stats');
+  if (el) el.innerHTML = '<p style="color:var(--dim)">Loading…</p>';
+  try {
+    var r = await api(url);
+    if (r.error) {
+      if (el) el.innerHTML = '<p style="color:var(--red)">' + escH(r.error) + '</p>';
+      if (stats) stats.textContent = '';
+      return;
+    }
+    if (!r.exists) {
+      if (el) el.innerHTML = '<p style="color:var(--red)">Log file not found: ' + escH(r.file) + '</p>';
+      if (stats) stats.textContent = '';
+      logLastLines = [];
+      return;
+    }
+    logLastFile = r.file;
+    logLastLines = r.lines || [];
+    renderLogs(logLastLines, p);
+    if (stats) {
+      var shown = r.lines ? r.lines.length : 0;
+      var filtering = p.filter || p.method || p.status;
+      var depth = r.complete ? 'the whole file' : 'the last ' + fmtBytesPlain(r.scanned || 0);
+      stats.textContent = (filtering
+        ? shown + ' of ' + (r.matched || 0) + ' matching lines in ' + depth
+        : shown + ' lines') + ' · ' + r.file;
+    }
+    if (el && logTailOn) el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    if (el) el.innerHTML = '<p style="color:var(--red)">Error: ' + escH(e.message) + '</p>';
+  }
+}
+
+function renderLogs(lines, p) {
+  var el = document.getElementById('logs-output');
+  if (!el) return;
+  if (!lines.length) { el.innerHTML = '<p style="color:var(--dim)">No matching lines.</p>'; return; }
+  var html = '';
+  var filter = p.filter.toLowerCase();
+  lines.forEach(function(line) {
+    var parsed = parseAccessLog(line);
+    if (parsed && p.type === 'access') {
+      html += renderAccessRow(parsed, filter);
+    } else {
+      html += renderLogLine(line, filter, p.type);
+    }
+  });
+  el.innerHTML = html;
+}
+
+// Apache/NCSA combined + Qbix ms extension
+// %h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i" %{ms}T
+function parseAccessLog(line) {
+  var m = line.match(/^(\S+)\s+(\S+)\s+(\S+)\s+\[([^\]]+)\]\s+"([^"]+)"\s+(\d{3})\s+(\S+)\s+"([^"]*)"\s+"([^"]*)"\s*([\d.]+)?/);
+  if (!m) return null;
+  var req = m[5].split(' ');
+  return {
+    ip: m[1],
+    ident: m[2],
+    user: m[3],
+    time: m[4],
+    method: req[0] || '',
+    path: req.slice(1, -1).join(' ') || '',
+    protocol: req[req.length - 1] || '',
+    status: m[6],
+    size: m[7],
+    referer: m[8],
+    ua: m[9],
+    ms: m[10] || ''
+  };
+}
+
+function renderAccessRow(r, filter) {
+  var statusClass = 'status-' + (r.status[0] || 'x') + 'xx';
+  var text = r.ip + ' ' + r.time + ' ' + r.method + ' ' + r.path + ' ' + r.status + ' ' + r.size + ' ' + r.ms;
+  var hl = filter ? highlightText(text, filter) : escH(text);
+  return '<div class="log-row ' + statusClass + '" style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--bdr)" title="' + escH((r.referer && r.referer !== '-' ? 'Referrer: ' + r.referer + '\n' : '') + r.ua) + '">'
+    + '<span style="min-width:100px;color:var(--dim)">' + escH(r.ip) + '</span>'
+    + '<span style="min-width:140px;color:var(--dim)">' + escH(r.time) + '</span>'
+    + '<span style="min-width:45px;font-weight:600">' + escH(r.method) + '</span>'
+    + '<span style="flex:1;min-width:120px;word-break:break-all">' + (filter ? highlightText(r.path, filter) : escH(r.path)) + '</span>'
+    + '<span style="min-width:50px;text-align:right" class="log-status-' + escH(r.status[0]) + 'xx">' + escH(r.status) + '</span>'
+    + '<span style="min-width:60px;text-align:right;color:var(--dim)">' + escH(r.size) + '</span>'
+    + '<span style="min-width:70px;text-align:right;color:var(--dim)">' + (r.ms ? escH(r.ms) + 'ms' : '') + '</span>'
+    + '</div>';
+}
+
+function renderLogLine(line, filter, type) {
+  var highlighted = filter ? highlightText(line, filter) : escH(line);
+  if (type === 'error') {
+    var m = line.match(/^\[([^\]]+)\]\s*(.*)$/);
+    if (m) {
+      highlighted = '<span style="color:var(--dim)">[' + escH(m[1]) + ']</span> ' + (filter ? highlightText(m[2], filter) : escH(m[2]));
+    }
+  }
+  return '<div class="log-row" style="padding:3px 0;border-bottom:1px solid var(--bdr)">' + highlighted + '</div>';
+}
+
+function highlightText(text, q) {
+  if (!q) return escH(text);
+  var parts = text.split(new RegExp('(' + escapeRegex(q) + ')', 'gi'));
+  return parts.map(function(part) {
+    return part.toLowerCase() === q.toLowerCase() ? '<mark style="background:rgba(255,215,0,.25);color:var(--txt);border-radius:2px">' + escH(part) + '</mark>' : escH(part);
+  }).join('');
+}
+
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function toggleLogTail() {
+  logTailOn = !logTailOn;
+  var btn = document.getElementById('log-tail');
+  if (btn) btn.textContent = 'Tail: ' + (logTailOn ? 'on' : 'off');
+  if (logTailOn) startLogTail(); else stopLogTail();
+}
+
+function startLogTail() {
+  stopLogTail();
+  if (!document.getElementById('tab-logs') || document.getElementById('tab-logs').classList.contains('hidden')) {
+    logTailOn = false;
+    var btn = document.getElementById('log-tail');
+    if (btn) btn.textContent = 'Tail: off';
+    return;
+  }
+  loadLogs();
+  logTailInterval = setInterval(function() {
+    if (!logTailOn) return;
+    loadLogs();
+  }, 2000);
+}
+
+function stopLogTail() {
+  if (logTailInterval) { clearInterval(logTailInterval); logTailInterval = null; }
+}
+
+function copyLogLink() {
+  var url = location.origin + buildViewParamUrl(getViewParams());
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(function() { alert('Link copied'); }, function() { prompt('Copy this link:', url); });
+  } else {
+    prompt('Copy this link:', url);
+  }
+}
+
+function downloadLog() {
+  if (!logLastLines.length) return alert('No log lines to download.');
+  var p = getLogParams();
+  var text = logLastLines.join('\n') + '\n';
+  var blob = new Blob([text], {type: 'text/plain'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (p.type === 'error' ? 'error' : 'access') + '.log';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
+}
+
+// Stop tail when leaving the logs tab.
+function onLeaveLogs() {
+  stopLogTail();
+  logTailOn = false;
+  var btn = document.getElementById('log-tail');
+  if (btn) btn.textContent = 'Tail: off';
 }
 
 // ── Cron ────────────────────────────────────────────
@@ -1427,4 +1711,11 @@ function showChangePassword(rules) {
     if (main) main.style.display = '';
     initPanel();
   };
+}
+
+
+function fmtBytesPlain(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return Math.round(n / 1024) + ' KB';
+  return n + ' B';
 }
