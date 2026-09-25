@@ -61,5 +61,10 @@ class Q_WebServer_Distribution_Vc
 			require_once __DIR__ . '/Vc/Shell.php';
 			Q_WebServer_Shell::addProvider(new Q_WebServer_Distribution_Vc_Shell());
 		}
+		// The application's own host map, for the panel's Domains view.
+		if (class_exists('Q_WebServer_DomainUsage')) {
+			require_once __DIR__ . '/Vc/HostMap.php';
+			Q_WebServer_DomainUsage::addProvider('app host map', array('Q_WebServer_Distribution_Vc_HostMap', 'hosts'));
+		}
 	}
 }

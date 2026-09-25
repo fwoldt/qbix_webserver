@@ -199,6 +199,11 @@ body[data-auth="unknown"] .tabs,body[data-auth="unknown"] .content[id^="tab-"]{v
   .log-row{flex-wrap:wrap;gap:4px 8px}
   .log-row span{min-width:auto !important}
 }
+.dom-usage-wrap{overflow-x:auto}
+.dom-usage{width:100%;border-collapse:collapse;font-size:13px}
+.dom-usage th,.dom-usage td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bdr);vertical-align:top}
+.dom-usage th{font-size:12px;color:var(--dim);font-weight:600}
+.dom-src{display:inline-block;font-size:12px;padding:1px 6px;margin:1px 2px 1px 0;border-radius:999px;border:1px solid var(--bdr);color:var(--dim);white-space:nowrap}
 </style></head><body data-auth="panel">
 <div class="top">
   <h1><a href="/Q/panel" style="color:inherit;text-decoration:none"><img src="/Q/icon-48.png" alt="" width="24" height="24" style="vertical-align:middle;margin-right:6px">Velo<city> & {{brandHead}}</a></h1>
@@ -256,6 +261,7 @@ body[data-auth="unknown"] .tabs,body[data-auth="unknown"] .content[id^="tab-"]{v
 <!-- DOMAINS TAB -->
 <div id="tab-domains" class="content hidden">
   <h2 style="font-size:16px;margin-bottom:16px">Domains &amp; Certificates</h2>
+  <div id="domains-usage"></div>
   <div id="domains-list"></div>
   <div class="card" style="margin-top:16px">
     <h3 style="font-size:14px;margin-bottom:12px">Add Domain</h3>
@@ -1375,7 +1381,45 @@ async function installPlatform() {
 }
 
 // ── Domains ─────────────────────────────────────────
+// ── Domains in use: every name this server answers to, and where it comes from ──
+async function loadDomainUsage() {
+  var el = document.getElementById('domains-usage');
+  if (!el) return;
+  var r;
+  try { r = await api('domains/usage'); } catch (e) { return; }
+  if (!r || !r.hosts) { el.innerHTML = ''; return; }
+  var li = (r.listeners || []).map(function(l){ return escH(l.scheme + '://' + (l.host || '*') + ':' + l.port); }).join(', ');
+  var c = r.certificate;
+  var cert = c ? escH((c.names || []).join(', ')) + (c.daysLeft != null ? ' <span style="color:' + (c.daysLeft < 14 ? 'var(--red)' : c.daysLeft < 30 ? 'var(--yel)' : 'var(--grn)') + '">(' + escH(c.daysLeft) + ' days left)</span>' : '') : '<span style="color:var(--dim)">no certificate presented</span>';
+  var stLabel = {serving:'serving', covered:'certificate covers it', unconfigured:'seen, not configured', unseen:'configured, not seen'};
+  var stColor = {serving:'var(--grn)', covered:'var(--ac)', unconfigured:'var(--yel)', unseen:'var(--dim)'};
+  var rows = r.hosts.map(function(h) {
+    var src = (h.sources || []).map(function(s){ return '<span class="dom-src" title="' + escH(s.detail) + '">' + escH(s.source) + '</span>'; }).join(' ');
+    var st = (h.states || []).map(function(s){ return '<span style="color:' + (stColor[s] || 'var(--dim)') + '">' + escH(stLabel[s] || s) + '</span>'; }).join(' · ');
+    var seen = h.seen ? escH(h.seen.count) + ' req, last ' + escH(new Date(h.seen.last * 1000).toLocaleTimeString()) : '';
+    var cur = h.status || 'active';
+    var sel = '<select aria-label="Status of ' + escH(h.host) + '" onchange="setDomainStatus(\'' + escH(h.host) + '\', this.value, this)" data-was="' + escH(cur) + '">'
+      + ['active','suspended','disabled'].map(function(s){ return '<option value="' + s + '"' + (s === cur ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>';
+    return '<tr><td><a href="https://' + escH(h.host) + '/" target="_blank" rel="noopener">' + escH(h.host) + '</a></td><td>' + src + '</td><td>' + st + (seen ? '<div style="font-size:12px;color:var(--dim)">' + seen + '</div>' : '') + '</td><td>' + (h.record || h.seen || src ? sel : '') + '</td></tr>';
+  }).join('');
+  el.innerHTML = '<div class="card" style="margin-bottom:16px"><h3 style="font-size:14px;margin-bottom:8px">In use</h3>'
+    + '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Listening: ' + (li || 'unknown') + '</div>'
+    + '<div style="font-size:12px;color:var(--dim);margin-bottom:10px">Certificate: ' + cert + '</div>'
+    + (rows ? '<div class="dom-usage-wrap"><table class="dom-usage"><thead><tr><th>Host</th><th>From</th><th>State</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+            : '<p style="color:var(--dim)">No domains seen or configured yet.</p>')
+    + '</div>';
+}
+async function setDomainStatus(host, status, sel) {
+  if (status !== 'active' && !confirm('Set ' + host + ' to ' + status + '? ' + (status === 'suspended' ? 'Visitors get a 503 "temporarily suspended" page.' : 'The server stops serving it (404).'))) {
+    if (sel) sel.value = sel.getAttribute('data-was') || 'active';
+    return;
+  }
+  var r = await api('domains/status', {domain: host, status: status, confirm: true});
+  if (r && r.error) { alert(r.error); if (sel) sel.value = sel.getAttribute('data-was') || 'active'; return; }
+  loadDomains();
+}
 async function loadDomains() {
+  loadDomainUsage();
   var r = await api('domains');
   var el = document.getElementById('domains-list');
   if (!r.domains || !r.domains.length) {
@@ -1440,7 +1484,7 @@ async function addDomain() {
   await api('domains/add', {domain:name, root:document.getElementById('dom-root').value.trim()||null, app:document.getElementById('dom-app').value.trim()||null, tls:document.getElementById('dom-tls').value});
   document.getElementById('dom-name').value=''; loadDomains();
 }
-async function removeDomain(n) { if(!confirm('Remove '+n+'?'))return; await api('domains/remove',{domain:n}); loadDomains(); }
+async function removeDomain(n) { if(!confirm('Remove '+n+'?'))return; var r = await api('domains/remove',{domain:n, confirm:true}); if (r && r.error) alert(r.error); loadDomains(); }
 async function provisionCert(n) { alert('Provisioning '+n+'...'); var r=await api('domains/provision',{domain:n}); alert(r.success?'Done!':r.error||'Failed'); loadDomains(); }
 
 // ── Security & Attestation ──────────────────────────

@@ -331,6 +331,10 @@ class Q_WebServer_Panel
 				return self::apiAddDomain($parsed);
 			case 'domains/remove':
 				return self::apiRemoveDomain($parsed);
+			case 'domains/usage':
+				return self::apiDomainUsage();
+			case 'domains/status':
+				return self::apiDomainStatus($parsed);
 			case 'domains/provision':
 				return self::apiProvisionCert($parsed);
 			case 'domains/hosts':
@@ -2106,15 +2110,8 @@ class Q_WebServer_Panel
 
 	static function apiListDomains()
 	{
-		$domains = Q_Config::get('Q', 'webserver', 'domains', array());
-		// Merge domains from panel config (added via UI)
-		$configPath = self::panelConfigPath();
-		if (file_exists($configPath)) {
-			$panelConfig = json_decode(file_get_contents($configPath), true);
-			if (!empty($panelConfig['domains'])) {
-				$domains = array_merge($domains, $panelConfig['domains']);
-			}
-		}
+		// Config's and the panel's own, one list (Q_WebServer_Domains).
+		$domains = Q_WebServer_Domains::records();
 		$certDir = Q_Config::get('Q', 'webserver', 'tls', 'certDir', 'local/certs');
 		$result = [];
 		foreach ($domains as $name => $conf) {
@@ -2125,6 +2122,10 @@ class Q_WebServer_Panel
 				'app' => $conf['app'] ?? null,
 				'tls' => $conf['tls'] ?? 'none',
 				'aliases' => $conf['aliases'] ?? [],
+				'status' => $conf['status'] ?? 'active',
+				'since' => $conf['since'] ?? null,
+				'note' => $conf['note'] ?? '',
+				'source' => $conf['source'] ?? 'panel',
 			];
 			if (is_file($certPath)) {
 				$expiry = Q_WebServer_Acme::certExpiry($certPath);
@@ -2172,16 +2173,17 @@ class Q_WebServer_Panel
 		if (!$domain || !Q_WebServer_Autohost::validateHostname($domain)) {
 			return ['status' => 400, 'error' => 'Invalid domain name'];
 		}
-		$configPath = self::panelConfigPath();
-		$config = file_exists($configPath)
-			? json_decode(file_get_contents($configPath), true) : [];
-		$config['domains'][$domain] = [
-			'root' => $body['root'] ?? null,
-			'app' => $body['app'] ?? null,
-			'tls' => $body['tls'] ?? 'auto',
-			'aliases' => $body['aliases'] ?? [],
-		];
-		file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
+		// Through the store, under its lock; fields this form does not know
+		// (status, and those later versions add) are kept.
+		$ok = Q_WebServer_Domains::update(strtolower($domain), function ($rec) use ($body) {
+			$rec['root'] = $body['root'] ?? ($rec['root'] ?? null);
+			$rec['app'] = $body['app'] ?? ($rec['app'] ?? null);
+			$rec['tls'] = $body['tls'] ?? ($rec['tls'] ?? 'auto');
+			$rec['aliases'] = array_values(array_filter((array) ($body['aliases'] ?? ($rec['aliases'] ?? array())), 'is_string'));
+			$rec['status'] = $rec['status'] ?? 'active';
+			return $rec;
+		});
+		if (!$ok) return ['status' => 503, 'error' => 'The panel store cannot be written'];
 		return ['added' => $domain];
 	}
 
@@ -2189,12 +2191,43 @@ class Q_WebServer_Panel
 	{
 		$body = json_decode($parsed['body'] ?? '{}', true);
 		$domain = $body['domain'] ?? '';
-		$configPath = self::panelConfigPath();
-		$config = file_exists($configPath)
-			? json_decode(file_get_contents($configPath), true) : [];
-		unset($config['domains'][$domain]);
-		file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
+		if (!Q_WebServer_Domains::validName(Q_WebServer_Domains::normalize($domain))) {
+			return ['status' => 400, 'error' => 'Invalid domain name'];
+		}
+		if (empty($body['confirm'])) {
+			return ['status' => 409, 'error' => 'Removing a domain needs confirm', 'confirm' => true];
+		}
+		$ok = Q_WebServer_Domains::update($domain, function ($rec) { return null; });
+		if (!$ok) return ['status' => 503, 'error' => 'The panel store cannot be written'];
 		return ['removed' => $domain];
+	}
+
+	/** GET domains/usage: which domains are in use, and where each name comes from. */
+	static function apiDomainUsage()
+	{
+		return Q_WebServer_DomainUsage::collect();
+	}
+
+	/**
+	 * POST domains/status {domain, status, note?, confirm}: active,
+	 * suspended or disabled. Anything but active needs confirm (409 without).
+	 */
+	static function apiDomainStatus($parsed)
+	{
+		$body = json_decode($parsed['body'] ?? '{}', true);
+		$domain = Q_WebServer_Domains::normalize($body['domain'] ?? '');
+		$status = (string) ($body['status'] ?? '');
+		if (!Q_WebServer_Domains::validName($domain)) return ['status' => 400, 'error' => 'Invalid domain name'];
+		if (!in_array($status, Q_WebServer_Domains::STATUSES, true)) {
+			return ['status' => 400, 'error' => 'Status must be one of: ' . implode(', ', Q_WebServer_Domains::STATUSES)];
+		}
+		if ($status !== 'active' and empty($body['confirm'])) {
+			return ['status' => 409, 'error' => "Setting $domain to $status takes it off the air; send confirm to proceed", 'confirm' => true];
+		}
+		if (!Q_WebServer_Domains::setStatus($domain, $status, $body['note'] ?? null)) {
+			return ['status' => 503, 'error' => 'The panel store cannot be written'];
+		}
+		return ['domain' => $domain, 'status' => $status];
 	}
 
 	static function apiProvisionCert($parsed)

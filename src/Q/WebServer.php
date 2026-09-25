@@ -945,6 +945,11 @@ class Q_WebServer
 		$conn = self::$http2[$key];
 		$stream = $request['stream'];
 
+		// A suspended or disabled domain: see handleRequest().
+		if (($gate = Q_WebServer_Domains::gate($request)) !== null) {
+			return $gate;
+		}
+
 		$path = $request['path'];
 		$query = '';
 		if (($q = strpos($path, '?')) !== false) {
@@ -2598,6 +2603,16 @@ class Q_WebServer
 	{
 		$method = $parsed['method'];
 		$path = $parsed['path'];
+
+		// A suspended or disabled domain is answered here, before the reverse
+		// cache could serve a page stored while it was active.
+		if (($gate = Q_WebServer_Domains::gate($parsed)) !== null) {
+			$gateHeaders = $gate['headers'];
+			$gateType = $gateHeaders['Content-Type'];
+			unset($gateHeaders['Content-Type']);
+			self::sendResponse($client, $gate['status'], $gate['body'], $gateType, $gateHeaders);
+			return false;
+		}
 
 		// Reverse cache, before anything else this method would do.
 		//
@@ -6091,6 +6106,13 @@ WORKER;
 	private static $tlsWatcher = null;
 	private static $tlsPending = array();
 	private static $httpsPort = 0;
+
+	/** The HTTPS port being listened on, or 0. */
+	static function httpsPort()
+	{
+		return (int) self::$httpsPort;
+	}
+
 	static $clients = array();
 	static $clientWatchers = array();
 	static $buffers = array();

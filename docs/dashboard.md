@@ -118,6 +118,59 @@ detector lists can run. Composer is not run from the panel for an application
 whose detector marks it as not composer-managed (its packages may be live
 checkouts), unless `Q.panel.allowComposerWrite` is set.
 
+### Domains tab
+
+**In use** lists every host name this server answers to, and where each name
+comes from:
+
+- **certificate**: the names (CN and DNS SANs) on the certificate the HTTPS
+  listener presents, with its days left;
+- **record**, **record alias**: the domain records (below), and config's
+  `Q.webserver.domains`;
+- **site file**: an enabled site file named after a host;
+- **Host headers seen**: requests since the server started, with a count and
+  the time of the last one;
+- providers: a distribution can add its application's own host map (this is
+  how an installation's siteaccess host matching shows up).
+
+Each host gets its states: **serving** (requests answered), **certificate
+covers it** (wildcards count), **seen, not configured** and **configured, not
+seen**. The listening addresses are shown above the table.
+
+**Status**, per domain: `active`, `suspended` (visitors get a 503 "temporarily
+suspended" page with `Retry-After`) or `disabled` (the server does not serve
+the host: 404). Aliases share their domain's status. The server's own `/Q/`
+and `/.well-known/` paths are never gated, so the panel and certificate
+renewals keep working on a suspended host. Suspending or disabling asks for
+confirmation (the API answers 409 without `confirm`); so does removing a
+domain.
+
+API (signed in): `GET domains/usage`, `GET domains`, `POST domains/status`
+`{domain, status, note?, confirm}`, `POST domains/add`, `POST domains/remove`
+`{domain, confirm}`.
+
+**The domain record**, stored under `domains` in the panel's credential store
+(`acl/panel.json`, written under its lock):
+
+| Field | Meaning |
+|---|---|
+| `status` | `active` (default), `suspended`, `disabled` |
+| `since` | when the status last changed (unix time) |
+| `note` | free text |
+| `root`, `app`, `tls`, `aliases` | as `Q.webserver.domains` |
+| reserved | `subdomains`, `redirects`, `hsts`, `errorDocs`, `certificate` |
+
+Unknown fields are kept when a record is updated, so later versions can add
+to it without migrating anything.
+
+**Planned** (not built yet): per-domain aliases, subdomains and document roots
+with host routing; HTTP→HTTPS and preferred-host redirects, custom forwarding,
+HSTS and custom error documents; issuing and renewing a certificate for one
+domain; per-domain logs and traffic. Further out: password-protected
+directories, hotlink protection, a PHP version and settings per domain, limits,
+quotas and disk usage, backups, web statistics history, IP address assignment,
+a read-only DNS view, cron per domain, and a file manager.
+
 ### Bookmarkable tabs
 
 Every tab has its own address: `/Q/panel/(tab)/logs`, `/Q/panel/(tab)/system`
