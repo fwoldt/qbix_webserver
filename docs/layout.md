@@ -31,6 +31,11 @@ made or removed by the console.
   sites-enabled/          symlinks to the sites in use
   designs/                the server's own page designs  (see designs.md)
   ssl/                    certificates                   (see https.md)
+  acl/                    the control panel's credentials (see dashboard.md)
+
+/var/lib/qbix/            state kept between runs        (/var/lib, beside /etc)
+  sessions/               the control panel's sessions, one file each
+  shell/                  the Q shell's per-user history and settings
 ```
 
 Every file holds a JSON object in the engine's usual configuration format, under
@@ -125,6 +130,20 @@ the machine's.
 
 Designs and certificates are looked up the same way: the top overlay's
 `designs/` and `ssl/` first, then the base's.
+
+### The state directory
+
+What the server writes and keeps between runs lives in the state directory that
+goes with the tree in use, as `/var/lib` goes with `/etc`: `/var/lib/qbix` for the
+base tree, and for an overlay the state directory it registers along with its tree
+(a distribution passes it to `addOverlay()`). `Q.webserver.stateDir` or
+`QBIX_STATE_DIR` moves it. With no configuration tree in use there is no state
+directory, and the server keeps its state beside the application, as before.
+
+The control panel keeps its credentials in the tree (`acl/`) and its sessions in
+the state directory (`sessions/`). Both must pass a strict ownership rule, checked
+up to `/`, or the panel refuses every sign-in: see
+[dashboard.md](dashboard.md#where-the-panel-keeps-its-credentials).
 
 ---
 

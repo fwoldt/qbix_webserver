@@ -163,13 +163,53 @@ qbixctl panel:password --root=/path/to/web --generate     # makes a strong one, 
 ```
 
 Pass the same `--root` the server runs with (or `--app=DIR` for a server run with
-`--app`): the password goes where the server keeps it, `local/panel.json` in the
-directory above the document root -- for `--root=/srv/site/web`, that is
-`/srv/site/local/panel.json` -- stored as the page stores it (bcrypt). It must pass
+`--app`), and the same `--conf-dir`/`--config` if it uses a configuration tree:
+the password goes where the server keeps it -- `acl/panel.json` under the tree, or
+`local/panel.json` above the document root when there is none (see below) --
+stored as the page stores it (bcrypt). It must pass
 the rules in [passwords.md](passwords.md); `--generate` makes one that does, sets it
 and prints it once. Changing it signs
 out every existing session. A running server uses it on the next request; nothing
 needs restarting. `qbixconsole panel:password` is the same command.
+
+### Where the panel keeps its credentials
+
+Two directories, found in this order:
+
+| | Credentials (`acl/`) | Sessions (`sessions/`) |
+|---|---|---|
+| Set explicitly | `Q.panel.aclDir` | `Q.panel.sessionsDir` |
+| With a configuration tree | `<tree>/acl` (`/etc/qbix/acl`) | `<state dir>/sessions` (`/var/lib/qbix/sessions`) |
+| Without one | `local/` above the document root | `local/sessions/` |
+
+`acl/panel.json` holds the password hash, the default-key state and the panel's own
+settings. Each signed-in session is its own file in `sessions/`, named by the
+SHA-256 of its token, so a directory listing gives no token away and sign-ins in
+different workers never write the same file.
+
+**The trust rule.** Before anything is read or written, every directory from these
+files up to `/` must belong to root or to the user the server runs as, and must not
+be writable by group or others (a sticky directory such as `/tmp` excepted); the two
+directories and the files in them must belong to the server's user with no access for
+anyone else (`0700` and `0600`); and nothing on the way may be a symbolic link. A
+laxer mode on a directory or file the server owns is tightened, never trusted as it
+is. If the rule fails -- a directory some other user could rename and replace with
+their own, holding a password they know -- the panel is locked: sign-in, the default
+key and every session are refused, the start-up log says why, and there is no
+fallback to a looser place.
+
+**Checking it.** `qbixctl panel:check --root=... [--conf-dir=... --config=...]`
+prints each path with its owner and mode, whether it passes and why not, and the
+commands that fix it; it exits 1 when the panel is locked. `--json` gives the same
+as JSON.
+
+**Moving from `local/panel.json`.** A `panel.json` left in the old place (above the
+document root) is moved into `acl/` and `sessions/` once, on the server's first
+start (or the first `panel:check`/`panel:password`), provided it belongs to the
+server's user: a copy is kept in `acl/` as `panel.json.pre-migration-<time>`
+(`0600`), and the old file is renamed to `panel.json.migrated-<time>`, not deleted.
+A file that belongs to anyone else is never moved or believed, and locks the panel
+until it is looked at.
 
 ---
 
