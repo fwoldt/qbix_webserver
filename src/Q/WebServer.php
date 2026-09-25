@@ -2242,7 +2242,7 @@ class Q_WebServer
 			if (!self::adminAllowed($parsed, true)) return self::adminForbidden();
 			ob_start();
 			phpinfo();
-			$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
+			$html = Q_WebServer_Shell::decorate(Q_WebServer_PhpInfo::page(ob_get_clean()));
 			return array('status' => 200, 'body' => $html,
 				'headers' => array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'no-store'));
 		}
@@ -2831,7 +2831,7 @@ class Q_WebServer
 				}
 				ob_start();
 				phpinfo();
-				$html = Q_WebServer_Shell::decorate(self::phpinfoHtml(ob_get_clean()));
+				$html = Q_WebServer_Shell::decorate(Q_WebServer_PhpInfo::page(ob_get_clean()));
 				self::sendResponse($client, 200, $html, 'text/html; charset=utf-8', array('Cache-Control' => 'no-store'));
 				return false;
 			}

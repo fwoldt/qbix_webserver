@@ -1,0 +1,8 @@
+{
+  "brand": "Qbix Server",
+  "brandHead": "<link rel=\"icon\" href=\"/Q/favicon.svg\">",
+  "brandHeader": "<a href=\"/Q/phpinfo\" style=\"color:inherit;text-decoration:none\">Qbix Server</a>",
+  "version": "PHP 8.3.0 &middot; Linux cli",
+  "jump": "<a href=\"#section_Configuration\">Configuration</a><a href=\"#module_Core\">Core</a>",
+  "body": "<h1 id=\"section_Configuration\">Configuration</h1>\n<h2 id=\"module_Core\">Core</h2>\n<div class=\"tw\"><table>\n<tr class=\"h\"><th>Directive</th><th>Local Value</th><th>Master Value</th></tr>\n<tr><td class=\"e\">memory_limit</td><td class=\"v\">128M</td><td class=\"v\">128M</td></tr>\n</table></div>\n"
+}

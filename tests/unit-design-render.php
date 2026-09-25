@@ -36,7 +36,7 @@ function check($what, $got, $want)
 }
 
 // ── Every shipped view is byte-identical to what the old code produced ───
-foreach (array('dashboard', 'panel', 'listing', 'error', 'docs', 'metrics') as $view) {
+foreach (array('dashboard', 'panel', 'listing', 'error', 'docs', 'metrics', 'phpinfo') as $view) {
 	$sample = json_decode(file_get_contents(__DIR__ . "/fixtures/design-$view-sample.json"), true);
 	$golden = file_get_contents(__DIR__ . "/fixtures/design-$view-golden.html");
 	$got = $D::render($view, $sample);

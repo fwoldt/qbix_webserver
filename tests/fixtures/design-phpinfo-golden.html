@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Qbix Server PHP Info</title>
+<link rel="icon" href="/Q/favicon.svg"><style>*{margin:0;padding:0;box-sizing:border-box}
+/* The control panel's palette and chrome, so the server's views read as one. */
+:root{--bg:#0a0b14;--sfc:rgba(22,24,40,.7);--sfc2:#161828;--bdr:rgba(255,255,255,.06);--txt:#e1e4ed;--dim:#6b7089;
+--ac:#7c5cfc;--ac2:#a78bfa;--grn:#4ade80;--glow:rgba(124,92,252,.08);--row:rgba(255,255,255,.03)}
+@media(prefers-color-scheme:light){:root{--bg:#f4f5f7;--sfc:rgba(255,255,255,.85);--sfc2:#fff;--bdr:rgba(0,0,0,.08);--txt:#1a1a2e;--dim:#5d6178;--glow:rgba(124,92,252,.06);--row:rgba(0,0,0,.025)}}
+body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);font-size:13px;min-height:100vh;
+background-image:radial-gradient(ellipse 80% 60% at 20% 0%,rgba(124,92,252,.12) 0%,transparent 60%),
+radial-gradient(ellipse 60% 50% at 80% 100%,rgba(34,211,238,.06) 0%,transparent 50%);background-attachment:fixed}
+html{scroll-padding-top:130px;scroll-behavior:smooth}
+.chrome{position:sticky;top:0;z-index:50}
+.top{padding:16px 20px;display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:space-between;align-items:center;
+background:rgba(10,11,20,.8);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--bdr)}
+.top h1{font-size:17px;color:#fff;font-weight:700;letter-spacing:-.3px}
+.top h1 img{vertical-align:middle}
+.status{display:flex;gap:6px;align-items:center;font-size:12px;font-weight:500;padding:4px 12px;border-radius:20px;background:rgba(34,197,94,.1);color:var(--grn)}
+.status .pulse{width:6px;height:6px;border-radius:50%;background:var(--grn);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.qnav{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;min-width:0}
+.qnav a{color:var(--dim);text-decoration:none;padding:2px 9px;border:1px solid rgba(255,255,255,.08);border-radius:10px;white-space:nowrap}
+.qnav a:hover,.qnav a:focus-visible{color:#fff;border-color:var(--ac2)}
+.qnav a[aria-current=page]{color:var(--ac2);background:var(--glow)}
+.tools{display:flex;gap:12px;align-items:center;padding:10px 20px;background:rgba(22,24,40,.6);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--bdr)}
+@media(prefers-color-scheme:light){.tools{background:rgba(255,255,255,.75)}}
+.filter{flex:1;max-width:420px}
+.filter input{width:100%;padding:8px 12px;border-radius:10px;border:1px solid var(--bdr);background:var(--sfc2);color:var(--txt);font:inherit}
+.filter input:focus{outline:2px solid var(--ac2);outline-offset:1px}
+.count{font-size:12px;color:var(--dim)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.content{padding:20px;max-width:1200px;margin:0 auto}
+.sub{font-size:12px;color:var(--dim);margin-bottom:14px}
+.jump{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px}
+.jump a{font-size:12px;color:var(--dim);text-decoration:none;padding:3px 10px;border:1px solid var(--bdr);border-radius:10px;background:var(--sfc)}
+.jump a:hover,.jump a:focus-visible{color:var(--txt);border-color:var(--ac2)}
+/* phpinfo()'s own markup, restyled as the panel's cards. */
+.pi h1{font-size:15px;font-weight:700;margin:26px 0 10px;color:var(--txt)}
+.pi h1.p{margin-top:0}
+.pi h2{font-size:13px;font-weight:700;margin:22px 0 8px;color:var(--ac2)}
+.pi h2 a{color:inherit;text-decoration:none}
+.pi table{width:100%;border-collapse:separate;border-spacing:0;background:var(--sfc);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;margin-bottom:6px;table-layout:fixed}
+.pi td,.pi th{padding:7px 12px;border-bottom:1px solid var(--bdr);vertical-align:top;text-align:left;font-size:12px;overflow-wrap:anywhere;word-break:break-word}
+.pi tr:last-child td{border-bottom:0}
+.pi tr:nth-child(even) td{background:var(--row)}
+.pi th{font-weight:600;color:var(--dim);background:var(--sfc2)}
+.pi td.e{width:34%;font-weight:600;color:var(--txt)}
+.pi td.v{color:var(--txt)}
+.pi td.v i{color:var(--dim)}
+.pi tr.h td,.pi tr.h th{background:var(--sfc2);font-weight:700}
+.pi img{display:none}
+.pi hr{border:0;height:1px;background:var(--bdr);margin:20px 0}
+.pi p{color:var(--dim);font-size:12px;line-height:1.6;margin:10px 0}
+.pi pre{white-space:pre-wrap;font-family:ui-monospace,monospace}
+.pi .hidden{display:none}
+.none{color:var(--dim);text-align:center;margin:30px 0}
+@media(max-width:768px){.top{padding:14px 16px}.top h1{font-size:15px}.top .qnav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.tools{padding:10px 16px}.content{padding:16px}html{scroll-padding-top:170px}
+.pi .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:12px}.pi table{table-layout:auto;min-width:0}.pi td.e{width:40%}}
+@supports(padding:env(safe-area-inset-top)){.top{padding-top:calc(16px + env(safe-area-inset-top))}}
+.jumpbox{margin-bottom:20px}
+.jumpbox summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--dim);margin-bottom:10px;list-style-position:inside}
+.jumpbox summary:hover{color:var(--txt)}
+.jumpbox .jump{margin-bottom:0}
+</style></head><body>
+<div class="chrome">
+<div class="top">
+  <h1><img src="/Q/icon-48.png" alt="" width="24" height="24" style="vertical-align:middle;margin-right:6px"><a href="/Q/phpinfo" style="color:inherit;text-decoration:none">Qbix Server</a></h1>
+  <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo" aria-current="page">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+  <div class="status"><span class="pulse"></span> Running</div>
+</div>
+<div class="tools">
+  <label class="filter"><span class="sr">Filter settings</span><input type="search" id="pi-filter" placeholder="Filter settings, e.g. memory_limit" autocomplete="off" spellcheck="false"></label>
+  <span class="count" id="pi-count" aria-live="polite"></span>
+</div>
+</div>
+<div class="content">
+<p class="sub">PHP 8.3.0 &middot; Linux cli</p>
+<details class="jumpbox" id="pi-jumpbox"><summary>Jump to a section</summary><nav class="jump" aria-label="Sections"><a href="#section_Configuration">Configuration</a><a href="#module_Core">Core</a></nav></details>
+<main class="pi" id="pi"><h1 id="section_Configuration">Configuration</h1>
+<h2 id="module_Core">Core</h2>
+<div class="tw"><table>
+<tr class="h"><th>Directive</th><th>Local Value</th><th>Master Value</th></tr>
+<tr><td class="e">memory_limit</td><td class="v">128M</td><td class="v">128M</td></tr>
+</table></div>
+</main>
+<p class="none" id="pi-none" hidden>No settings match the filter.</p>
+</div>
+<script>(function () {
+  // Filter phpinfo()'s rows as you type: rows that match stay, tables and
+  // headings with nothing left hide, and the count says how many matched.
+  var input = document.getElementById('pi-filter');
+  var root = document.getElementById('pi');
+  var count = document.getElementById('pi-count');
+  var none = document.getElementById('pi-none');
+  if (!input || !root) return;
+  // The section list starts open where there is room for it, closed on a phone.
+  var box = document.getElementById('pi-jumpbox');
+  if (box && window.innerWidth > 768) box.open = true;
+  if (box) box.addEventListener('click', function (e) { if (e.target.tagName === 'A' && window.innerWidth <= 768) box.open = false; });
+  var rows = Array.prototype.slice.call(root.querySelectorAll('tr'));
+  function apply() {
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function (tr) {
+      var hit = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      tr.classList.toggle('hidden', !hit);
+      if (hit && q) shown++;
+    });
+    // A table, and the heading before it, hide when none of its rows match.
+    Array.prototype.forEach.call(root.querySelectorAll('table'), function (t) {
+      var any = !q || t.querySelector('tr:not(.hidden)') !== null;
+      var box = t.parentNode.classList && t.parentNode.classList.contains('tw') ? t.parentNode : t;
+      box.classList.toggle('hidden', !any);
+      var h = box.previousElementSibling;
+      if (h && /^H[12]$/.test(h.tagName) && !h.classList.contains('p')) h.classList.toggle('hidden', !any);
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('p,hr'), function (el) { el.classList.toggle('hidden', !!q); });
+    count.textContent = q ? shown + ' matching setting' + (shown === 1 ? '' : 's') : '';
+    none.hidden = !(q && shown === 0);
+  }
+  input.addEventListener('input', apply);
+  // "/" jumps to the filter, as on many developer tools, unless typing elsewhere.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    e.preventDefault(); input.focus();
+  });
+})();
+</script>
+</body></html>

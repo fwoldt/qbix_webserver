@@ -106,6 +106,64 @@ class Q_WebServer_PhpInfo
 	}
 
 	/**
+	 * phpinfo() inside the server's own chrome: the header, brand and view
+	 * navigation the dashboard and control panel share, with a filter box and
+	 * a list of sections to jump to.
+	 *
+	 * The phpinfo markup is kept whole (every table and row) and only lifted
+	 * out of its own document: its <html>, <head>, <style> and centring
+	 * wrapper go, the design's stylesheet restyles the rest. The values in it
+	 * are escaped where they are produced -- by PHP for the HTML SAPIs, by
+	 * parse() for the text ones -- and nothing here decodes them again.
+	 *
+	 * @method page
+	 * @static
+	 * @param {string} $raw Raw phpinfo() output
+	 * @return {string} A complete HTML page; phpinfo's own page when no design has the view
+	 */
+	static function page($raw)
+	{
+		$doc = self::render($raw);
+		$body = $doc;
+		if (preg_match('/<body[^>]*>(.*)<\/body>/is', $doc, $m)) $body = $m[1];
+		$body = preg_replace('/<(style|script)\b[^>]*>.*?<\/\1>/is', '', $body);
+		$body = preg_replace('/^\s*<div class="center">(.*)<\/div>\s*$/s', '$1', $body);
+
+		$version = '';
+		if (preg_match('/<h1 class="p">\s*PHP Version ([^<]+)<\/h1>/i', $body, $m)) $version = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+
+		// Every section heading gets an id, and a link in the jump list.
+		$jump = array();
+		$used = array();
+		$body = preg_replace_callback('/<h([12])>(?:<a name="([^"]*)"[^>]*>)?(.*?)(?:<\/a>)?<\/h\1>/s', function ($m) use (&$jump, &$used) {
+			$label = trim(strip_tags($m[3]));
+			if ($label === '') return $m[0];
+			$id = $m[2] !== '' ? $m[2] : 'section_' . preg_replace('/[^A-Za-z0-9_]+/', '_', $label);
+			$base = $id;
+			for ($n = 2; isset($used[$id]); $n++) $id = $base . '_' . $n;
+			$used[$id] = true;
+			$idEsc = htmlspecialchars($id, ENT_QUOTES, 'UTF-8');
+			$jump[] = '<a href="#' . $idEsc . '">' . $m[3] . '</a>';
+			return '<h' . $m[1] . ' id="' . $idEsc . '">' . $m[3] . '</h' . $m[1] . '>';
+		}, $body);
+		// A table scrolls inside its own card on a phone, never the page.
+		$body = preg_replace('/<table\b/i', '<div class="tw"><table', $body);
+		$body = preg_replace('/<\/table>/i', '</table></div>', $body);
+
+		$brand = class_exists('Q_WebServer', false) ? Q_WebServer::brand() : 'Qbix Server';
+		$brandEsc = htmlspecialchars($brand, ENT_QUOTES, 'UTF-8');
+		$page = Q_WebServer_Design::render('phpinfo', array(
+			'brand' => $brandEsc,
+			'brandHead' => class_exists('Q_WebServer_Brand') ? Q_WebServer_Brand::headTags($brand . ' PHP Info', '/Q/phpinfo') : '',
+			'brandHeader' => '<a href="/Q/phpinfo" style="color:inherit;text-decoration:none">' . $brandEsc . '</a>',
+			'version' => $version === '' ? 'phpinfo()' : 'PHP ' . htmlspecialchars($version, ENT_QUOTES, 'UTF-8') . ' &middot; ' . htmlspecialchars(PHP_OS_FAMILY . ' ' . PHP_SAPI, ENT_QUOTES, 'UTF-8'),
+			'jump' => implode('', $jump),
+			'body' => $body,
+		));
+		return $page === null ? $doc : $page;
+	}
+
+	/**
 	 * Parse the text body into phpinfo's headings and tables.
 	 * @method parse
 	 * @static

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>{{brand}} PHP Info</title>
+{{brandHead}}<style>{{@style.css}}</style></head><body>
+<div class="chrome">
+<div class="top">
+  <h1><img src="/Q/icon-48.png" alt="" width="24" height="24" style="vertical-align:middle;margin-right:6px">{{brandHeader}}</h1>
+  <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo" aria-current="page">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
+  <div class="status"><span class="pulse"></span> Running</div>
+</div>
+<div class="tools">
+  <label class="filter"><span class="sr">Filter settings</span><input type="search" id="pi-filter" placeholder="Filter settings, e.g. memory_limit" autocomplete="off" spellcheck="false"></label>
+  <span class="count" id="pi-count" aria-live="polite"></span>
+</div>
+</div>
+<div class="content">
+<p class="sub">{{version}}</p>
+<details class="jumpbox" id="pi-jumpbox"><summary>Jump to a section</summary><nav class="jump" aria-label="Sections">{{jump}}</nav></details>
+<main class="pi" id="pi">{{body}}</main>
+<p class="none" id="pi-none" hidden>No settings match the filter.</p>
+</div>
+<script>{{@script.js}}</script>
+</body></html>
