@@ -29,6 +29,7 @@ var docTitles = {
   "migrate-caddy.md": "Migrate from Caddy",
   "architecture.md": "Architecture",
   "dashboard.md": "Dashboard & Panel",
+  "shell.md": "Q Shell",
   "deploy.md": "Deploy & Federation",
   "api-discovery.md": "API Discovery",
   "compatibility.md": "Compatibility",
@@ -47,7 +48,7 @@ async function init() {
   if (r.hasReadme) html += '<a href="#README.md" onclick="load(\'README.md\');return false">Overview</a>';
   var sections = {"Getting Started":["why.md","running.md","requirements.md","extensions.md","configuration.md","layout.md","console.md"],
     "Features":["https.md","headers.md","cache.md","http.md","websocket.md","routing.md","framework.md"],
-    "Operations":["architecture.md","workers.md","dashboard.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","docker.md","packages.md","api-discovery.md"],
+    "Operations":["architecture.md","workers.md","dashboard.md","shell.md","designs.md","security.md","passwords.md","deploy.md","binaries.md","docker.md","packages.md","api-discovery.md"],
     "Migrating":["migrate-nginx.md","migrate-apache.md","migrate-caddy.md"],
     "Lessons":["lessons.md","time-consuming-lessons.md"],
     "Reference":["compatibility.md","BENCHMARKS.md","reset.md","TestResults.md","roadmap.md","license.md"]};
