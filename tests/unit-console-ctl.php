@@ -97,6 +97,34 @@ exec("$ctl stop$srv 2>&1", $s3, $c3);
 exec("$ctl status$srv 2>&1", $s4, $c4);
 check('qbixctl stop stops it; status then says not running (exit 3)', array($c3, $c4), array(0, 3));
 
+// ── Process-table discovery: status with no --pid still finds it ─────────
+$sock2 = stream_socket_server('tcp://127.0.0.1:0'); $port2 = (int) substr(strrchr(stream_socket_get_name($sock2, false), ':'), 1); fclose($sock2);
+$pid2 = "$base/qbixserver2.pid";
+$srv2 = " --distribution=none --root=" . escapeshellarg($root) . " --port=$port2 --workers=1 --pid=" . escapeshellarg($pid2) . ' --log=' . escapeshellarg("$base/server2.log");
+exec("$ctl start$srv2 2>&1", $s5, $c5);
+check('qbixctl start for discovery', $c5, 0);
+exec("$ctl status --json 2>&1", $s6, $c6);
+$st6 = json_decode(implode('', $s6), true);
+check('qbixctl status without --pid discovers the running server', array($c6, $st6['running'] ?? null, $st6['discovered'] ?? null, $st6['listening'] ?? null), array(0, true, true, array($port2)));
+// Another site on the same engine is not "already running": discovery only
+// ever names a server these options describe, never a neighbour.
+$sock3 = stream_socket_server('tcp://127.0.0.1:0'); $port3 = (int) substr(strrchr(stream_socket_get_name($sock3, false), ':'), 1); fclose($sock3);
+$root3 = "$base/web3"; @mkdir($root3); file_put_contents("$root3/index.php", '<?php echo "three";');
+$pid3 = "$base/qbixserver3.pid";
+$srv3 = " --distribution=none --root=" . escapeshellarg($root3) . " --port=$port3 --workers=1 --pid=" . escapeshellarg($pid3) . ' --log=' . escapeshellarg("$base/server3.log");
+exec("$ctl start$srv3 2>&1", $s8, $c8);
+check('a second site starts while the first runs', array($c8, is_file($pid3)), array(0, true));
+exec("$ctl stop$srv3 2>&1", $s9, $c9);
+exec("$ctl status$srv2 --json 2>&1", $s10, $c10);
+$st10 = json_decode(implode('', $s10), true);
+check('stopping the second site leaves the first running', array($c9, $st10['running'] ?? null), array(0, true));
+exec("$ctl status --json --root=" . escapeshellarg("$base/nowhere") . " 2>&1", $s11, $c11);
+$st11 = json_decode(implode('', $s11), true);
+check('status for a site that is not running does not report a neighbour', $st11['running'] ?? null, false);
+
+exec("$ctl stop$srv2 2>&1", $s7, $c7);
+check('qbixctl stop after discovery', $c7, 0);
+
 $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
 foreach ($it as $f) { ($f->isDir() and !$f->isLink()) ? rmdir($f->getPathname()) : unlink($f->getPathname()); }
 rmdir($base);

@@ -98,6 +98,155 @@ class Q_WebServer_Ctl
 		return function_exists('posix_kill') ? @posix_kill($pid, 0) : false;
 	}
 
+	/** Parse the options out of a qbixserver.php command line read from /proc. */
+	static function parseProcArgs(array $args)
+	{
+		$opts = array();
+		for ($i = 0, $n = count($args); $i < $n; ++$i) {
+			$a = $args[$i];
+			if (!preg_match('/^--?([^=]+)(?:=(.*))?$/', $a, $m)) continue;
+			$name = $m[1];
+			if (isset($m[2])) {
+				$value = $m[2];
+			} elseif ($i + 1 < $n and !preg_match('/^-/', $args[$i + 1])) {
+				$value = $args[++$i];
+			} else {
+				$value = true;
+			}
+			$opts[$name] = $value;
+		}
+		return $opts;
+	}
+
+	/** The composer project root, when the source tree is inside vendor/<vendor>/<package>. */
+	static function projectRoot()
+	{
+		$dir = self::$sourceDir;
+		if (!preg_match('#/vendor/[^/]+/[^/]+$#', $dir)) return null;
+		$root = @realpath($dir . '/../../..') ?: dirname($dir, 3);
+		return is_dir($root) ? $root : null;
+	}
+
+	/**
+	 * Find a running qbixserver.php from /proc, for when the pid file is missing
+	 * or stale. Returns an array with pid, pidFile and the server's own options,
+	 * or null when nothing matching is found.
+	 */
+	static function discoverServer(array $opts, $lenient = false)
+	{
+		if (!is_dir('/proc')) return null;
+		$serverScript = self::serverScript();
+		$realServer = @realpath($serverScript) ?: $serverScript;
+		$projectRoot = self::projectRoot();
+		$candidates = array();
+		foreach (glob('/proc/[1-9]*', GLOB_ONLYDIR) as $pdir) {
+			$pid = (int) basename($pdir);
+			if ($pid <= 0 or $pid === getmypid()) continue;
+			if (!self::isAlive($pid)) continue;
+			$cmd = @file_get_contents("$pdir/cmdline");
+			if ($cmd === false or $cmd === '') continue;
+			$args = explode("\0", rtrim($cmd, "\0"));
+			$found = null;
+			foreach ($args as $i => $arg) {
+				if ($arg === '') continue;
+				if ($arg === $serverScript) { $found = $i; break; }
+				if (substr($arg, -14) === 'qbixserver.php') {
+					$real = $arg;
+					if ($arg[0] !== '/') {
+						$cwd = @readlink("$pdir/cwd");
+						if ($cwd !== false) $real = $cwd . '/' . $arg;
+					}
+					$real = @realpath($real) ?: $real;
+					if ($real === $realServer) { $found = $i; break; }
+				}
+			}
+			if ($found === null) continue;
+			$stat = @file_get_contents("$pdir/stat");
+			$ppid = 0;
+			if ($stat !== false and preg_match('/^\d+\s+\([^)]+\)\s+\S\s+(\d+)/', $stat, $m)) $ppid = (int) $m[1];
+			$procOpts = self::parseProcArgs(array_slice($args, $found + 1));
+			$candidates[] = array(
+				'pid' => $pid,
+				'ppid' => $ppid,
+				'opts' => $procOpts,
+				'pidFile' => isset($procOpts['pid']) ? (string) $procOpts['pid'] : null,
+			);
+		}
+		if (!$candidates) return null;
+		$pids = array_column($candidates, 'pid');
+		$masters = array_values(array_filter($candidates, function ($c) use ($pids) {
+			return !in_array($c['ppid'], $pids, true);
+		}));
+		if (!$masters) $masters = $candidates;
+		// Only a server that is this one: same pid file, same root (and port,
+		// when given), or same configuration file. Another site served by the
+		// same engine is not "already running" and must never be stopped.
+		$mine = array_values(array_filter($masters, function ($m) use ($opts) {
+			return self::sameServer($m, $opts);
+		}));
+		if (!$mine and $lenient and count($masters) === 1 and !self::identifies($opts)) {
+			// Nothing said which server: the only one running is the one meant.
+			$mine = $masters;
+		}
+		if (!$mine) return null;
+		$best = null; $bestScore = -1;
+		foreach ($mine as $m) {
+			$score = self::serverScore($m, $opts, $projectRoot);
+			if ($score > $bestScore) { $best = $m; $bestScore = $score; }
+		}
+		return $best;
+	}
+
+	/** Whether the options name a particular server (pid file, root, port or config). */
+	static function identifies(array $opts)
+	{
+		foreach (array('pid', 'root', 'port', 'config', 'conf-dir') as $o) {
+			if (isset($opts[$o]) and is_string($opts[$o]) and $opts[$o] !== '') return true;
+		}
+		return false;
+	}
+
+	/** Whether a discovered server is the one these options describe. */
+	static function sameServer(array $master, array $opts)
+	{
+		$p = $master['opts'];
+		$real = function ($f) { return @realpath((string) $f) ?: (string) $f; };
+		if (isset($opts['pid']) and is_string($opts['pid']) and $opts['pid'] !== '' and !empty($p['pid'])) {
+			return $real($opts['pid']) === $real($p['pid']);
+		}
+		if (isset($opts['config']) and is_string($opts['config']) and $opts['config'] !== '' and !empty($p['config'])) {
+			return $real($opts['config']) === $real($p['config']);
+		}
+		if (isset($opts['root']) and is_string($opts['root']) and $opts['root'] !== '' and !empty($p['root'])) {
+			if ($real($opts['root']) !== $real($p['root'])) return false;
+			if (isset($opts['port']) and $opts['port'] !== '' and isset($p['port'])) return (string) $opts['port'] === (string) $p['port'];
+			return true;
+		}
+		if (isset($opts['port']) and is_string($opts['port']) and $opts['port'] !== '' and isset($p['port'])) {
+			return (string) $opts['port'] === (string) $p['port'];
+		}
+		return false;
+	}
+
+	/** How well a discovered server matches the context we have. */
+	static function serverScore(array $master, array $opts, $projectRoot)
+	{
+		$score = 0;
+		$p = $master['opts'];
+		if (!empty($p['pid']) and is_file($p['pid']) and self::readPid($p['pid']) === $master['pid']) $score += 100;
+		if ($projectRoot !== null and !empty($p['root'])) {
+			$rootReal = @realpath($p['root']) ?: $p['root'];
+			$projReal = @realpath($projectRoot) ?: $projectRoot;
+			if ($rootReal === $projReal) $score += 50;
+			elseif (strpos($rootReal, $projReal) === 0) $score += 20;
+		}
+		foreach (array('conf-dir', 'config', 'root', 'host', 'port', 'https-port', 'workers', 'distribution') as $o) {
+			if (isset($opts[$o]) and isset($p[$o]) and (string) $opts[$o] === (string) $p[$o]) $score += 10;
+		}
+		if (!empty($p['pid'])) $score += 5;
+		return $score;
+	}
+
 	/**
 	 * Which of these TCP ports something is listening on: from /proc/net/tcp
 	 * where there is one, else by connecting to it.
@@ -210,6 +359,8 @@ class Q_WebServer_Ctl
 	{
 		$pidFile = self::pidFile($opts);
 		if (self::isAlive(self::readPid($pidFile))) return array(false, 'already running (pid ' . self::readPid($pidFile) . ')');
+		$found = self::discoverServer($opts);
+		if ($found) return array(false, 'already running (pid ' . $found['pid'] . ')' . ($found['pidFile'] ? ', pid file ' . $found['pidFile'] : ''));
 		$args = array(PHP_BINARY, self::serverScript(), '--pid=' . $pidFile);
 		foreach (array('conf-dir', 'config', 'root', 'host', 'port', 'https-port', 'workers', 'distribution') as $o) {
 			if (isset($opts[$o]) and is_string($opts[$o]) and $opts[$o] !== '') $args[] = "--$o=" . $opts[$o];
@@ -240,8 +391,21 @@ class Q_WebServer_Ctl
 	{
 		$pidFile = self::pidFile($opts);
 		$pid = self::readPid($pidFile);
+		$direct = false;
+		if (!self::isAlive($pid)) {
+			$found = self::discoverServer($opts, true);
+			if ($found) {
+				$pid = $found['pid'];
+				// Started without --pid: there is no file for --stop to read.
+				if ($found['pidFile']) $pidFile = $found['pidFile']; else $direct = true;
+			}
+		}
 		if (!self::isAlive($pid)) return array(true, 'not running');
-		@exec(implode(' ', array_map('escapeshellarg', array(PHP_BINARY, self::serverScript(), '--stop', '--pid=' . $pidFile))) . ' > /dev/null 2>&1');
+		if (($direct or $pidFile === '') and function_exists('posix_kill')) {
+			@posix_kill($pid, defined('SIGTERM') ? SIGTERM : 15);
+		} else {
+			@exec(implode(' ', array_map('escapeshellarg', array(PHP_BINARY, self::serverScript(), '--stop', '--pid=' . $pidFile))) . ' > /dev/null 2>&1');
+		}
 		$deadline = microtime(true) + (float) ($opts['wait'] ?? 15);
 		while (microtime(true) < $deadline) {
 			if (!self::isAlive($pid)) return array(true, "stopped (pid $pid)");
@@ -255,7 +419,19 @@ class Q_WebServer_Ctl
 	{
 		$pidFile = self::pidFile($opts);
 		$pid = self::readPid($pidFile);
+		$direct = false;
+		if (!self::isAlive($pid)) {
+			$found = self::discoverServer($opts, true);
+			if ($found) {
+				$pid = $found['pid'];
+				if ($found['pidFile']) $pidFile = $found['pidFile']; else $direct = true;
+			}
+		}
 		if (!self::isAlive($pid)) return array(false, 'not running');
+		if (($direct or $pidFile === '') and function_exists('posix_kill')) {
+			@posix_kill($pid, defined('SIGHUP') ? SIGHUP : 1);
+			return array(true, "reload requested (pid $pid)");
+		}
 		@exec(implode(' ', array_map('escapeshellarg', array(PHP_BINARY, self::serverScript(), '--reload', '--pid=' . $pidFile))) . ' > /dev/null 2>&1', $o, $code);
 		return $code === 0 ? array(true, "reload requested (pid $pid)") : array(false, 'reload failed');
 	}
@@ -266,9 +442,21 @@ class Q_WebServer_Ctl
 		$pidFile = self::pidFile($opts);
 		$pid = self::readPid($pidFile);
 		$alive = self::isAlive($pid);
-		$ports = self::configuredPorts($opts);
+		$discovered = null;
+		if (!$alive) {
+			$discovered = self::discoverServer($opts, true);
+			if ($discovered) {
+				$pid = $discovered['pid'];
+				$pidFile = $discovered['pidFile'] ?: $pidFile;
+				$alive = true;
+			}
+		}
+		$effective = $opts;
+		if ($discovered and is_array($discovered['opts'])) $effective = $discovered['opts'] + $opts;
+		$ports = self::configuredPorts($effective);
 		return array('running' => $alive, 'pid' => $alive ? $pid : null, 'pidFile' => $pidFile,
-			'ports' => $ports, 'listening' => $alive ? self::listening($ports) : array());
+			'ports' => $ports, 'listening' => $alive ? self::listening($ports) : array(),
+			'discovered' => $discovered ? true : false);
 	}
 
 	// ── Commands ─────────────────────────────────────────────────────────
@@ -363,7 +551,7 @@ class Q_WebServer_Ctl
 			$s = self::status($o);
 			if (!empty($o['json'])) { Q_Console::out(json_encode($s)); return $s['running'] ? 0 : 3; }
 			Q_Console::out('  running    : ' . ($s['running'] ? 'yes (pid ' . $s['pid'] . ')' : 'no'));
-			Q_Console::out('  pid file   : ' . $s['pidFile']);
+			Q_Console::out('  pid file   : ' . $s['pidFile'] . (!empty($s['discovered']) ? ' (discovered)' : ''));
 			Q_Console::out('  listening  : ' . ($s['listening'] ? implode(', ', $s['listening']) : 'nothing'));
 			return $s['running'] ? 0 : 3; // as LSB init scripts report "not running"
 		}, $srvOpts + array('json' => array('Report as JSON', false)), array('status'));

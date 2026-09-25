@@ -83,6 +83,15 @@ The server commands find the running server by its pid file: `--pid`, else
 writable, else the temporary directory. `server:start` writes the server's output
 to `--log` and waits up to `--wait` seconds (`20`) for it to listen.
 
+When the pid file is missing or stale, `status`, `stop` and `graceful` look for
+the server in the process table instead (on systems with `/proc`), and
+`status` then says `(discovered)`. Only a server the options describe is
+taken: the same pid file, the same root (and port, when given) or the same
+`--config`; with none of those given, the one server of this engine that is
+running. Another site served by the same engine is never stopped by mistake,
+and `start` refuses only when this site is already running. A discovered server
+started without `--pid` is signalled directly.
+
 A distribution of the engine can add commands of its own when it registers.
 
 ---
