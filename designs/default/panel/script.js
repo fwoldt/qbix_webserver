@@ -15,6 +15,10 @@ function getToken() {
   try { authToken = sessionStorage.getItem('Q_panel_token'); } catch(e) {}
   return authToken;
 }
+// Which view the page shows: 'panel', 'mustchange', 'signin' (see style.css).
+// The server sets it on the page from the session; the script only changes
+// it on a definite answer.
+function setAuthState(s) { document.body.setAttribute('data-auth', s); }
 function setToken(t) {
   authToken = t;
   try { sessionStorage.setItem('Q_panel_token', t); } catch(e) {}
@@ -42,6 +46,7 @@ async function api(path, body) {
 }
 
 function showAuthScreen(isSetup, info) {
+  setAuthState('signin');
   var main = document.getElementById('main-content');
   if (!main) {
     // Wrap everything after tabs in a container
@@ -138,6 +143,7 @@ async function doAuth(isSetup) {
     // If we were redirected here from another page, go back
     var next = new URLSearchParams(window.location.search).get('next');
     if (next) { window.location.href = next; return; }
+    setAuthState('panel');
     document.getElementById('auth-screen').remove();
     document.querySelector('.tabs').style.display = '';
     document.getElementById('main-content').style.display = '';
@@ -146,8 +152,20 @@ async function doAuth(isSetup) {
 }
 
 async function checkAuthAndInit() {
+  // The server has already looked at the session and opened the page on the
+  // right view (body data-auth). Trust it: a signed-in visitor gets the panel
+  // at once, and the sign-in form is only ever shown on a definite "not
+  // signed in" -- never while the answer is still on its way.
+  var state = document.body.getAttribute('data-auth');
+  if (state === 'panel') {
+    initPanel();      // a session that has ended since answers 401, and api() shows the form then
+    return;
+  }
+  if (state === 'mustchange') {
+    try { await api('system'); } catch (e) { /* api() showed the change form */ }
+    return;
+  }
   try {
-    // Quick auth check — system endpoint requires auth
     var r = await fetch(API + '/auth/login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -158,19 +176,27 @@ async function checkAuthAndInit() {
       showAuthScreen(true, data);
       return;
     }
-    // Has password — check if we have a valid token
-    var t = getToken();
-    if (!t) {
+    if (state === 'signin') {
+      // The server found no live session in this request.
       showAuthScreen(false, data);
       return;
     }
-    // Validate token by calling a real endpoint
-    try { await api('system'); initPanel(); }
-    catch (e) { /* showAuthScreen already called by api() */ }
+    // No state from the server (an older design): try the session this
+    // browser holds -- stored token or cookie -- before offering the form.
+    try { await api('system'); setAuthState('panel'); initPanel(); }
+    catch (e) { /* api() showed the right form */ }
   } catch (e) {
     showAuthScreen(false);
   }
 }
+
+// Back/forward restores the page as it was; check the session again quietly.
+// Only a definite 401 (inside api()) swaps the panel for the form.
+window.addEventListener('pageshow', function (e) {
+  if (e.persisted && document.body.getAttribute('data-auth') === 'panel') {
+    api('system').catch(function () {});
+  }
+});
 
 function initPanel() {
   detectTools();
@@ -1331,6 +1357,7 @@ function pwChecks(pw, rules) {
 }
 
 function showChangePassword(rules) {
+  setAuthState('mustchange');
   var main = document.getElementById('main-content');
   var tabs = document.querySelector('.tabs');
   if (!main && tabs) {
@@ -1394,6 +1421,7 @@ function showChangePassword(rules) {
       err.style.display = 'block';
       return;
     }
+    setAuthState('panel');
     screen.remove();
     if (tabs) tabs.style.display = '';
     if (main) main.style.display = '';

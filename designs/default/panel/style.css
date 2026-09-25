@@ -163,3 +163,14 @@ input:focus,select:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3p
 .qnav a:hover,.qnav a:focus-visible{color:#fff;border-color:var(--ac2)}
 .qnav a[aria-current=page]{color:var(--ac2);background:var(--glow)}
 @media(max-width:768px){.top .qnav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}
+/* The page opens on the view the server chose from the session (body
+   data-auth: panel, mustchange, signin; unknown only for a design or client
+   that did not say). The panel's tabs and sections paint only for a signed-in
+   session, so neither view flashes in place of the other on a reload. */
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) .tabs,
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) .content[id^="tab-"],
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) #main-content{display:none!important}
+#auth-pending{display:none}
+body[data-auth="unknown"] #auth-pending{display:block;max-width:380px;margin:40px auto}
+body[data-auth="unknown"] .tabs,body[data-auth="unknown"] .content[id^="tab-"]{visibility:hidden}
+.auth-pending-card{color:var(--dim);font-size:13px;display:flex;align-items:center;gap:8px}

@@ -168,12 +168,24 @@ input:focus,select:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3p
 .qnav a:hover,.qnav a:focus-visible{color:#fff;border-color:var(--ac2)}
 .qnav a[aria-current=page]{color:var(--ac2);background:var(--glow)}
 @media(max-width:768px){.top .qnav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}
-</style></head><body>
+/* The page opens on the view the server chose from the session (body
+   data-auth: panel, mustchange, signin; unknown only for a design or client
+   that did not say). The panel's tabs and sections paint only for a signed-in
+   session, so neither view flashes in place of the other on a reload. */
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) .tabs,
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) .content[id^="tab-"],
+body[data-auth]:not([data-auth="panel"]):not([data-auth="unknown"]) #main-content{display:none!important}
+#auth-pending{display:none}
+body[data-auth="unknown"] #auth-pending{display:block;max-width:380px;margin:40px auto}
+body[data-auth="unknown"] .tabs,body[data-auth="unknown"] .content[id^="tab-"]{visibility:hidden}
+.auth-pending-card{color:var(--dim);font-size:13px;display:flex;align-items:center;gap:8px}
+</style></head><body data-auth="panel">
 <div class="top">
   <h1><a href="/Q/panel" style="color:inherit;text-decoration:none"><img src="/Q/icon-48.png" alt="" width="24" height="24" style="vertical-align:middle;margin-right:6px">Velo<city> & {{brandHead}}</a></h1>
   <div class="qnav" role="navigation" aria-label="Server views"><a href="/Q/dashboard">Dashboard</a><a href="/Q/panel" aria-current="page">Control Panel</a><a href="/Q/docs">Documentation</a><a href="/Q/phpinfo">PHP Info</a><a href="/Q/health" title="Health, as JSON">Health</a><a href="/Q/metrics" title="Metrics, in Prometheus text format">Metrics</a></div>
   <div class="status"><span class="pulse"></span> Running</div>
 </div>
+<div id="auth-pending" class="content" aria-live="polite"><div class="card auth-pending-card"><span class="pulse"></span> Checking your session…</div></div>
 <div class="tabs">
   <div class="tab active" onclick="showTab('apps')">Apps</div>
   <div class="tab" onclick="showTab('domains')">Domains</div>
@@ -440,6 +452,10 @@ function getToken() {
   try { authToken = sessionStorage.getItem('Q_panel_token'); } catch(e) {}
   return authToken;
 }
+// Which view the page shows: 'panel', 'mustchange', 'signin' (see style.css).
+// The server sets it on the page from the session; the script only changes
+// it on a definite answer.
+function setAuthState(s) { document.body.setAttribute('data-auth', s); }
 function setToken(t) {
   authToken = t;
   try { sessionStorage.setItem('Q_panel_token', t); } catch(e) {}
@@ -467,6 +483,7 @@ async function api(path, body) {
 }
 
 function showAuthScreen(isSetup, info) {
+  setAuthState('signin');
   var main = document.getElementById('main-content');
   if (!main) {
     // Wrap everything after tabs in a container
@@ -563,6 +580,7 @@ async function doAuth(isSetup) {
     // If we were redirected here from another page, go back
     var next = new URLSearchParams(window.location.search).get('next');
     if (next) { window.location.href = next; return; }
+    setAuthState('panel');
     document.getElementById('auth-screen').remove();
     document.querySelector('.tabs').style.display = '';
     document.getElementById('main-content').style.display = '';
@@ -571,8 +589,20 @@ async function doAuth(isSetup) {
 }
 
 async function checkAuthAndInit() {
+  // The server has already looked at the session and opened the page on the
+  // right view (body data-auth). Trust it: a signed-in visitor gets the panel
+  // at once, and the sign-in form is only ever shown on a definite "not
+  // signed in" -- never while the answer is still on its way.
+  var state = document.body.getAttribute('data-auth');
+  if (state === 'panel') {
+    initPanel();      // a session that has ended since answers 401, and api() shows the form then
+    return;
+  }
+  if (state === 'mustchange') {
+    try { await api('system'); } catch (e) { /* api() showed the change form */ }
+    return;
+  }
   try {
-    // Quick auth check — system endpoint requires auth
     var r = await fetch(API + '/auth/login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -583,19 +613,27 @@ async function checkAuthAndInit() {
       showAuthScreen(true, data);
       return;
     }
-    // Has password — check if we have a valid token
-    var t = getToken();
-    if (!t) {
+    if (state === 'signin') {
+      // The server found no live session in this request.
       showAuthScreen(false, data);
       return;
     }
-    // Validate token by calling a real endpoint
-    try { await api('system'); initPanel(); }
-    catch (e) { /* showAuthScreen already called by api() */ }
+    // No state from the server (an older design): try the session this
+    // browser holds -- stored token or cookie -- before offering the form.
+    try { await api('system'); setAuthState('panel'); initPanel(); }
+    catch (e) { /* api() showed the right form */ }
   } catch (e) {
     showAuthScreen(false);
   }
 }
+
+// Back/forward restores the page as it was; check the session again quietly.
+// Only a definite 401 (inside api()) swaps the panel for the form.
+window.addEventListener('pageshow', function (e) {
+  if (e.persisted && document.body.getAttribute('data-auth') === 'panel') {
+    api('system').catch(function () {});
+  }
+});
 
 function initPanel() {
   detectTools();
@@ -1756,6 +1794,7 @@ function pwChecks(pw, rules) {
 }
 
 function showChangePassword(rules) {
+  setAuthState('mustchange');
   var main = document.getElementById('main-content');
   var tabs = document.querySelector('.tabs');
   if (!main && tabs) {
@@ -1819,6 +1858,7 @@ function showChangePassword(rules) {
       err.style.display = 'block';
       return;
     }
+    setAuthState('panel');
     screen.remove();
     if (tabs) tabs.style.display = '';
     if (main) main.style.display = '';

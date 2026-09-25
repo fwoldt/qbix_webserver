@@ -36,23 +36,40 @@ class Q_WebServer_Panel_Auth
 		return $path ?: Q_WebServer_Panel::panelConfigPath();
 	}
 
-	/** Its contents, or an empty array. */
+	/**
+	 * Its contents, or an empty array. A file caught half-written by a writer
+	 * that does not rename into place (an older server, a hand edit) is read
+	 * again rather than taken for "no password, no sessions".
+	 */
 	static function load($path = null)
 	{
 		$path = self::path($path);
-		if (!is_file($path)) return array();
-		$c = json_decode((string) @file_get_contents($path), true);
-		return is_array($c) ? $c : array();
+		for ($try = 0; $try < 5; ++$try) {
+			if (!is_file($path)) return array();
+			$raw = (string) @file_get_contents($path);
+			$c = json_decode($raw, true);
+			if (is_array($c)) return $c;
+			usleep(2000);
+		}
+		return array();
 	}
 
-	/** Write it, readable by the server's user only. */
+	/**
+	 * Write it, readable by the server's user only. Written beside the file
+	 * and renamed into place, so a reader in another worker never sees it
+	 * truncated: a plain write empties the file first, and a panel request
+	 * landing in that moment read "no password, no sessions" and showed a
+	 * signed-in visitor the sign-in form.
+	 */
 	static function save(array $config, $path = null)
 	{
 		$path = self::path($path);
 		$dir = dirname($path);
 		if (!is_dir($dir)) @mkdir($dir, 0700, true);
-		if (@file_put_contents($path, json_encode($config, JSON_PRETTY_PRINT)) === false) return false;
-		@chmod($path, 0600);
+		$tmp = $path . '.' . getmypid() . '.' . bin2hex(random_bytes(4)) . '.tmp';
+		if (@file_put_contents($tmp, json_encode($config, JSON_PRETTY_PRINT)) === false) return false;
+		@chmod($tmp, 0600);
+		if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
 		return true;
 	}
 

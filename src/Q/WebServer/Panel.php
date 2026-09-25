@@ -84,7 +84,9 @@ class Q_WebServer_Panel
 
 		if ($path === '/Q/panel' || $path === '/Q/panel/') {
 			return array('status' => 200, 'body' => self::renderPanel($parsed),
-				'headers' => array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'no-store'));
+				// It opens on the view the session calls for (initialAuthState()),
+				// so no cache may keep one visitor's first paint for another.
+				'headers' => array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'no-store', 'Vary' => 'Cookie'));
 		}
 
 		if (strpos($path, '/Q/api/') !== 0) return null;
@@ -2671,13 +2673,30 @@ class Q_WebServer_Panel
 
 	// ── Panel HTML ───────────────────────────────────────
 
+	/**
+	 * Which view the panel page opens on, decided here from the session the
+	 * request carries, so the page is right from its first paint: 'panel' for
+	 * a live session, 'mustchange' for one that must change the default key
+	 * first, 'signin' otherwise. The page used to open on the panel and let its
+	 * script ask the server afterwards, so a reload showed one view and then
+	 * the other.
+	 * @method initialAuthState
+	 * @static
+	 * @param {array} $parsed
+	 * @return {string}
+	 */
+	static function initialAuthState($parsed)
+	{
+		$s = Q_WebServer_Panel_Auth::sessionFromRequest($parsed);
+		if ($s === null) return 'signin';
+		return $s['mustChange'] ? 'mustchange' : 'panel';
+	}
+
 	static function renderPanel($parsed)
 	{
 		$host = $parsed['headers']['host'] ?? 'localhost:8080';
 		$wsUrl = "ws://$host/Q/ws";
-		// The panel HTML is too large for inline — load from file
-		// or generate. For now, inline a functional SPA.
-		return self::panelHtml($host, $wsUrl);
+		return self::panelHtml($host, $wsUrl, self::initialAuthState($parsed));
 	}
 
 	/**
@@ -2701,7 +2720,7 @@ class Q_WebServer_Panel
 		return $page !== null ? Q_WebServer_Shell::decorate($page) : Q_WebServer::renderErrorPage(403, '/Q/panel', $messageHtml);
 	}
 
-	static function panelHtml($host, $wsUrl)
+	static function panelHtml($host, $wsUrl, $authState = 'unknown')
 	{
 		$brand = class_exists('Q_WebServer', false)
 			? Q_WebServer::brand() : 'Qbix';
@@ -2713,6 +2732,7 @@ class Q_WebServer_Panel
 		$page = Q_WebServer_Design::render('panel', array(
 			'brandHead' => Q_WebServer_Brand::headTags($brand . ' Control Panel', '/Q/panel'),
 			'brand'     => htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'),
+			'authState' => in_array($authState, array('panel', 'mustchange', 'signin'), true) ? $authState : 'unknown',
 		));
 		return $page !== null ? Q_WebServer_Shell::decorate($page)
 			: '<!DOCTYPE html><html><body><p>The panel design is missing (designs/default/panel).</p></body></html>';
