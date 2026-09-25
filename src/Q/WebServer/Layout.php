@@ -63,19 +63,51 @@ class Q_WebServer_Layout
 	 */
 	static $overlays = array();
 
+	/** The base tree's state directory (/var/lib counterpart of /etc/qbix), and its variable. */
+	const STATE_DIR = '/var/lib/qbix';
+	const STATE_ENV = 'QBIX_STATE_DIR';
+
 	/**
 	 * Stack another tree on top of the base one.
 	 * @method addOverlay
 	 * @static
 	 * @param {string} $dir its standard place, e.g. /etc/example
 	 * @param {string|null} $env a variable that, when set, moves it
+	 * @param {string|null} $stateDir its state directory, e.g. /var/lib/example
 	 */
-	static function addOverlay($dir, $env = null)
+	static function addOverlay($dir, $env = null, $stateDir = null)
 	{
 		foreach (self::$overlays as $o) {
 			if ($o[0] === $dir) return;
 		}
-		self::$overlays[] = array(rtrim($dir, '/'), $env);
+		self::$overlays[] = array(rtrim($dir, '/'), $env, $stateDir === null ? null : rtrim($stateDir, '/'));
+	}
+
+	/**
+	 * The state directory that goes with a configuration directory: what the
+	 * server writes and keeps between runs (the control panel's sessions,
+	 * say), as /var/lib is to /etc. Q.webserver.stateDir or QBIX_STATE_DIR
+	 * when set; otherwise the counterpart of the tree in use -- the top
+	 * overlay's own, when it names one, else /var/lib/qbix for the base tree.
+	 * Null for a directory that is not the base or an overlay, and for none.
+	 * @method stateDir
+	 * @static
+	 * @param {string|null} $confDir the directory in use (the top of the stack)
+	 * @return {string|null}
+	 */
+	static function stateDir($confDir)
+	{
+		$cfg = class_exists('Q_Config', false) ? Q_Config::get('Q', 'webserver', 'stateDir', null) : null;
+		if (is_string($cfg) and $cfg !== '') return rtrim($cfg, '/');
+		$env = getenv(self::STATE_ENV);
+		if (is_string($env) and $env !== '') return rtrim($env, '/');
+		if ($confDir === null or $confDir === '') return null;
+		$confDir = rtrim($confDir, '/');
+		foreach (array_reverse(self::$overlays) as $o) {
+			if (self::place($o[1], $o[0]) === $confDir) return $o[2] ?? null;
+		}
+		if (self::place(self::ENV, self::$standardDirs[0] ?? null) === $confDir) return self::STATE_DIR;
+		return null;
 	}
 
 	/**

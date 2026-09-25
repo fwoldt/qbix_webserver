@@ -239,6 +239,19 @@ class Q_WebServer
 			fwrite(STDERR, $msg . "\n");
 			exit(1);
 		}
+		// The control panel's store: created and, once, moved from the old
+		// place here, in the parent, before any worker reads it. A store that
+		// fails the trust rule locks the panel; say so at start, not first
+		// at sign-in.
+		try {
+			$d = Q_WebServer_Panel_Store::dirs();
+			$problem = Q_WebServer_Panel_Store::problem();
+			fwrite(STDERR, $problem === null
+				? "  panel: credentials in {$d['acl']}, sessions in {$d['sessions']}\n"
+				: "  panel: LOCKED, sign-in refused: $problem\n  panel: run `qbixctl panel:check` for the fix\n");
+		} catch (Throwable $e) {
+			fwrite(STDERR, '  panel: cannot check its storage (' . $e->getMessage() . ")\n");
+		}
 		if (Q_Config::get('Q', 'webserver', 'extensionsCheck', true) === false) return;
 		try {
 			$w = Q_WebServer_Extensions::startupWarning();

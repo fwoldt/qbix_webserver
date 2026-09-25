@@ -34,6 +34,9 @@ class Q_WebServer_Distribution_Vc
 	const ETC = '/etc/vc';
 	const ENV = 'VC_CONF_DIR';
 
+	/** Its state directory, the /var/lib counterpart of /etc/vc (the panel's sessions live here). */
+	const STATE = '/var/lib/vc';
+
 	/**
 	 * Called once at start-up when this distribution is selected.
 	 * @method register
@@ -41,7 +44,7 @@ class Q_WebServer_Distribution_Vc
 	 */
 	static function register()
 	{
-		Q_WebServer_Layout::addOverlay(self::ETC, self::ENV);
+		Q_WebServer_Layout::addOverlay(self::ETC, self::ENV, self::STATE);
 		// Exponential installations, any release, in the panel's Apps and
 		// Frameworks tabs and the autohost: ahead of the generic detectors.
 		if (!class_exists('Q_WebServer_Framework', false)) {

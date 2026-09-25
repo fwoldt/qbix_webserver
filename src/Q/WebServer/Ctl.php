@@ -293,7 +293,11 @@ class Q_WebServer_Ctl
 			$appDir = $root === false ? false : dirname($root);
 		}
 		if ($appDir === false or !is_dir($appDir)) return null;
-		return rtrim($appDir, '/') . '/local/panel.json';
+		// Where the server keeps it: the panel's store, for this application
+		// and the configuration context() loaded (acl/ under the conf tree,
+		// or APP_DIR/local without one).
+		Q_WebServer_Panel_Store::setAppDir($appDir);
+		return Q_WebServer_Panel_Store::aclFile();
 	}
 
 	/**
@@ -506,6 +510,10 @@ class Q_WebServer_Ctl
 				Q_Console::err('no such directory: ' . ($o['app'] ?? $o['root'] ?? getcwd() . '/web'));
 				return 1;
 			}
+			if (($problem = Q_WebServer_Panel_Store::problem()) !== null) {
+				Q_Console::err(Q_WebServer_Panel_Store::problemMessage($problem));
+				return 1;
+			}
 			$context = Q_WebServer_Panel_Auth::policyContext(null, $file);
 			if (!empty($o['generate'])) {
 				$password = Q_WebServer_Panel_PasswordPolicy::generate($context);
@@ -533,6 +541,36 @@ class Q_WebServer_Ctl
 			'app' => 'The application directory, for a server run with --app',
 			'password' => 'The password (default: asked for, or read from standard input)',
 			'generate' => array('Make a strong random password, set it, and print it once', false),
+		));
+		$C::add('panel:check', 'Show where the control panel keeps its credentials and sessions, and whether they can be trusted', function ($a, $o) {
+			self::context($o);
+			if (self::panelPasswordFile($o) === null) {
+				Q_Console::err('no such directory: ' . ($o['app'] ?? $o['root'] ?? getcwd() . '/web'));
+				return 1;
+			}
+			$r = Q_WebServer_Panel_Store::report();
+			if (!empty($o['json'])) { Q_Console::out(json_encode($r, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); return $r['ok'] ? 0 : 1; }
+			Q_Console::out('control panel storage (' . array('config' => 'set in Q.panel', 'layout' => 'from the configuration tree', 'app' => 'beside the application')[$r['source']] . ')');
+			foreach ($r['rows'] as $row) {
+				Q_Console::out(sprintf('  %-4s %-13s %s%s', $row['ok'] ? 'ok' : 'FAIL', $row['label'], $row['path'],
+					$row['owner'] ? '  [' . $row['owner'] . ', ' . $row['mode'] . ']' : ''));
+				if ($row['why']) Q_Console::out('       ' . $row['why']);
+			}
+			if (!empty($r['migration']['action']) and $r['migration']['action'] !== 'none') {
+				Q_Console::out('  migration: ' . $r['migration']['action'] . ' - ' . ($r['migration']['why'] ?? ''));
+			}
+			if ($r['ok']) {
+				Q_Console::out('trusted: sign-in is allowed; ' . $r['sessionCount'] . ' session file(s)');
+				return 0;
+			}
+			Q_Console::err('LOCKED: ' . $r['problem']);
+			Q_Console::err('sign-in, the default key and every session are refused until this is fixed:');
+			foreach ($r['fix'] as $f) Q_Console::err('  ' . $f);
+			return 1;
+		}, self::$contextOptions + array(
+			'root' => 'The document root the server runs with (default: ./web)',
+			'app' => 'The application directory, for a server run with --app',
+			'json' => array('Print the report as JSON', false),
 		));
 		$C::add('cache:clear', 'Invalidate every page in the response cache', function ($a, $o) use ($say) {
 			self::context($o);

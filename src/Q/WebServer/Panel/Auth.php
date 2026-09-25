@@ -37,12 +37,35 @@ class Q_WebServer_Panel_Auth
 	}
 
 	/**
+	 * Whether $path means the panel's own store (Q_WebServer_Panel_Store:
+	 * acl/ and sessions/, under the trust rule) rather than a single file a
+	 * caller names -- a test's, say, which keeps the one-file format.
+	 */
+	static function isStore($path = null)
+	{
+		return $path === null or $path === '' or $path === Q_WebServer_Panel_Store::aclFile();
+	}
+
+	/** Why the panel's store cannot be believed (sign-in is then refused), or null. */
+	static function storageProblem($path = null)
+	{
+		return self::isStore($path) ? Q_WebServer_Panel_Store::problem() : null;
+	}
+
+	/** The answer to a sign-in, setup or change while the store is refused. */
+	protected static function lockedAnswer($problem)
+	{
+		return array(503, array('error' => Q_WebServer_Panel_Store::problemMessage($problem), 'locked' => true));
+	}
+
+	/**
 	 * Its contents, or an empty array. A file caught half-written by a writer
 	 * that does not rename into place (an older server, a hand edit) is read
 	 * again rather than taken for "no password, no sessions".
 	 */
 	static function load($path = null)
 	{
+		if (self::isStore($path)) return Q_WebServer_Panel_Store::aclLoad();
 		$path = self::path($path);
 		for ($try = 0; $try < 5; ++$try) {
 			if (!is_file($path)) return array();
@@ -63,6 +86,7 @@ class Q_WebServer_Panel_Auth
 	 */
 	static function save(array $config, $path = null)
 	{
+		if (self::isStore($path)) return Q_WebServer_Panel_Store::aclSave($config);
 		$path = self::path($path);
 		$dir = dirname($path);
 		if (!is_dir($dir)) @mkdir($dir, 0700, true);
@@ -129,6 +153,9 @@ class Q_WebServer_Panel_Auth
 	/** Whether the default key signs in: no password chosen, and not switched off. */
 	static function defaultInForce($path = null)
 	{
+		// A store that fails the trust rule reads as "no password": the
+		// default key must not become the way in.
+		if (self::storageProblem($path) !== null) return false;
 		return self::defaultPassword() !== null and !self::hasPassword($path);
 	}
 
@@ -174,10 +201,30 @@ class Q_WebServer_Panel_Auth
 	 */
 	static function storePassword($password, $path = null, $revokeSessions = false, $keepToken = null, array $context = null)
 	{
+		$store = self::isStore($path);
 		$path = self::path($path);
-		$failed = Q_WebServer_Panel_PasswordPolicy::check($password, $context ?? self::policyContext(null, $path));
+		if ($store and ($problem = Q_WebServer_Panel_Store::problem()) !== null) {
+			return array('ok' => false, 'error' => Q_WebServer_Panel_Store::problemMessage($problem), 'locked' => true);
+		}
+		$failed = Q_WebServer_Panel_PasswordPolicy::check($password, $context ?? self::policyContext(null, $store ? null : $path));
 		if ($failed) {
 			return array('ok' => false, 'error' => 'The password does not meet the rules.', 'failed' => $failed);
+		}
+		if ($store) {
+			$hash = self::hash($password);
+			$ok = Q_WebServer_Panel_Store::aclUpdate(function (array $c) use ($hash) {
+				$c['passwordHash'] = $hash;
+				$c['default'] = false;
+				return $c;
+			});
+			if (!$ok) return array('ok' => false, 'error' => 'Failed to write ' . $path);
+			// Sessions end, but the one kept; every must-change mark is cleared.
+			if ($keepToken !== null or $revokeSessions) {
+				Q_WebServer_Panel_Store::sessionsRevoke($keepToken);
+			} else {
+				Q_WebServer_Panel_Store::sessionsClearMustChange();
+			}
+			return array('ok' => true, 'path' => $path);
 		}
 		$config = self::load($path);
 		$config['passwordHash'] = self::hash($password);
@@ -267,6 +314,7 @@ class Q_WebServer_Panel_Auth
 	static function sessionLive($token, $path = null)
 	{
 		if ($token === '' or $token === null) return false;
+		if (self::isStore($path)) return Q_WebServer_Panel_Store::sessionGet($token) !== null;
 		$s = self::load($path)['sessions'] ?? array();
 		return is_array($s) and isset($s[$token]) and $s[$token] > time();
 	}
@@ -274,6 +322,10 @@ class Q_WebServer_Panel_Auth
 	/** Whether a session must change the default key before anything else. */
 	static function mustChange($token, $path = null)
 	{
+		if (self::isStore($path)) {
+			$s = Q_WebServer_Panel_Store::sessionGet($token);
+			return $s !== null and !empty($s['mustChange']);
+		}
 		$m = self::load($path)['mustChange'] ?? array();
 		return is_array($m) and !empty($m[$token]);
 	}
@@ -281,6 +333,10 @@ class Q_WebServer_Panel_Auth
 	/** Mark, or clear, a session as having to change the default key. */
 	static function setMustChange($token, $on, $path = null)
 	{
+		if (self::isStore($path)) {
+			Q_WebServer_Panel_Store::sessionSetMustChange($token, $on);
+			return;
+		}
 		$config = self::load($path);
 		$m = is_array($config['mustChange'] ?? null) ? $config['mustChange'] : array();
 		if ($on) $m[$token] = true; else unset($m[$token]);
@@ -320,6 +376,7 @@ class Q_WebServer_Panel_Auth
 	{
 		$ip = (string) ($parsed['clientIp'] ?? $parsed['_remoteAddr'] ?? '');
 		$password = $body['password'] ?? '';
+		if (($problem = self::storageProblem()) !== null) return self::lockedAnswer($problem);
 		if (!is_string($password) or $password === '') {
 			if (self::hasPassword()) return array(200, array('needsSetup' => false));
 			if (self::defaultAllowedFor($parsed)) {
@@ -352,12 +409,24 @@ class Q_WebServer_Panel_Auth
 		}
 
 		$now = time();
-		$sessions = is_array($config['sessions'] ?? null) ? $config['sessions'] : array();
-		foreach ($sessions as $t => $exp) if ($exp < $now) unset($sessions[$t]);
 		$token = bin2hex(random_bytes(32));
-		$sessions[$token] = $now + self::SESSION_SECONDS;
-		$config['sessions'] = $sessions;
-		self::save($config);
+		if (self::isStore()) {
+			// One file per session: sign-ins in different workers never meet.
+			if (!empty($rehash)) {
+				$newHash = $config['passwordHash'];
+				Q_WebServer_Panel_Store::aclUpdate(function (array $c) use ($newHash) { $c['passwordHash'] = $newHash; return $c; });
+			}
+			if (!Q_WebServer_Panel_Store::sessionPut($token, $now + self::SESSION_SECONDS)) {
+				return self::lockedAnswer('cannot write the session file in ' . Q_WebServer_Panel_Store::dirs()['sessions']);
+			}
+			if (mt_rand(1, 20) === 1) Q_WebServer_Panel_Store::sessionsPrune();
+		} else {
+			$sessions = is_array($config['sessions'] ?? null) ? $config['sessions'] : array();
+			foreach ($sessions as $t => $exp) if ($exp < $now) unset($sessions[$t]);
+			$sessions[$token] = $now + self::SESSION_SECONDS;
+			$config['sessions'] = $sessions;
+			self::save($config);
+		}
 		Q_WebServer_Panel_Events::notify('login.succeeded', array('token' => $token, 'ip' => $ip, 'default' => $usedDefault));
 		return array(200, array('ok' => true, 'token' => $token, 'mustChange' => self::mustChange($token),
 			'rules' => Q_WebServer_Panel_PasswordPolicy::rules()));
@@ -366,17 +435,14 @@ class Q_WebServer_Panel_Auth
 	/** auth/setup: the first password, where no password and no default are in force. */
 	static function setup($parsed, array $body)
 	{
+		if (($problem = self::storageProblem()) !== null) return self::lockedAnswer($problem);
 		if (self::hasPassword()) {
 			return array(409, array('error' => 'Password already set. Use auth/login.', 'needsSetup' => false));
 		}
 		$r = self::storePassword((string) ($body['password'] ?? ''), null, true, null, self::policyContext($parsed));
 		if (!$r['ok']) return array(400, $r);
-		$config = self::load();
 		$token = bin2hex(random_bytes(32));
-		$sessions = is_array($config['sessions'] ?? null) ? $config['sessions'] : array();
-		$sessions[$token] = time() + self::SESSION_SECONDS;
-		$config['sessions'] = $sessions;
-		self::save($config);
+		Q_WebServer_Panel_Store::sessionPut($token, time() + self::SESSION_SECONDS);
 		Q_WebServer_Panel_Events::notify('password.changed', array('token' => $token,
 			'ip' => (string) ($parsed['clientIp'] ?? '')));
 		return array(200, array('ok' => true, 'token' => $token));
@@ -388,6 +454,7 @@ class Q_WebServer_Panel_Auth
 	 */
 	static function change($parsed, array $body)
 	{
+		if (($problem = self::storageProblem()) !== null) return self::lockedAnswer($problem);
 		$token = self::requestToken($parsed);
 		$new = (string) ($body['password'] ?? $body['newPassword'] ?? '');
 		$config = self::load();
@@ -406,6 +473,10 @@ class Q_WebServer_Panel_Auth
 	static function logout($parsed)
 	{
 		$token = self::requestToken($parsed);
+		if (self::isStore()) {
+			if ($token !== '') Q_WebServer_Panel_Store::sessionDelete($token);
+			return array(200, array('ok' => true));
+		}
 		$config = self::load();
 		if ($token !== '' and isset($config['sessions'][$token])) {
 			unset($config['sessions'][$token], $config['mustChange'][$token]);
