@@ -2221,6 +2221,8 @@ class Q_WebServer_Compat
 			unset($conf['_webserver']);
 		}
 		Q_Config::merge(array('Q' => array('compat' => $conf)));
+		// Which preset is in force, for the panel's Apps and Frameworks tabs.
+		Q_Config::set('Q', 'webserver', 'preset', $preset);
 		if (is_array($webserver)) {
 			Q_Config::merge(array('Q' => array('webserver' => $webserver)));
 		}

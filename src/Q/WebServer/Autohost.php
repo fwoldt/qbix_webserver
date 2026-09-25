@@ -531,27 +531,11 @@ class Q_WebServer_Autohost
 	 */
 	static function detectFramework($appDir)
 	{
-		$appDir = rtrim($appDir, '/\\');
-		if (is_file("$appDir/config/app.json") || is_file("$appDir/web/Q.php")) return 'qbix';
-		if (is_file("$appDir/artisan")) {
-			// October CMS and Statamic are Laravel-based
-			if (is_dir("$appDir/modules/cms")) return 'laravel'; // October
-			if (is_dir("$appDir/content")) return 'laravel';     // Statamic
-			return 'laravel';
-		}
-		if (is_file("$appDir/bin/console") && is_dir("$appDir/config/packages")) return 'symfony';
-		if (is_file("$appDir/wp-config.php") || is_file("$appDir/wp-login.php")) return 'wordpress';
-		if (is_file("$appDir/web/core/lib/Drupal.php")) return 'drupal';
-		if (is_dir("$appDir/administrator") && is_file("$appDir/index.php")) return 'joomla';
-		if (is_file("$appDir/bin/magento") || is_file("$appDir/app/etc/env.php")) return 'magento';
-		if (is_dir("$appDir/typo3") && is_dir("$appDir/typo3conf")) return 'typo3';
-		if (is_file("$appDir/craft") || (is_dir("$appDir/config") && is_file("$appDir/config/general.php"))) return 'craftcms';
-		if (is_file("$appDir/version.php") && is_dir("$appDir/mod")) return 'moodle';
-		if (is_file("$appDir/LocalSettings.php")) return 'mediawiki';
-		if (is_file("$appDir/status.php") && is_file("$appDir/config/config.php")) return 'nextcloud';
-		if (is_file("$appDir/classes/PrestaShopAutoload.php") || is_file("$appDir/config/defines.inc.php")) return 'prestashop';
-		if (is_dir("$appDir/module") && is_file("$appDir/config/modules.config.php")) return 'laminas';
-		if (is_dir("$appDir/fuel") && is_file("$appDir/fuel/app/bootstrap.php")) return 'fuelphp';
-		return null;
+		// The same registry the panel's Apps and Frameworks tabs use, so the
+		// three always agree. Plain PHP and bare Composer projects are not a
+		// framework here, as before.
+		$d = Q_WebServer_Framework::detect(rtrim($appDir, '/\\'));
+		if (!$d or in_array($d['kind'], array('php', 'composer'), true)) return null;
+		return $d['kind'];
 	}
 }

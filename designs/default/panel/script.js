@@ -279,8 +279,54 @@ function showTab(name) {
 }
 
 // Apps
+// Text from the server (names, paths, versions a detector read) is escaped
+// before it goes into markup.
+function escH(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+
+// One detected application: its name, release, where it lives, what it
+// says about itself, links while it is the one being served, and its tools.
+function installationCard(d, withCommands) {
+  var h = '<div class="card inst-card" data-kind="' + escH(d.kind) + '" style="margin-bottom:12px">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">';
+  h += '<h3 style="font-size:15px;margin:0">' + escH(d.title || d.name) + '</h3>';
+  h += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">';
+  if (d.serving) h += '<span class="badge-serving" style="font-size:12px;color:var(--grn)">● serving on this port</span>';
+  if (d.serving && d.links) d.links.forEach(function(l){ h += '<a class="btn btn-sm btn-ghost" href="' + escH(l.url) + '" target="_blank" rel="noopener">' + escH(l.label) + '</a>'; });
+  if (withCommands && d.kind !== 'qbix') h += '<button class="btn btn-sm btn-ghost" onclick="loadFwPackages(\'' + escH(d.kind) + '\')">Packages</button>';
+  h += '</div></div>';
+  h += '<div style="font-size:12px;color:var(--dim);margin:6px 0;word-break:break-all">' + escH(d.dir) + (d.webRoot && d.webRoot !== d.dir ? ' &nbsp;·&nbsp; web root ' + escH(d.webRoot) : '') + '</div>';
+  var det = d.details || {};
+  var keys = Object.keys(det);
+  if (keys.length) {
+    h += '<dl class="inst-details" style="display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:12px;margin:6px 0">';
+    keys.forEach(function(k){ h += '<dt style="color:var(--dim)">' + escH(k) + '</dt><dd style="margin:0;word-break:break-word">' + escH(det[k]) + '</dd>'; });
+    h += '</dl>';
+  }
+  if (withCommands) {
+    if (d.hasCli === false) h += '<div style="color:var(--yel);font-size:12px;margin:8px 0">Its command-line tool was not found; install it for full management.</div>';
+    if (d.commands && d.commands.length) {
+      h += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">';
+      d.commands.forEach(function(c){
+        h += '<button class="btn btn-ghost' + (c.disruptive ? ' btn-caution' : '') + '" style="font-size:12px;padding:5px 12px" data-kind="' + escH(d.kind) + '" data-dir="' + escH(d.dir) + '" data-cmd="' + escH(c.cmd) + '" data-name="' + escH(c.name) + '" data-disruptive="' + (c.disruptive ? '1' : '') + '" onclick="runFwCmdBtn(this)">' + escH(c.name) + (c.disruptive ? ' …' : '') + '</button>';
+      });
+      h += '</div>';
+    }
+    h += '<pre id="fw-output-' + escH(d.kind) + '" style="display:none;margin-top:12px;max-height:300px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>';
+    h += '<div id="fw-packages-' + escH(d.kind) + '" style="display:none;margin-top:12px"></div>';
+  }
+  return h + '</div>';
+}
+
+async function loadInstallations(list) {
+  var el = document.getElementById('installations-list');
+  if (!el) return;
+  if (!list || !list.length) { el.innerHTML = '<div class="card"><p style="color:var(--dim)">No PHP application found in the document root, its parent, the apps directory or Q.panel.appRoots.</p></div>'; return; }
+  el.innerHTML = list.map(function(d){ return installationCard(d, false); }).join('');
+}
+
 async function loadApps() {
   var d = await api('apps');
+  loadInstallations(d.installations);
   var el = document.getElementById('apps-list');
   // Show appsDir
   document.getElementById('apps-dir-path').textContent = d.appsDir || '(not set)';
@@ -1040,46 +1086,35 @@ async function loadFrameworks() {
   var r = await api('frameworks');
   var el = document.getElementById('fw-list');
   if (!r.frameworks || !r.frameworks.length) {
-    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No known frameworks detected in the current document root.</p><p style="font-size:12px;color:var(--dim);margin-top:8px">Supported: Laravel, Symfony, WordPress, Drupal, Joomla</p></div>';
+    el.innerHTML = '<div class="card"><p style="color:var(--dim)">No known framework or CMS found in the document root, its parent, the apps directory or Q.panel.appRoots.</p><p style="font-size:12px;color:var(--dim);margin-top:8px">Recognised: Laravel, Symfony, WordPress, Drupal, Joomla, Magento, TYPO3, Craft CMS, Moodle, MediaWiki, Nextcloud, PrestaShop, Laminas, FuelPHP, Qbix, and whatever this distribution adds.</p></div>';
     return;
   }
-  el.innerHTML = r.frameworks.map(function(fw) {
-    var info = '<div class="card" style="margin-bottom:12px">';
-    info += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">';
-    info += '<h3 style="font-size:15px;margin-bottom:0">' + fw.name + '</h3>';
-    info += '<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadFwPackages(\'' + fw.framework + '\')">Packages</button>';
-    info += '</div>';
-    info += '<div style="font-size:12px;color:var(--dim);margin:6px 0">' + fw.dir + '</div>';
-    if (fw.appName) info += '<div style="font-size:12px;margin-bottom:4px">App: <strong>' + fw.appName + '</strong> (' + (fw.appEnv||'') + ')' + (fw.debug ? ' <span style="color:var(--yel)">DEBUG ON</span>' : '') + '</div>';
-    if (fw.hasCli === false) {
-      info += '<div style="color:var(--yel);font-size:12px;margin:8px 0">CLI tool not found. Install it for full management.</div>';
-    }
-    if (fw.commands && fw.commands.length) {
-      info += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">';
-      fw.commands.forEach(function(cmd) {
-        info += '<button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="runFwCmd(\'' + fw.framework + '\',\'' + cmd.cmd.replace(/'/g,"\\'") + '\',this)">' + cmd.name + '</button>';
-      });
-      info += '</div>';
-    }
-    info += '<pre id="fw-output-' + fw.framework + '" style="display:none;margin-top:12px;max-height:300px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre>';
-    info += '<div id="fw-packages-' + fw.framework + '" style="display:none;margin-top:12px"></div>';
-    info += '</div>';
-    return info;
-  }).join('');
+  el.innerHTML = r.frameworks.map(function(d){ return installationCard(d, true); }).join('');
 }
 
-async function runFwCmd(framework, cmd, btn) {
-  var el = document.getElementById('fw-output-' + framework);
+// Disruptive commands ask first; the server refuses them without confirm too.
+async function runFwCmdBtn(btn) {
+  var kind = btn.dataset.kind, cmd = btn.dataset.cmd, dir = btn.dataset.dir;
+  if (btn.dataset.disruptive && !confirm(btn.dataset.name + '?\n\nThis changes the running installation.')) return;
+  // The output box of this card: two installations of one kind each have their own.
+  var card = btn.closest('.inst-card');
+  var el = (card && card.querySelector('pre[id^="fw-output-"]')) || document.getElementById('fw-output-' + kind);
   el.style.display = 'block';
-  el.textContent = 'Running ' + cmd + '...';
+  el.textContent = 'Running ' + btn.dataset.name + '…';
   btn.disabled = true;
   try {
-    var r = await api('frameworks/run', {framework: framework, cmd: cmd});
-    el.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done');
+    var r = await api('frameworks/run', {framework: kind, cmd: cmd, dir: dir, confirm: !!btn.dataset.disruptive});
+    el.textContent = (r.cmd ? '$ ' + r.cmd + '\n\n' : '') + (r.output || r.error || 'Done') + (r.exit ? '\n[exit ' + r.exit + ']' : '');
   } catch(e) {
     el.textContent = 'Error: ' + e.message;
   }
   btn.disabled = false;
+}
+
+// Kept for older callers: runs a command by kind and id, asking first.
+async function runFwCmd(framework, cmd, btn) {
+  btn.dataset.kind = framework; btn.dataset.cmd = cmd; btn.dataset.name = btn.dataset.name || cmd;
+  return runFwCmdBtn(btn);
 }
 
 async function loadFwPackages(framework) {

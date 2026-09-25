@@ -437,8 +437,12 @@ class Q_WebServer_Panel
 	{
 		$appsDir = self::appsDir();
 		$apps = array();
+		// Every application the server can see -- the one it serves first --
+		// whatever it is built on. The list below it is the apps directory's
+		// Qbix apps, which can be created, configured and served from here.
+		$installations = Q_WebServer_Framework::scan();
 		if (!$appsDir || !is_dir($appsDir)) {
-			return array('apps' => $apps, 'appsDir' => $appsDir);
+			return array('apps' => $apps, 'appsDir' => $appsDir, 'installations' => $installations);
 		}
 
 		foreach (scandir($appsDir) as $name) {
@@ -486,7 +490,7 @@ class Q_WebServer_Panel
 			);
 		}
 
-		return array('apps' => $apps, 'appsDir' => $appsDir);
+		return array('apps' => $apps, 'appsDir' => $appsDir, 'installations' => $installations);
 	}
 
 	/**
@@ -1194,6 +1198,13 @@ class Q_WebServer_Panel
 
 		switch ($framework) {
 
+		case 'exponential':
+			// Its own directory is the project; listed read-only (see
+			// composerWriteRefused()).
+			$found = Q_WebServer_Framework::find('exponential', is_string($query['dir'] ?? null) ? $query['dir'] : null);
+			if (!$found) return ['status' => 404, 'error' => 'No such application here'];
+			$projectDir = $found['dir'];
+			// fall through: the same composer.json / composer.lock reading
 		case 'laravel':
 		case 'symfony':
 			// Read composer.lock for installed packages
@@ -1376,6 +1387,7 @@ class Q_WebServer_Panel
 		if (!is_file($projectDir . '/composer.json')) {
 			return ['status' => 400, 'error' => 'No composer.json found'];
 		}
+		if ($refused = self::composerWriteRefused($projectDir)) return $refused;
 
 		$allowed = ['update', 'install', 'dump-autoload'];
 		if ($package && in_array($action, ['require', 'remove', 'update'])) {
@@ -1416,6 +1428,7 @@ class Q_WebServer_Panel
 
 		$rootDir = Q_WebServer::$rootDir;
 		$projectDir = dirname(rtrim($rootDir, DIRECTORY_SEPARATOR));
+		if ($refused = self::composerWriteRefused($projectDir)) return $refused;
 		$cmd = null;
 		$cwd = $projectDir;
 
@@ -2024,181 +2037,55 @@ class Q_WebServer_Panel
 
 	static function apiFrameworks()
 	{
-		$rootDir = Q_WebServer::$rootDir;
-		$projectDir = dirname(rtrim($rootDir, DIRECTORY_SEPARATOR));
-		$detected = [];
-
-		// Laravel: artisan file at project root, public/ as web root
-		$artisan = $projectDir . '/artisan';
-		if (is_file($artisan)) {
-			$version = '';
-			$envFile = $projectDir . '/.env';
-			$env = is_file($envFile) ? parse_ini_file($envFile) : [];
-			$detected[] = [
-				'framework' => 'laravel',
-				'name' => 'Laravel',
-				'dir' => $projectDir,
-				'webRoot' => $projectDir . '/public',
-				'appName' => $env['APP_NAME'] ?? basename($projectDir),
-				'appEnv' => $env['APP_ENV'] ?? 'unknown',
-				'debug' => ($env['APP_DEBUG'] ?? 'false') === 'true',
-				'commands' => [
-					['name' => 'Clear cache', 'cmd' => 'cache:clear'],
-					['name' => 'Clear config', 'cmd' => 'config:clear'],
-					['name' => 'Clear routes', 'cmd' => 'route:clear'],
-					['name' => 'Clear views', 'cmd' => 'view:clear'],
-					['name' => 'Migrate', 'cmd' => 'migrate --force'],
-					['name' => 'Migrate status', 'cmd' => 'migrate:status'],
-					['name' => 'Route list', 'cmd' => 'route:list --compact'],
-					['name' => 'Queue restart', 'cmd' => 'queue:restart'],
-					['name' => 'Storage link', 'cmd' => 'storage:link'],
-					['name' => 'Optimize', 'cmd' => 'optimize'],
-				],
-			];
+		// One registry for this tab, the Apps tab and the autohost; see
+		// Q_WebServer_Framework. Plain PHP sites and bare Composer projects
+		// are left to the Apps tab: they have no framework tools to offer.
+		$out = array();
+		foreach (Q_WebServer_Framework::scan() as $d) {
+			if (in_array($d['kind'], array('php', 'composer'), true)) continue;
+			$out[] = $d;
 		}
-
-		// Symfony: bin/console at project root
-		$console = $projectDir . '/bin/console';
-		if (is_file($console)) {
-			$detected[] = [
-				'framework' => 'symfony',
-				'name' => 'Symfony',
-				'dir' => $projectDir,
-				'webRoot' => $projectDir . '/public',
-				'commands' => [
-					['name' => 'Clear cache', 'cmd' => 'cache:clear'],
-					['name' => 'Cache warmup', 'cmd' => 'cache:warmup'],
-					['name' => 'Route list', 'cmd' => 'debug:router --no-interaction'],
-					['name' => 'Container', 'cmd' => 'debug:container --no-interaction'],
-					['name' => 'Migrate', 'cmd' => 'doctrine:migrations:migrate --no-interaction'],
-					['name' => 'Migration status', 'cmd' => 'doctrine:migrations:status'],
-					['name' => 'Assets install', 'cmd' => 'assets:install'],
-				],
-			];
-		}
-
-		// WordPress: wp-config.php in web root or project root
-		$wpConfig = is_file($rootDir . 'wp-config.php') ? $rootDir : null;
-		if (!$wpConfig && is_file($projectDir . '/wp-config.php')) $wpConfig = $projectDir . '/';
-		if ($wpConfig) {
-			$wpCli = null;
-			foreach (['wp', $projectDir . '/vendor/bin/wp'] as $p) {
-				if (is_executable($p) || self::which($p)) {
-					$wpCli = $p; break;
-				}
-			}
-			$detected[] = [
-				'framework' => 'wordpress',
-				'name' => 'WordPress',
-				'dir' => rtrim($wpConfig, '/'),
-				'webRoot' => $wpConfig,
-				'hasCli' => (bool) $wpCli,
-				'cliPath' => $wpCli,
-				'commands' => $wpCli ? [
-					['name' => 'Plugin list', 'cmd' => 'plugin list'],
-					['name' => 'Theme list', 'cmd' => 'theme list'],
-					['name' => 'Core version', 'cmd' => 'core version --extra'],
-					['name' => 'Cache flush', 'cmd' => 'cache flush'],
-					['name' => 'Rewrite flush', 'cmd' => 'rewrite flush'],
-					['name' => 'DB check', 'cmd' => 'db check'],
-					['name' => 'Cron list', 'cmd' => 'cron event list'],
-					['name' => 'User list', 'cmd' => 'user list --fields=ID,user_login,user_email,roles'],
-				] : [],
-			];
-		}
-
-		// Drupal: drush or vendor/bin/drush
-		$drush = null;
-		foreach (['drush', $projectDir . '/vendor/bin/drush'] as $p) {
-			if (is_executable($p) || self::which($p)) {
-				$drush = $p; break;
-			}
-		}
-		if ($drush || is_dir($projectDir . '/core/modules')) {
-			$detected[] = [
-				'framework' => 'drupal',
-				'name' => 'Drupal',
-				'dir' => $projectDir,
-				'webRoot' => $projectDir . '/web',
-				'hasCli' => (bool) $drush,
-				'commands' => $drush ? [
-					['name' => 'Cache rebuild', 'cmd' => 'cache:rebuild'],
-					['name' => 'Status', 'cmd' => 'status'],
-					['name' => 'Module list', 'cmd' => 'pm:list --status=enabled'],
-					['name' => 'Update DB', 'cmd' => 'updatedb'],
-					['name' => 'Cron run', 'cmd' => 'cron'],
-				] : [],
-			];
-		}
-
-		// Joomla: configuration.php in web root
-		if (is_file($rootDir . 'configuration.php') && is_dir($rootDir . 'administrator')) {
-			$detected[] = [
-				'framework' => 'joomla',
-				'name' => 'Joomla',
-				'dir' => rtrim($rootDir, '/'),
-				'webRoot' => $rootDir,
-				'commands' => [
-					['name' => 'Clear cache', 'cmd' => 'cache:clean'],
-					['name' => 'Extension list', 'cmd' => 'extension:list'],
-					['name' => 'Check updates', 'cmd' => 'update:extensions:check'],
-					['name' => 'Site info', 'cmd' => 'site:info'],
-				],
-			];
-		}
-
-		return ['frameworks' => $detected];
+		return ['frameworks' => $out];
 	}
 
 	static function apiFrameworkRun($parsed)
 	{
 		$body = json_decode($parsed['body'] ?? '{}', true);
-		$framework = $body['framework'] ?? '';
-		$cmd = $body['cmd'] ?? '';
+		$framework = is_string($body['framework'] ?? null) ? $body['framework'] : '';
+		$cmd = is_string($body['cmd'] ?? null) ? $body['cmd'] : '';
+		$dir = is_string($body['dir'] ?? null) ? $body['dir'] : null;
 		if (!$framework || !$cmd) return ['status' => 400, 'error' => 'Missing framework or cmd'];
-
-		// Detect the CLI tool
-		$rootDir = Q_WebServer::$rootDir;
-		$projectDir = dirname(rtrim($rootDir, DIRECTORY_SEPARATOR));
-		$cli = '';
-		$cwd = $projectDir;
-		switch ($framework) {
-			case 'laravel':
-				$cli = 'php artisan';
-				break;
-			case 'symfony':
-				$cli = 'php bin/console';
-				break;
-			case 'wordpress':
-				$cli = self::which('wp') ? 'wp' : $projectDir . '/vendor/bin/wp';
-				$cwd = is_file($rootDir . 'wp-config.php') ? rtrim($rootDir, '/') : $projectDir;
-				$cli .= ' --path=' . escapeshellarg($cwd);
-				break;
-			case 'drupal':
-				$cli = self::which('drush') ? 'drush' : $projectDir . '/vendor/bin/drush';
-				break;
-			case 'joomla':
-				$cli = 'php cli/joomla.php';
-				break;
-			default:
-				return ['status' => 400, 'error' => 'Unknown framework'];
+		// A directory from the request must be one the scan found: never an
+		// arbitrary path to run commands in.
+		if ($dir !== null) {
+			$known = false;
+			foreach (Q_WebServer_Framework::scan() as $d) {
+				if ($d['dir'] === $dir and $d['kind'] === $framework) { $known = true; break; }
+			}
+			if (!$known) return ['status' => 404, 'error' => 'No such application here'];
 		}
+		// Only a command the detector listed runs, as an argv array with no
+		// shell, in the application's own directory; a disruptive one needs
+		// confirm: true.
+		return Q_WebServer_Framework::run($framework, $cmd, $dir, !empty($body['confirm']));
+	}
 
-		// Whitelist check: only allow commands from the detected list
-		$allowed = false;
-		$fwData = self::apiFrameworks();
-		foreach ($fwData['frameworks'] as $fw) {
-			if ($fw['framework'] === $framework) {
-				foreach ($fw['commands'] as $c) {
-					if ($c['cmd'] === $cmd) { $allowed = true; break 2; }
-				}
+	/**
+	 * Why composer must not change the project at $dir, or null when it may:
+	 * a detector marked it composerWrite false (its packages may be live git
+	 * checkouts), and Q.panel.allowComposerWrite is not set.
+	 */
+	static function composerWriteRefused($dir)
+	{
+		if (Q_Config::get('Q', 'panel', 'allowComposerWrite', false)) return null;
+		foreach (array($dir, rtrim(Q_WebServer::$rootDir, DIRECTORY_SEPARATOR)) as $candidate) {
+			$d = Q_WebServer_Framework::detect($candidate);
+			if ($d and $d['composerWrite'] === false) {
+				return ['status' => 403, 'error' => $d['name'] . ' installations are not changed with composer from the panel'
+					. ' (their packages may be live checkouts); set Q.panel.allowComposerWrite to allow it.'];
 			}
 		}
-		if (!$allowed) return ['status' => 403, 'error' => 'Command not in allowed list'];
-
-		$fullCmd = "cd " . escapeshellarg($cwd) . " && " . $cli . " " . $cmd . " 2>&1";
-		$output = shell_exec($fullCmd);
-		return ['output' => $output, 'cmd' => $cli . ' ' . $cmd];
+		return null;
 	}
 
 	// ── Helpers ──────────────────────────────────────────
