@@ -1,0 +1,1 @@
+{"brand":"Qbix Server","brandHead":"<link rel=\"icon\" href=\"/Q/favicon.svg\">","metricsJson":"\"# HELP qbix_requests_total Requests served\\n# TYPE qbix_requests_total counter\\nqbix_requests_total 42\\n\""}

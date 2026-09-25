@@ -2136,12 +2136,7 @@ class Q_WebServer
 			return self::adminForbidden();
 		}
 		if ($path === '/Q/metrics') {
-			if (class_exists('Q_WebServer_Metrics', false)) {
-				return array('status'=>200,
-					'body' => Q_WebServer_Metrics::prometheus(),
-					'headers'=>array('Content-Type'=>'text/plain; version=0.0.4'));
-			}
-			return array('status'=>404, 'body'=>'Metrics not enabled');
+			return self::metricsResponse($parsed);
 		}
 		if ($path === '/Q/attestation') {
 			$attFile = __DIR__ . '/WebServer/Trust.php';
@@ -2898,13 +2893,10 @@ class Q_WebServer
 				return false;
 			}
 			if ($path === '/Q/metrics') {
-				if (class_exists('Q_WebServer_Metrics', false)) {
-					self::sendResponse($client, 200,
-						Q_WebServer_Metrics::prometheus(),
-						'text/plain; version=0.0.4');
-				} else {
-					self::sendResponse($client, 404, 'Metrics not enabled');
-				}
+				$r = self::metricsResponse($parsed);
+				$type = $r['headers']['Content-Type'];
+				unset($r['headers']['Content-Type']);
+				self::sendResponse($client, $r['status'], $r['body'], $type, $r['headers']);
 				return false;
 			}
 			if ($path === '/Q/attestation') {
@@ -5727,6 +5719,72 @@ WORKER;
 	 * Render the documentation viewer — a single-page app that fetches
 	 * and renders markdown files from /Q/docs/raw/*.
 	 */
+
+	/**
+	 * Whether a /Q/metrics request is a person's browser rather than a
+	 * scraper. ?format=text or ?format=html decide outright. Otherwise HTML
+	 * only when text/html is asked for explicitly and ranks above any plain
+	 * text or OpenMetrics type; a bare wildcard, no Accept at all, curl and
+	 * Prometheus (openmetrics / text/plain first) all get the text format.
+	 * @method metricsWantsHtml
+	 * @static
+	 * @param {array} $parsed
+	 * @return {boolean}
+	 */
+	static function metricsWantsHtml($parsed)
+	{
+		$qp = array();
+		if (!empty($parsed['query'])) parse_str((string) $parsed['query'], $qp);
+		$format = isset($qp['format']) && is_string($qp['format']) ? strtolower($qp['format']) : '';
+		if ($format === 'text' || $format === 'prometheus' || $format === 'openmetrics') return false;
+		if ($format === 'html') return true;
+		$accept = strtolower((string) ($parsed['headers']['accept'] ?? ''));
+		if ($accept === '') return false;
+		$html = -1.0; $text = -1.0;
+		foreach (explode(',', $accept) as $part) {
+			$bits = array_map('trim', explode(';', $part));
+			$type = array_shift($bits);
+			$q = 1.0;
+			foreach ($bits as $b) {
+				if (strncmp($b, 'q=', 2) === 0) $q = (float) substr($b, 2);
+			}
+			if ($type === 'text/html' || $type === 'application/xhtml+xml') $html = max($html, $q);
+			elseif ($type === 'text/plain' || strpos($type, 'openmetrics') !== false) $text = max($text, $q);
+		}
+		return $html > 0 && $html > $text;
+	}
+
+	/**
+	 * The answer to /Q/metrics: the Prometheus text exactly as scrapers have
+	 * always had it, or, for a browser, the same text shown in the metrics
+	 * view. Both are built from one call, so they cannot disagree.
+	 * @method metricsResponse
+	 * @static
+	 * @param {array} $parsed
+	 * @return {array} status, body, headers
+	 */
+	static function metricsResponse($parsed)
+	{
+		if (!class_exists('Q_WebServer_Metrics', false)) {
+			return array('status' => 404, 'body' => 'Metrics not enabled',
+				'headers' => array('Content-Type' => 'text/plain; charset=utf-8'));
+		}
+		$text = Q_WebServer_Metrics::prometheus();
+		if (self::metricsWantsHtml($parsed)) {
+			$page = Q_WebServer_Design::render('metrics', array(
+				'brand'       => htmlspecialchars(self::brand(), ENT_QUOTES, 'UTF-8'),
+				'brandHead'   => Q_WebServer_Brand::headTags(self::brand() . ' Metrics', '/Q/metrics'),
+				'metricsJson' => json_encode((string) $text, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES),
+			));
+			if ($page !== null) {
+				return array('status' => 200, 'body' => Q_WebServer_Shell::decorate($page),
+					'headers' => array('Content-Type' => 'text/html; charset=utf-8',
+						'Cache-Control' => 'no-store', 'Vary' => 'Accept'));
+			}
+		}
+		return array('status' => 200, 'body' => $text,
+			'headers' => array('Content-Type' => 'text/plain; version=0.0.4', 'Vary' => 'Accept'));
+	}
 	private static function renderDocsViewer()
 	{
 		// The page is a design on disk -- designs/default/docs/ (page.html,
