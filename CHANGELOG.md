@@ -65,7 +65,29 @@ edited down to what a reader actually needs.
 
 ---
 
-## Unreleased
+## v0.0.4.29 — a response cache that is faster and says what it is doing, a control panel to run it, and error pages a visitor can use
+
+2026-09-26
+
+### Upgrading from v0.0.4.28
+
+- **Pool workers are forked from the zygote by default.** `Q.webserver.zygote`
+  now defaults to `true`: workers started after the pool come from a process
+  forked before the first connection was accepted, so a worker forked while the
+  server is busy holds no visitor's connection. Set it to `false` to fork from
+  the server as before; without ext-sockets the pool falls back on its own.
+- **An uncaught exception's message is no longer sent to the client.** Without
+  `Q.webserver.debug` the response is the application's own exception handler,
+  as in PHP (`set_exception_handler()`), or else the designed 500 page. The
+  message, class, file, line and trace go to the error log as before, and to the
+  response only with `Q.webserver.debug`. Anything that parsed the message out
+  of a 500 body needs debug on.
+- **APCu is used only when it can hold entries.** Under the CLI that means
+  `apc.enable_cli=1`; with it off (PHP's default) the cache now says so at
+  startup instead of running from disk while its settings said memory.
+- **Cached pages are filed under the coding they are stored in.** Brotli and
+  gzip clients now share one entry, so the first request for each page after the
+  upgrade renders it again.
 
 ### Added
 
@@ -83,6 +105,62 @@ edited down to what a reader actually needs.
   `disable` is the local recovery path for a lost authenticator. When the flag
   is off, sign-in is byte-for-byte as before, even with a device enrolled. See
   [docs/2fa.md](docs/2fa.md).
+- **A Cache tab in the control panel** to run the response cache from the
+  browser: live hit rate, where hits come from, APCu memory, the stale and
+  refused counts; settings with presets that are kept by the panel and survive a
+  restart; clear, purge by URL or pattern, warm a page; a browser of stored
+  pages. Its API is under `/Q/api/cache`. See [docs/dashboard.md](docs/dashboard.md).
+- **An optional in-process memory layer in front of APCu** for cached pages
+  (`Q.web.cache.memory.maxEntries`, off by default): about 12% less CPU per hit
+  for large pages, no change for small ones.
+- **`/Q/health` reports where cache hits come from** (the validator index,
+  memory, APCu, disk), the APCu segment's size, use, entries and expunges, and
+  refused stores.
+- **`Q.dashboard.hidePanelRequests`** keeps the server's own `/Q/` requests out of
+  the dashboard's counts, top paths and live log (off by default).
+- **`Q.webserver.zygote`** and **`Q.compat.statTtl`** (how long a worker keeps
+  what it knows about files across requests; 1 second measured 13% less CPU per
+  rendered page).
+- **Per-domain SNI certificate selection**, and client IP and user agent on 5xx
+  metrics (never cookies).
+- **`docs/panel.md`**: signing in to the control panel, starting with its default
+  password; **`docs/cache-audit.md`**: the response cache audit and its measurements;
+  and a README section on how Exponential Velocity differs from Qbix.
+
+### Fixed
+
+- **Keep-alive:** the last response before `keepAlive.max`, and a 5xx, promised
+  `Connection: keep-alive` and then closed the connection; about one request in
+  a thousand failed. Both now say `Connection: close`.
+- **Error pages:** every error the server answers itself is the designed page,
+  in plain words, on HTTP/2 as well as HTTP/1.1 -- a blocked path over HTTP/2 was
+  the bare word "Forbidden", and a worker that stopped or timed out sent
+  "Worker died" or "Request timed out" as text.
+- **An open dashboard doubled the cost of every request:** its stats were rebuilt
+  for each request; they now go out at most once a second.
+- **The static file cache stopped taking files once full;** it now evicts the
+  least recently used.
+- **`q=0` in Accept-Encoding was ignored** by the response cache, static files and
+  precompressed files.
+- **A zygote hand-off interrupted by a signal** was taken for a dead zygote.
+- **`tests/bench-load.php` reported one CPU too few.**
+
+### Updated
+
+- **Response cache:** a HEAD for a cached page is answered from the cache; the
+  APCu copy is kept through the stale-while-revalidate window; `purge()` says how
+  many entries it removed.
+- **Pool workers** remember which paths exist for the rest of a request, and
+  forget file facts after another program runs.
+- **The dashboard's swap figure** reads used / total and is coloured by how fast
+  pages come back from swap, not by how much is parked there.
+- **Documentation:** worker memory, reset cost and the shim count, from
+  measurements: a worker holds 1.3–1.9 MB of private memory with nothing loaded
+  and about 10 MB for a full CMS; the reset takes 0.55 ms and 4.6 ms; the default
+  event loop stops a pool below about 1,000 workers; 44 functions are shimmed.
+  Earlier pages said 120–200 KB, 5,000 workers per GB and 0.03 ms.
+- The old `ghcr.io/se7enxweb/qbix-webserver` image is marked deprecated in favour
+  of the exponential-velocity image; the illumos platform check runs on demand.
 
 ---
 
