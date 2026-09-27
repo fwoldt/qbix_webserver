@@ -228,6 +228,9 @@ class Q_WebServer_Compat
 	/** @var string Current session file path */
 	private static $sessionFile = '';
 
+	/** @var array|null session.save_path of the current session: [dir, depth, mode] */
+	private static $sessionStore = null;
+
 	/** @var resource|null Session file handle (held for locking) */
 	private static $sessionFp = null;
 
@@ -452,6 +455,7 @@ class Q_WebServer_Compat
 		self::$uploadedFiles = array();
 		self::$sessionActive = false;
 		self::$sessionFile = '';
+		self::$sessionStore = null;
 		self::$sessionFp = null;
 		self::$sessionId = '';
 		self::$sessionName = null;
@@ -1439,9 +1443,10 @@ class Q_WebServer_Compat
 	{
 		if (self::$sessionActive) return true;
 
-		$savePath = $options['save_path']
-			?? self::_ini_get('session.save_path')
-			?: sys_get_temp_dir();
+		self::$sessionStore = self::parseSavePath(
+			$options['save_path'] ?? self::_ini_get('session.save_path')
+		);
+		$savePath = self::$sessionStore[0];
 		$name = $options['name']
 			?? self::_session_name()
 			?: 'PHPSESSID';
@@ -1467,11 +1472,11 @@ class Q_WebServer_Compat
 		// so every session_start() printed "Session ID cannot be changed
 		// after headers have already been sent" into the response body.
 		self::$sessionId = $id;
-		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $id;
+		self::$sessionFile = self::sessionFilePath(self::$sessionStore, $id);
 
 		// Read with exclusive lock (held until write_close)
 		$_SESSION = array();
-		self::$sessionFp = fopen(self::$sessionFile, 'c+');
+		self::$sessionFp = self::openSessionFile(self::$sessionFile);
 		if (self::$sessionFp) {
 			flock(self::$sessionFp, LOCK_EX);
 			$data = stream_get_contents(self::$sessionFp);
@@ -1486,7 +1491,8 @@ class Q_WebServer_Compat
 		$gcProb = (int) self::_ini_get('session.gc_probability') ?: 1;
 		$gcDiv = (int) self::_ini_get('session.gc_divisor') ?: 100;
 		if (mt_rand(1, $gcDiv) <= $gcProb) {
-			self::sessionGc($savePath, $maxLifetime);
+			// With N levels of subdirectories PHP leaves collection to a cron job.
+			if (self::$sessionStore[1] === 0) self::sessionGc($savePath, $maxLifetime);
 		}
 
 		return true;
@@ -1542,11 +1548,12 @@ class Q_WebServer_Compat
 
 		// Set new ID — ours, for the same reason as in _session_start()
 		self::$sessionId = $newId;
-		$savePath = dirname(self::$sessionFile);
-		self::$sessionFile = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $newId;
+		self::$sessionFile = self::sessionFilePath(
+			self::$sessionStore ?? self::parseSavePath(self::_ini_get('session.save_path')), $newId
+		);
 
 		// Open new file with lock
-		self::$sessionFp = fopen(self::$sessionFile, 'c+');
+		self::$sessionFp = self::openSessionFile(self::$sessionFile);
 		if (self::$sessionFp) {
 			flock(self::$sessionFp, LOCK_EX);
 			$data = self::serializeSession($_SESSION);
@@ -1591,6 +1598,56 @@ class Q_WebServer_Compat
 	{
 		if (self::$sessionActive) return PHP_SESSION_ACTIVE;
 		return PHP_SESSION_NONE;  // Sessions are always available, just not started yet
+	}
+
+	/**
+	 * session.save_path as PHP's files handler reads it: "[N;[MODE;]]/path".
+	 * N levels of subdirectories named after the first characters of the id,
+	 * MODE (octal) for new files -- 0600 when not given, as in PHP. Without
+	 * this the whole string was taken for a directory; and set with -d, where
+	 * ";" starts a comment, the value arrived as "0" and sessions went to
+	 * the temporary directory.
+	 *
+	 * @return array [dir, depth, mode]
+	 */
+	static function parseSavePath($raw)
+	{
+		$raw = (string) $raw;
+		$parts = explode(';', $raw);
+		$dir = (string) array_pop($parts);
+		$depth = 0;
+		$mode = 0600;
+		if (count($parts) >= 1 && ctype_digit($parts[0])) {
+			$depth = (int) $parts[0];
+		}
+		if (count($parts) >= 2 && preg_match('/^[0-7]{3,4}$/', $parts[1])) {
+			$mode = octdec($parts[1]);
+		}
+		if ($dir === '' || ($parts === array() && ctype_digit($dir))) {
+			$dir = sys_get_temp_dir();
+		}
+		return array(rtrim($dir, DIRECTORY_SEPARATOR) ?: DIRECTORY_SEPARATOR, $depth, $mode);
+	}
+
+	/** The file of session $id in a parsed save path, subdirectories included. */
+	private static function sessionFilePath(array $store, $id)
+	{
+		$dir = $store[0];
+		for ($i = 0; $i < $store[1] && $i < strlen($id); $i++) {
+			$dir .= DIRECTORY_SEPARATOR . $id[$i];
+		}
+		return $dir . DIRECTORY_SEPARATOR . 'sess_' . $id;
+	}
+
+	/** Opens (creating with the save path's mode) a session file for reading and writing. */
+	private static function openSessionFile($file)
+	{
+		$new = !file_exists($file);
+		$fp = @fopen($file, 'c+');
+		if ($fp && $new) {
+			@chmod($file, self::$sessionStore[2] ?? 0600);
+		}
+		return $fp;
 	}
 
 	/**
