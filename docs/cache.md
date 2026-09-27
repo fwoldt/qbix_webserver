@@ -262,7 +262,13 @@ cache is configured this way by `exp:velocity` when it is enabled.
 `Q.web.cache.skip.cookies`) or credentials goes to the application's cache
 only — this cache would skip it anyway. Any other request is answered by this
 cache first, the faster of the two, and the application's cache is asked when
-it misses.
+it misses; its answer is then kept here too, under this cache's own rules (the
+response's `Cache-Control`), unless it is compressed.
+
+Because this cache now answers those requests first, it has to hear of the
+application's purges: point `Q.web.cache.generationFile` at a file that every
+purge rewrites (Exponential's `exp:velocity` uses the HTTP cache's state file),
+or pages this cache kept stay until their own lifetime runs out.
 
 ### Response headers
 
