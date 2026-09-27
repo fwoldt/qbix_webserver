@@ -299,8 +299,16 @@ jobs:
         if: runner.os != 'Windows'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --auto-fix downloads the musl toolchain; one failed download left
+        # v0.0.4.30's linux-x86_64 8.3 lite build without it ("musl-toolchain
+        # is not installed") and so held the release back. Tried again until
+        # the doctor is satisfied, still best effort.
         run: |
-          ./spc doctor --auto-fix 2>&1 || echo "Doctor had issues (continuing)"
+          for try in 1 2 3; do
+            ./spc doctor --auto-fix 2>&1 && exit 0
+            echo "Doctor had issues, retry $try of 3 in 20s"; sleep 20
+          done
+          echo "Doctor had issues (continuing)"
 
       - name: Run spc doctor (Windows, best-effort)
         if: runner.os == 'Windows'

@@ -169,5 +169,11 @@ check('...and so does full on macos-arm64', isset($X::resolve('full', 'macos-arm
 check('...while linux-x86_64 keeps it', in_array('yac', $X::resolve('full', 'linux-x86_64', '8.3')['include'], true), true);
 check('a dynamic PHP is not held to the static exclusions (rar, on Linux)',
 	isset($X::resolve('full', 'linux-x86_64', '8.3', array(), false)['exclude']['rar']), false);
+// What does not compile against a PHP version yet is left out of that version's
+// static build only (unavailablePhp): memcache and PHP 8.5.
+check('memcache is left out of the static 8.5 full build', isset($X::resolve('full', 'linux-x86_64', '8.5')['exclude']['memcache']), true);
+check('...a patch release counts as its minor version', isset($X::resolve('full', 'linux-x86_64', '8.5.1')['exclude']['memcache']), true);
+check('...while 8.4 keeps it', in_array('memcache', $X::resolve('full', 'linux-x86_64', '8.4')['include'], true), true);
+check('...and a dynamic PHP 8.5 is not held to it', isset($X::resolve('full', 'linux-x86_64', '8.5', array(), false)['exclude']['memcache']), false);
 if ($fail) { printf("  FAIL - %d of %d case(s)\n", $fail, $pass + $fail); exit(1); }
 printf("  PASS - %d case(s)\n", $pass);

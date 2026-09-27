@@ -16,7 +16,9 @@ if [ "$#" -eq 0 ]; then set -- $(php packaging/nfpm/render.php --list | awk '{pr
 nfpm_run() {
   if [ -n "${NFPM:-}" ]; then $NFPM "$@"
   elif command -v nfpm >/dev/null 2>&1; then nfpm "$@"
-  else docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/tmp/pkg" -w /tmp/pkg goreleaser/nfpm:v2.41.1 "$@"
+  else
+    for try in 1 2 3 4; do docker image inspect goreleaser/nfpm:v2.41.1 >/dev/null 2>&1 && break; docker pull -q goreleaser/nfpm:v2.41.1 >/dev/null && break; echo "docker pull failed, retry $try of 4 in 20s" >&2; sleep 20; done
+    docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/tmp/pkg" -w /tmp/pkg goreleaser/nfpm:v2.41.1 "$@"
   fi
 }
 

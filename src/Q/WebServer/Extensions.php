@@ -143,6 +143,9 @@ class Q_WebServer_Extensions
 			// A static build lacks what its toolchain cannot build; any PHP on
 			// an OS lacks what cannot exist there (fork() on Windows).
 			if ($static && isset($e['unavailable'][$platform])) { $exclude[$name] = $e['unavailable'][$platform]; continue; }
+			// ...and what does not compile against that PHP yet (unavailablePhp, by minor version).
+			$minor = implode('.', array_slice(explode('.', (string) $php), 0, 2));
+			if ($static && isset($e['unavailablePhp'][$minor])) { $exclude[$name] = $e['unavailablePhp'][$minor]; continue; }
 			if (!$static && in_array(self::osOf($platform), $e['unsupportedOs'] ?? array(), true)) {
 				$exclude[$name] = $e['unavailable'][$platform] ?? ('Not available on ' . self::osOf($platform));
 				continue;

@@ -23,6 +23,9 @@ esac
 file="$(basename "$pkg")"
 oldmount=(); oldfile=''
 if [ -n "$old" ]; then oldmount=(-v "$PWD/$(dirname "$old"):/old:ro"); oldfile="$(basename "$old")"; fi
+# Docker Hub turns a runner away now and then (v0.0.4.30 lost its release to
+# one refused token request): pull with retries before running.
+for try in 1 2 3 4; do docker pull -q "$image" >/dev/null && break; echo "docker pull $image failed, retry $try of 4 in 20s" >&2; sleep 20; done
 docker run --rm -v "$PWD/$(dirname "$pkg"):/pkgs:ro" "${oldmount[@]}" "$image" sh -ec "
   install_pkg() {
     case '$distro' in

@@ -650,6 +650,9 @@
             "source": "spc",
             "type": "pecl",
             "spc": "memcache",
+            "unavailablePhp": {
+                "8.5": "Does not compile against PHP 8.5 yet (ext/standard/php_smart_string.h is gone)"
+            },
             "unavailable": {
                 "windows-x64": "static-php-cli does not build it for Windows yet"
             }
