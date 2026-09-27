@@ -51,9 +51,17 @@ define('QBIX_SERVER_VERSION', '1.5.0');
 // A stamp written to disk beside this file by build-phar.php, if present.
 // This is what a vendored copy -- run as a plain file, not the phar --
 // reads. It must come before the git fallback below, because a vendor
-// directory is often itself a checkout sitting on an unrelated commit,
-// and asking git there reports that commit, not the build.
-if (!defined('QBIX_SERVER_BUILD') && is_file(__DIR__ . '/qbix-build.php')) {
+// directory often sits inside another checkout, and asking git there
+// reports that repository's commit, not the build.
+//
+// Except when this directory is a checkout of its own (it has its own .git):
+// then git knows what is on disk, and the stamp only says what was here when
+// the phar was last built. A checkout moved on without a rebuild went on
+// reporting the old release and build (v0.0.4.27+ac22e8b4 on a tree two
+// releases later).
+if (!defined('QBIX_SERVER_BUILD') && is_file(__DIR__ . '/qbix-build.php')
+	&& !file_exists(__DIR__ . '/.git')
+) {
 	@include __DIR__ . '/qbix-build.php';
 }
 
