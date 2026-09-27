@@ -874,8 +874,32 @@ class Q_WebServer_Cache
 			if (file_exists($minifier)) require_once $minifier;
 		}
 
-		// Only a body that is still text: an answer that arrived compressed
-		// (the application cache's, kept by get()) is stored as it came.
+		// An answer that arrived compressed (the application cache's, kept by
+		// get()) is stored like one this server rendered: decompressed here,
+		// then minified, given its validator and compressed once below. Stored
+		// as it came, it differed from a rendered copy of the same page in
+		// every byte (96 KB against 71 KB of HTML, same text), so servers
+		// sharing a port held different copies with different ETags and a
+		// browser revalidating against another one was sent the page again.
+		// The caller is handed the plain body; the send path compresses it for
+		// the client, as it does every uncompressed answer.
+		if (self::$minifyHtml
+		and self::contentCoding($response['headers'] ?? array()) === 'gzip'
+		and class_exists('Q_WebServer_Minify', false)
+		and Q_WebServer_Minify::applies($response['headers'] ?? array())) {
+			$plain = @gzdecode((string) ($response['body'] ?? ''));
+			if ($plain !== false) {
+				$response['body'] = $plain;
+				foreach (array_keys($response['headers']) as $name) {
+					if (strcasecmp($name, 'Content-Encoding') === 0 or strcasecmp($name, 'Content-Length') === 0) {
+						unset($response['headers'][$name]);
+					}
+				}
+			}
+		}
+
+		// Only a body that is still text: one that could not be decompressed
+		// above is stored as it came.
 		if (self::$minifyHtml
 		and self::contentCoding($response['headers'] ?? array()) === ''
 		and class_exists('Q_WebServer_Minify', false)

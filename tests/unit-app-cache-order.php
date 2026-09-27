@@ -82,6 +82,34 @@ check('a gzip answer to a gzip request is kept here', OrderAppCache::$asked, 1);
 check('...and served from here with its coding', strtolower($r['headers']['Content-Encoding'] ?? ''), 'gzip');
 check('...its body as it came (not minified)', $r['body'] ?? null, "zz   \n\n   zz");
 
+// A real gzip HTML answer is stored like a rendered page: minified, then
+// compressed once, so every server holds the same bytes and validator.
+class GzHtmlAppCache
+{
+	static $asked = 0;
+	static function fromDir($dir) { return new self(); }
+	function serve(array $request)
+	{
+		self::$asked++;
+		// Larger than the cache's compressMinSize (1 KB), below which it stores plain.
+		$html = "<html>\n    <body>\n" . str_repeat("        <p>same page</p>\n", 80) . "    </body>\n</html>\n";
+		return array(200, array('Content-Type' => 'text/html; charset=utf-8', 'Cache-Control' => 'public, max-age=300',
+			'Content-Encoding' => 'gzip'), gzencode($html));
+	}
+}
+Q_WebServer_AppCache::$class = 'GzHtmlAppCache';
+$C::$minifyHtml = true;
+$first = $C::get(cache_req('/gz-html', $gz));
+$second = $C::get(cache_req('/gz-html', $gz));
+check('a gzip HTML answer is kept (asked once)', GzHtmlAppCache::$asked, 1);
+check('...the caller gets it plain, for the send path to compress', $C::contentCoding($first['headers'] ?? array()), '');
+check('...what is stored is compressed', strtolower($second['headers']['Content-Encoding'] ?? ''), 'gzip');
+$stored = @gzdecode($second['body'] ?? '');
+$original = "<html>\n    <body>\n" . str_repeat("        <p>same page</p>\n", 80) . "    </body>\n</html>\n";
+check('...and minified: the same text in fewer bytes', is_string($stored) && strlen($stored) < strlen($original) && substr_count($stored, '<p>same page</p>') === 80, true);
+check('...the plain first answer is that same minified page', $first['body'] ?? null, $stored);
+Q_WebServer_AppCache::$class = 'OrderAppCache';
+
 // A coding this cache does not store in is left to the application's cache.
 OrderAppCache::$asked = 0;
 $C::get(cache_req('/br-page', $gz));
