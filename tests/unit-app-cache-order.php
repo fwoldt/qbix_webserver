@@ -32,7 +32,9 @@ class OrderAppCache
 		self::$asked++;
 		$h = array('X-From' => 'app', 'Content-Type' => 'text/html', 'Cache-Control' => 'public, max-age=300');
 		if (strpos($request['uri'], 'gz') !== false) $h['Content-Encoding'] = 'gzip';
-		return array(200, $h, 'app page');
+		if (strpos($request['uri'], 'br') !== false) $h['Content-Encoding'] = 'br';
+		// Whitespace a minifier would take out: a compressed body must be kept as it came.
+		return array(200, $h, isset($h['Content-Encoding']) ? "zz   \n\n   zz" : 'app page');
 	}
 }
 
@@ -70,11 +72,31 @@ $r = $C::get(cache_req('/fill-me'));
 check('after the application answered once, this cache answers', OrderAppCache::$asked, 1);
 check('...the same page', $r['body'] ?? null, 'app page');
 
-// A compressed answer is left to the application's cache.
+// A gzip answer to a browser (which asks for gzip) is kept here: it is the
+// coding this cache stores that request in.
 OrderAppCache::$asked = 0;
-$C::get(cache_req('/gz-page'));
-$C::get(cache_req('/gz-page'));
-check('a compressed answer is not kept here', OrderAppCache::$asked, 2);
+$gz = array('accept-encoding' => 'gzip, deflate, br, zstd');
+$C::get(cache_req('/gz-page', $gz));
+$r = $C::get(cache_req('/gz-page', $gz));
+check('a gzip answer to a gzip request is kept here', OrderAppCache::$asked, 1);
+check('...and served from here with its coding', strtolower($r['headers']['Content-Encoding'] ?? ''), 'gzip');
+check('...its body as it came (not minified)', $r['body'] ?? null, "zz   \n\n   zz");
+
+// A coding this cache does not store in is left to the application's cache.
+OrderAppCache::$asked = 0;
+$C::get(cache_req('/br-page', $gz));
+$C::get(cache_req('/br-page', $gz));
+check('a br answer is not kept here', OrderAppCache::$asked, 2);
+
+// A gzip answer to a client that did not ask for gzip is not kept either.
+OrderAppCache::$asked = 0;
+$C::get(cache_req('/gz-plain'));
+$C::get(cache_req('/gz-plain'));
+check('a gzip answer to a request without gzip is not kept', OrderAppCache::$asked, 2);
+
+check('contentCoding: none', $C::contentCoding(array('Content-Type' => 'text/html')), '');
+check('contentCoding: identity is none', $C::contentCoding(array('content-encoding' => 'Identity')), '');
+check('contentCoding: gzip', $C::contentCoding(array('Content-Encoding' => ' GZIP ')), 'gzip');
 Q_WebServer_AppCache::$class = null;
 check('no application cache, session cookie: nothing', $C::get(cache_req('/stored', array('cookie' => 'eZSESSIDab12=x'))), null);
 check('no application cache, no cookie: the server cache still answers', is_array($C::get(cache_req('/stored'))), true);

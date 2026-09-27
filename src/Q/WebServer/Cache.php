@@ -625,14 +625,21 @@ class Q_WebServer_Cache
 			// cache: otherwise a page the application already holds is never
 			// rendered, this cache never sees it, and every request pays both
 			// lookups. put() applies this cache's own rules (the response's
-			// Cache-Control above all); a compressed answer is left to the
-			// application's cache, which compresses per request.
+			// Cache-Control above all).
+			//
+			// An answer already compressed is kept when it is in the coding
+			// this cache files the request under (gzip for a client that takes
+			// it), since that is exactly what it would have stored. Leaving
+			// every compressed answer out meant a browser -- which always asks
+			// for gzip -- was never answered from here: measured on alpha, 724
+			// pages a second at 1.38 ms of CPU each, against 1,568 at 0.66 ms
+			// for the same page without compression. Any other coding (br,
+			// zstd) is left to the application's cache.
 			if ($app !== null and self::$enabled and ($parsed['method'] ?? '') === 'GET') {
-				$encoded = false;
-				foreach ((array) ($app['headers'] ?? array()) as $name => $value) {
-					if (strtolower((string) $name) === 'content-encoding' and strtolower((string) $value) !== 'identity') $encoded = true;
+				$coding = self::contentCoding($app['headers'] ?? array());
+				if ($coding === '' or $coding === self::storedCoding($parsed['headers']['accept-encoding'] ?? '')) {
+					$app = self::put($parsed, $app);
 				}
-				if (!$encoded) $app = self::put($parsed, $app);
 			}
 			return $app;
 		}
@@ -860,7 +867,10 @@ class Q_WebServer_Cache
 			if (file_exists($minifier)) require_once $minifier;
 		}
 
+		// Only a body that is still text: an answer that arrived compressed
+		// (the application cache's, kept by get()) is stored as it came.
 		if (self::$minifyHtml
+		and self::contentCoding($response['headers'] ?? array()) === ''
 		and class_exists('Q_WebServer_Minify', false)
 		and Q_WebServer_Minify::applies($response['headers'] ?? array())) {
 			$response['body'] = Q_WebServer_Minify::html($response['body'] ?? '');
@@ -1721,6 +1731,26 @@ class Q_WebServer_Cache
 	 * @param {string} $acceptEncoding
 	 * @return {string}
 	 */
+	/**
+	 * The content-coding a response's body is in: lower case, '' for none or
+	 * identity.
+	 *
+	 * @method contentCoding
+	 * @static
+	 * @param {array} $headers
+	 * @return {string}
+	 */
+	static function contentCoding($headers)
+	{
+		foreach ((array) $headers as $name => $value) {
+			if (strcasecmp((string) $name, 'Content-Encoding') === 0) {
+				$coding = strtolower(trim((string) $value));
+				return $coding === 'identity' ? '' : $coding;
+			}
+		}
+		return '';
+	}
+
 	static function storedCoding($acceptEncoding)
 	{
 		// The same reading of Accept-Encoding as everything else the server
