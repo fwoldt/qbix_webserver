@@ -65,6 +65,40 @@ edited down to what a reader actually needs.
 
 ---
 
+## v0.0.4.34 — workers run as the site's user, not as root, and the response caches pause for a maintenance window
+
+2026-09-27
+
+### Added
+
+- **Workers give up root.** Started as root, the server kept root in every
+  worker, so each file a worker wrote under the site (image variations,
+  caches, logs of the application) belonged to root while the site's own web
+  server runs as the site's user: the site could not change or remove them,
+  and the two servers raced on the same files. The master keeps root for what
+  needs it — the ports, the certificates, reloads — and the zygote, every
+  worker, fork-per-request children and scheduled tasks give it up right after
+  they are forked, before any application code runs. Like Apache's `User` and
+  `Group`: `--user` / `--group`, `Q.webserver.user` / `Q.webserver.group`, or
+  `QBIX_RUN_USER` / `QBIX_RUN_GROUP` (a distribution adds its own prefix, vc
+  `VC_RUN_*`) from the environment or the `envvars` file; left out, the owner
+  and group of the document root. Root is refused unless
+  `--allow-root-workers` / `Q.webserver.allowRootWorkers`; a user or group that
+  does not exist stops the start before anything is bound, and a worker whose
+  switch fails is ended instead of serving as root. The directories the
+  workers write (`Q.web.cache.dir`, `Q.web.appCache.dir`,
+  `Q.webserver.precompress.dir`, `Q.webserver.writable`) are handed to that
+  user at start. `docs/workers.md` has the details; `tests/unit-runas.php`
+  holds it.
+- **`Q.web.cache.pauseFile`.** While the file named there exists, neither the
+  response cache nor the application's cache answers: every request reaches
+  the application. An application puts it there while it must answer
+  everything itself — a maintenance window, an installation rebuilding its
+  database — so visitors see its maintenance page and not pages stored before.
+  Looked at no more than twice a second per worker.
+
+---
+
 ## v0.0.4.33 — an application reading its own PHP files gets the files, not the transformed source
 
 2026-09-27
