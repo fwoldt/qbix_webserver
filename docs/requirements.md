@@ -228,8 +228,8 @@ platforms whose binary leaves the extension out (see the exceptions above).
 | `deepclone` | Fast deep object cloning |  |
 | `dio` | Direct low-level I/O (serial ports, devices) |  |
 | `ds` | Efficient data structures |  |
-| `ev` | libev event loop |  |
-| `event` | libevent event loop | Windows |
+| `ev` | libev event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md) |  |
+| `event` | libevent event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md) | Windows |
 | `ffi` | Calling C libraries from PHP | Linux x86-64, Linux ARM64 |
 | `gmssl` | Chinese national cryptography (SM2/3/4) |  |
 | `grpc` | gRPC clients | Windows |
@@ -259,7 +259,7 @@ platforms whose binary leaves the extension out (see the exceptions above).
 | `tidy` | HTML clean-up and repair | Windows |
 | `trader` | Technical-analysis maths | Windows |
 | `uuid` | UUID generation | Windows |
-| `uv` | libuv event loop | Windows |
+| `uv` | libuv event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md) | Windows |
 | `xlswriter` | Writing Excel files |  |
 | `xz` | XZ / LZMA compression |  |
 | `yac` | Lock-free shared-memory cache |  |

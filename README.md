@@ -417,7 +417,10 @@ requests.
 **PHP 8.6+ (epoll/kqueue):** the server detects PHP 8.6's native `Io\Poll` API
 and uses `epoll` on Linux or `kqueue` on the BSDs and macOS, with no PECL
 extensions. On older PHP it uses `stream_select`, which works fine — it is just
-O(n) per tick instead of O(1). Revolt is used if installed.
+O(n) per tick instead of O(1). Revolt is used if installed (with the `ev`,
+`event` or `uv` extension for epoll); measured, it was no faster than
+`stream_select` up to 2,000 connections: see
+[architecture.md](docs/architecture.md#revolt).
 
 **One platform needs a note.** `riscv64` passes only with PCRE's JIT disabled:
 under `qemu-riscv64` a pure-regex test dumps core with `pcre.jit=1` and passes

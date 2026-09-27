@@ -293,14 +293,14 @@
         },
         "ev": {
             "tier": "extra",
-            "purpose": "libev event loop",
+            "purpose": "libev event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md)",
             "source": "spc",
             "type": "pecl",
             "spc": "ev"
         },
         "event": {
             "tier": "extra",
-            "purpose": "libevent event loop",
+            "purpose": "libevent event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md)",
             "source": "spc",
             "type": "pecl",
             "spc": "event",
@@ -1395,7 +1395,7 @@
         },
         "uv": {
             "tier": "extra",
-            "purpose": "libuv event loop",
+            "purpose": "libuv event loop: epoll/kqueue for the Revolt event loop backend (see architecture.md)",
             "source": "spc",
             "type": "pecl",
             "spc": "uv",

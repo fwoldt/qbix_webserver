@@ -262,5 +262,5 @@ For PHP 8.1–8.5, the Symfony polyfill (`composer require symfony/polyfill-io-p
 ### Driver priority
 
 1. **Io\Poll** (PHP 8.6+ native) — epoll/kqueue, O(1)
-2. **Revolt** (if installed via Composer) — uses ext-uv or stream_select
+2. **Revolt** (if installed via Composer) — uses ext-ev, ext-event or ext-uv (epoll/kqueue), else stream_select; measured no faster than stream_select up to 2,000 connections ([architecture.md](architecture.md#revolt))
 3. **stream_select** (built-in fallback) — works everywhere, O(n)

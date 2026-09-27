@@ -262,6 +262,81 @@ Force one with the `QBIX_EVENT_LOOP` environment variable (it wins) or `Q.webser
 
 All three behave the same way: disabled watchers are skipped, a timer cancelled from its own callback stays cancelled, a repeating timer's next run bounds how long the loop waits, `stop()` from a callback ends the loop before it blocks again, and a timer, deferred, signal or stream callback that throws is logged once and never ends the loop (a stream watcher that throws is cancelled). `tests/unit-evented-backends.php` checks every backend for all of this; where `Io\Poll` is missing it runs the `iopoll` backend's logic over a small `stream_select()` stand-in, and it skips Revolt when that package is not installed.
 
+### Revolt
+
+[Revolt](https://revolt.run/) (`revolt/event-loop`, the loop amphp and ReactPHP
+build on) is a mature, stable event loop for PHP. It is pure PHP and picks the
+best waiting mechanism the PHP it runs on offers:
+
+| Revolt driver | Needs | Waits with |
+|---|---|---|
+| `EvDriver` | the `ev` extension (libev) | epoll / kqueue |
+| `EventDriver` | the `event` extension (libevent) | epoll / kqueue |
+| `UvDriver` | the `uv` extension (libuv) | epoll / kqueue / IOCP |
+| `StreamSelectDriver` | nothing | `stream_select()` (the same as this server's `select` backend) |
+
+Without one of the three extensions Revolt only adds its own layer over
+`stream_select()`, so installing the package alone gains nothing.
+
+**Installing it, system-wide.** Two parts: an extension for the PHP the server
+runs on, and the package where the server's autoloader finds it.
+
+1. The extension (one is enough; `ev` is the one Revolt tries first):
+
+   | System | Command |
+   |---|---|
+   | RHEL / Alma / Rocky 9 with Remi's PHP module | `dnf install php-pecl-ev` (or `php-pecl-event`, `php-pecl-uv`) |
+   | Remi's parallel packages (`phpXY-php`) | `dnf install php85-php-pecl-ev` |
+   | Debian / Ubuntu, and anything else | your PHP packager's `ev`, `event` or `uv` package where it has one; otherwise `pecl install ev`, then `extension=ev.so` in that PHP's ini |
+
+   Check it with `php --ri ev` using the same PHP binary the server runs.
+   The static binaries carry them in the `full` variant: `ev` everywhere,
+   `event` and `uv` everywhere but Windows (see
+   [requirements.md](requirements.md#every-extension)).
+
+2. The package: `composer require revolt/event-loop` in the project that runs
+   the server (it is only a development dependency of the server itself, so a
+   plain install does not bring it).
+
+**Configuring it.** The server takes Revolt automatically (`auto`) as soon as
+`Revolt\EventLoop` can be loaded. To choose explicitly:
+
+```json
+{ "Q": { "webserver": { "eventLoop": "revolt" } } }
+```
+
+or `QBIX_EVENT_LOOP=revolt` in the environment (it wins over the setting).
+Revolt's own `REVOLT_DRIVER` variable picks one of its drivers, for example
+`REVOLT_DRIVER='Revolt\EventLoop\Driver\EventDriver'`. The start-up banner
+shows the backend in use (`I/O: Revolt`), and so does
+`Q_Evented::backend()`.
+
+**What it gains, measured.** On a 12-core Linux machine (PHP 8.5.11, `ev`
+1.2.4, Revolt 1.0.9), cached pages over TLS with gzip, two servers from the
+same tree side by side, 15 s a run:
+
+| connections | `select` | Revolt + `ev` |
+|---:|---:|---:|
+| 16 | **3,822/s**, 0.26 ms CPU a page | 3,505/s, 0.29 ms |
+| 64 | **3,900/s** | 3,497/s |
+| 256 | **3,644/s** | 3,513/s |
+| 1,000 | **3,336/s** | 3,274/s |
+| 2,000 | **3,195/s**, no failures | 2,817/s, 85 failed |
+
+So up to 2,000 connections Revolt was 2–12 % slower: its layer costs more than
+epoll saves, and what bounds the server here is the one process that answers
+every cached request, not how it waits. That PHP's `stream_select()` also went
+past 1,024 descriptors without trouble. Revolt's own documentation draws the
+same line: native `stream_select()` is adequate up to a few hundred clients,
+and the extensions pay at thousands.
+
+**When to use it.** Keep `select` (set `"eventLoop": "select"` explicitly if
+Revolt is installed for another reason, since `auto` would take it). Try
+Revolt when a server holds many thousands of connections open at once (long
+polling, WebSockets, slow clients), and measure it on your own machine before
+and after.
+
+
 ## Benchmarks — Qbix Server vs nginx+fpm vs Swoole vs FrankenPHP
 
 Full results in [BENCHMARKS.md](docs/BENCHMARKS.md). Key findings:
