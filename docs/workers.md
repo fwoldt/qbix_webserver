@@ -154,21 +154,22 @@ the zygote. On stop, the pool asks every worker to exit, waits for them, and the
 stops the zygote.
 
 **Where it cannot run.** The hand-off depends on PHP passing a socket to
-another process with `SCM_RIGHTS`, and before **PHP 8.4** that is broken:
-`socket_recvmsg()` gives back a different socket from the one sent, so a worker
-forked from the zygote would talk into a dead end and every request after the
-first would be a 502. The server therefore tries a hand-off to itself at start,
-and uses the zygote only when the socket arrives intact. On PHP 8.2 and 8.3 it
-runs without it -- workers are forked from the server, as with `zygote: false` --
-and says so in the log:
+another process with `SCM_RIGHTS`. Before **PHP 8.4**, a `Socket` object put in
+that message arrives as a different socket, so a worker forked from the zygote
+would talk into a dead end and every request after the first would be a 502. A
+stream resource arrives intact, on PHP 8.1 and later, so the server hands the
+worker's connection over as the stream it is, and the zygote runs on PHP 8.2,
+8.3, 8.4 and 8.5 alike. It still tries a hand-off to itself at start and uses
+the zygote only when the socket arrives intact; where it does not, workers are
+forked from the server, as with `zygote: false`, and the log says so:
 
 ```
-  zygote off: PHP 8.3.33 does not pass sockets between processes intact (SCM_RIGHTS, fixed in PHP 8.4); workers are forked from the server
+  zygote off: PHP 8.x does not pass sockets between processes intact (SCM_RIGHTS); workers are forked from the server
 ```
 
 v0.0.4.29 turned the zygote on by default without this check, so on PHP 8.2 and
-8.3 its pool answered only the first request of each worker; set `zygote` to
-`false` there, or upgrade to a later version.
+8.3 its pool answered only the first request of each worker; v0.0.4.30 ran
+without the zygote there, and later versions run with it.
 
 **When the zygote fails.** If a hand-off fails -- the zygote was killed, a send
 or the reply fails, or five seconds pass -- the zygote is stopped and the console

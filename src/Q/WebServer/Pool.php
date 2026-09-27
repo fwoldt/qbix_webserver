@@ -286,8 +286,11 @@ class Q_WebServer_Pool
 		// wrong here -- including PHP handing back a stream where a Socket
 		// was sent, which the affected versions also do -- only means "no".
 		try {
+			// The same path forkWorkerViaZygote() takes: a stream pair, its
+			// end sent as a stream resource.
+			$family = defined('STREAM_PF_UNIX') ? STREAM_PF_UNIX : STREAM_PF_INET;
 			if (@socket_create_pair(AF_UNIX, SOCK_STREAM, 0, $ctl)
-			and @socket_create_pair(AF_UNIX, SOCK_STREAM, 0, $pair)) {
+			and ($pair = @stream_socket_pair($family, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP))) {
 				$sent = @socket_sendmsg($ctl[0], array('iov' => array('z'),
 					'control' => array(array('level' => SOL_SOCKET, 'type' => SCM_RIGHTS, 'data' => array($pair[1])))), 0);
 				$msg = array('name' => array(), 'buffer_size' => 8,
@@ -299,8 +302,8 @@ class Q_WebServer_Pool
 					elseif (is_resource($copy)) $wrote = @fwrite($copy, 'z') === 1;
 					if ($wrote) {
 						$r = array($pair[0]); $w = $e = null;
-						if (@socket_select($r, $w, $e, 0, 200000) > 0) {
-							$ok = @socket_read($pair[0], 1) === 'z';
+						if (@stream_select($r, $w, $e, 0, 200000) > 0) {
+							$ok = @fread($pair[0], 1) === 'z';
 						}
 					}
 					if ($copy instanceof \Socket) @socket_close($copy);
@@ -312,6 +315,7 @@ class Q_WebServer_Pool
 		}
 		foreach (array_merge((array) $ctl, (array) $pair) as $s) {
 			if ($s instanceof \Socket) @socket_close($s);
+			elseif (is_resource($s)) @fclose($s);
 		}
 		return self::$socketPassingWorks = $ok;
 	}
@@ -514,7 +518,7 @@ class Q_WebServer_Pool
 				$this->startZygote();
 			} elseif (function_exists('socket_recvmsg') and !self::socketPassingWorks()) {
 				fwrite(STDERR, sprintf("  zygote off: PHP %s does not pass sockets between processes intact"
-					. " (SCM_RIGHTS, fixed in PHP 8.4); workers are forked from the server\n", PHP_VERSION));
+					. " (SCM_RIGHTS); workers are forked from the server\n", PHP_VERSION));
 			}
 		}
 		$pool = $this;
@@ -843,19 +847,17 @@ class Q_WebServer_Pool
 			socket_clear_error();
 			return true;
 		};
-		$theirs = @socket_import_stream($pair[1]);
-		$sent = false;
-		if ($theirs !== false) {
-			do {
-				$sent = @socket_sendmsg($ctl, array(
-					'iov' => array('F'),
-					'control' => array(array('level' => SOL_SOCKET, 'type' => SCM_RIGHTS, 'data' => array($theirs))),
-				), 0);
-			} while ($sent === false and $interrupted() and microtime(true) < $deadline);
-		}
-		// An imported socket leaves its descriptor to the stream, which is
-		// closed here: the zygote holds its own copy now.
-		unset($theirs);
+		// Sent as the stream it is. Given a Socket object, PHP before 8.4
+		// puts the wrong descriptor into the message (the zygote received
+		// some other socket and every worker it forked answered nothing); a
+		// stream resource arrives intact on 8.1 and later.
+		do {
+			$sent = @socket_sendmsg($ctl, array(
+				'iov' => array('F'),
+				'control' => array(array('level' => SOL_SOCKET, 'type' => SCM_RIGHTS, 'data' => array($pair[1]))),
+			), 0);
+		} while ($sent === false and $interrupted() and microtime(true) < $deadline);
+		// The zygote holds its own copy now.
 		fclose($pair[1]);
 		if (!$sent) {
 			fclose($pair[0]);
