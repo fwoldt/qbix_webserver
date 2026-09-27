@@ -4455,11 +4455,22 @@ WORKER;
 		$meta = is_resource($client) ? @stream_get_meta_data($client) : array();
 		$isTls = !empty($meta['crypto']);
 
-		if (!$isTls && $size > 1048576 && $method !== 'HEAD' && Q_WebServer_Fork::available()) {
+		if (!$isTls && $size > 1048576 && Q_WebServer_Fork::available()) {
 			$connHeader = 'close'; // forked child always closes
 			$out = "HTTP/1.1 200 OK\r\n" . $baseHeaders
 				. "Content-Length: $size\r\n"
 				. "Connection: close\r\n\r\n";
+			// HEAD describes what this GET sends -- the file as it is -- and
+			// needs no child to do it. Left to the paths below, it announced
+			// the compressed length the GET never sends.
+			if ($method === 'HEAD') {
+				self::$lastStatus = 200;
+				self::$lastBytes = $size;
+				self::writeAll($client, "HTTP/1.1 200 OK\r\n" . $baseHeaders
+					. "Content-Length: $size\r\n"
+					. "Connection: " . ($keepAlive ? 'keep-alive' : 'close') . "\r\n\r\n");
+				return;
+			}
 			$pid = Q_WebServer_Fork::fork();
 			if ($pid === 0) {
 				// Child: write headers + stream file in chunks
@@ -4526,27 +4537,42 @@ WORKER;
 				}
 				$precompressEnabled = class_exists('Q_WebServer_Precompress', false)
 					&& Q_Config::get('Q', 'webserver', 'precompress', 'enabled', false);
-				if ($precompressEnabled) {
-					$body = Q_WebServer_Precompress::serve(
+				// Precompress::serve() answers null whenever it does not
+				// apply: the client takes no gzip (identity, br alone,
+				// gzip;q=0), the file is under its minSize, or gzip would not
+				// shrink it. That null was once sent as the body -- a 200 with
+				// Content-Length: 0 -- so the file is read and offered to
+				// maybeCompress() instead, as it is with precompress off.
+				$body = $precompressEnabled
+					? Q_WebServer_Precompress::serve(
 						$fsPath, $contentType, $mtime, $size, $reqHeaders, $gzHeaders
-					);
-				} else {
-					$body = file_get_contents($fsPath);
-					$body = Q_WebServer_Headers::maybeCompress($body, $contentType, $reqHeaders, $gzHeaders);
+					)
+					: null;
+				if (!is_string($body)) {
+					$gzHeaders = array();
+					$raw = file_get_contents($fsPath);
+					$body = is_string($raw)
+						? Q_WebServer_Headers::maybeCompress($raw, $contentType, $reqHeaders, $gzHeaders)
+						: null;
 				}
-				$out = "HTTP/1.1 200 OK\r\n" . $baseHeaders;
-				$out .= self::headerLines($gzHeaders);
-				$out .= "Content-Length: " . strlen($body) . "\r\n"
-					. "Connection: $connHeader\r\n\r\n";
-				self::$lastStatus = 200;
-				self::$lastBytes = strlen($body);
-				self::writeAll($client, $method === 'HEAD' ? $out : $out . $body);
-				return;
+				// Nothing encoded it: the file goes out as it is, by the
+				// uncompressed path below, which also keeps it in memory under
+				// this coding's key.
+				if (is_string($body) && !empty($gzHeaders['Content-Encoding'])) {
+					$out = "HTTP/1.1 200 OK\r\n" . $baseHeaders;
+					$out .= self::headerLines($gzHeaders);
+					$out .= "Content-Length: " . strlen($body) . "\r\n"
+						. "Connection: $connHeader\r\n\r\n";
+					self::$lastStatus = 200;
+					self::$lastBytes = strlen($body);
+					self::writeAll($client, $method === 'HEAD' ? $out : $out . $body);
+					return;
+				}
 			}
 		}
 
 		// ── Uncompressed — serve and cache ──
-		$body = file_get_contents($fsPath);
+		$body = (isset($raw) && is_string($raw)) ? $raw : file_get_contents($fsPath);
 		$kaHead = "HTTP/1.1 200 OK\r\n" . $baseHeaders
 			. "Content-Length: $size\r\nConnection: keep-alive\r\n\r\n";
 		$clHead = "HTTP/1.1 200 OK\r\n" . $baseHeaders
