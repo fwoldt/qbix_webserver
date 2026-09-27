@@ -65,6 +65,23 @@ edited down to what a reader actually needs.
 
 ---
 
+## v0.0.4.33 — an application reading its own PHP files gets the files, not the transformed source
+
+2026-09-27
+
+### Fixed
+
+- **Reading a PHP file gives its own bytes.** The compat file wrapper
+  transformed every `.php` file opened for reading, not only those opened by
+  `include` and `require`, so `file_get_contents()`, `md5_file()` and `fopen()`
+  on application source returned the rewritten code. An application that
+  checks its own files saw each such file as changed: Exponential's upgrade
+  check (Setup › System Upgrade › File consistency) listed about 330 kernel and
+  library files as modified under Velocity and none under Apache. Only includes
+  are transformed now; `tests/unit-compat-read-is-the-file.php` holds it.
+
+---
+
 ## v0.0.4.32 — several servers on one port, browsers answered from the response cache, purges seen at once, and the zygote on PHP 8.2 and 8.3
 
 2026-09-27
