@@ -384,9 +384,7 @@ class Q_WebServer
 		self::$socket = stream_socket_server(
 			"tcp://{$host}:{$port}", $errno, $errstr,
 			STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
-			stream_context_create(array('socket' => array(
-				'backlog' => self::listenBacklog(),
-			)))
+			stream_context_create(array('socket' => self::listenOptions()))
 		);
 		if (!self::$socket) {
 			throw new Exception("Could not bind to {$host}:{$port} — $errstr");
@@ -602,7 +600,7 @@ class Q_WebServer
 		  + (self::http2Enabled()
 			? array('alpn_protocols' => 'h2,http/1.1')
 			: array()),
-			'socket' => array('backlog' => self::listenBacklog()),
+			'socket' => self::listenOptions(),
 		));
 
 		self::$tlsSocket = stream_socket_server(
@@ -5559,6 +5557,29 @@ WORKER;
 				'headers' => $parsed['headers'] ?? array(),
 			)
 		);
+	}
+
+	/**
+	 * Socket options for the TCP and TLS listeners: the backlog, and
+	 * SO_REUSEPORT when Q.webserver.reusePort is true.
+	 *
+	 * With SO_REUSEPORT several server processes can listen on the same port
+	 * and the kernel spreads new connections across them, so cached answers,
+	 * which each server gives from its own process, use more than one core.
+	 * Every process that shares the port must set it; Linux and the BSDs
+	 * support it, other systems ignore the option.
+	 *
+	 * @method listenOptions
+	 * @static
+	 * @return {array}
+	 */
+	static function listenOptions()
+	{
+		$options = array('backlog' => self::listenBacklog());
+		if (Q_Config::get('Q', 'webserver', 'reusePort', false) === true) {
+			$options['so_reuseport'] = true;
+		}
+		return $options;
 	}
 
 	/**

@@ -330,12 +330,54 @@ past 1,024 descriptors without trouble. Revolt's own documentation draws the
 same line: native `stream_select()` is adequate up to a few hundred clients,
 and the extensions pay at thousands.
 
+Revolt's other half, fibers, is for application code written to run
+concurrently. A server whose time goes to rendering synchronous PHP in its
+workers, and to answering cached pages in a loop that already never blocks,
+gains nothing from it.
+
 **When to use it.** Keep `select` (set `"eventLoop": "select"` explicitly if
 Revolt is installed for another reason, since `auto` would take it). Try
 Revolt when a server holds many thousands of connections open at once (long
 polling, WebSockets, slow clients), and measure it on your own machine before
 and after.
 
+
+
+## Several servers on one port
+
+The parent answers cached pages itself, before any worker is involved: about
+0.3 ms of CPU a page, which on one core is a ceiling of roughly 3,500 pages a
+second whatever the event loop. `Q.webserver.reusePort` lifts it by running
+more than one server on the same address:
+
+```json
+{ "Q": { "webserver": { "reusePort": true } } }
+```
+
+With it, the listeners are opened with `SO_REUSEPORT`, several server processes
+(each with its own pool) can listen on the same port, and the kernel spreads
+new connections across them. Start each with the same configuration and port;
+every one of them must set the option. Linux and the BSDs support it.
+
+Measured on a 12-core Linux machine, cached front page over TLS with gzip,
+15 s a run, servers with 4 workers each:
+
+| | 64 connections | 256 connections |
+|---|---:|---:|
+| one server | 3,425–3,628 pages/s | 3,556–3,616 |
+| two servers on the port | 6,608 | 6,939 |
+| four servers on the port | **12,249** (p50 4 ms) | **13,083** (p50 18 ms) |
+
+What to know before using it:
+
+- Each server has its own worker pool, so memory grows with the number of
+  servers; size the pools down accordingly.
+- The response cache's disk tier is shared when the servers use the same cache
+  directory; its memory and APCu tiers belong to each server (APCu is per
+  process tree), so each warms its own.
+- The panel, the statistics and the pid file describe one server; with several
+  they describe the one you ask.
+- Renders are not faster: they are bounded by the workers, not the listener.
 
 ## Benchmarks — Qbix Server vs nginx+fpm vs Swoole vs FrankenPHP
 
