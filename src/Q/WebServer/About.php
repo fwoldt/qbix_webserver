@@ -64,7 +64,7 @@ class Q_WebServer_About
 		};
 		// GNU style: "program (package) version" first, the licence and the
 		// warranty disclaimer last; the details a bug report needs between.
-		$out = preg_replace('/\.php$/', '', $i['program']) . ' (' . $i['short'] . ') ' . $i['version'] . "\n"
+		$out = preg_replace('/\.(php|phar)$/', '', $i['program']) . ' (' . $i['short'] . ') ' . $i['version'] . "\n"
 			. wordwrap($i['description'], 78) . "\n\n"
 			. $row('Program', $i['program'] . ' -- ' . $i['purpose'])
 			. $row('Version', $i['version'] . ($i['build'] !== 'source' ? '+' . $i['build'] : ''))

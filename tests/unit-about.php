@@ -29,7 +29,7 @@ foreach ($programs as $program) {
 		$out = array();
 		exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/' . $program) . ' ' . escapeshellarg($flag) . ' 2>&1', $out, $code);
 		$text = implode("\n", $out);
-		$name = preg_replace('/\.php$/', '', basename($program));
+		$name = preg_replace('/\.(php|phar)$/', '', basename($program));
 		check("$program $flag: exit 0", $code === 0);
 		check("$program $flag: first line names the program and a release",
 			(bool) preg_match('/^' . preg_quote($name, '/') . ' \(.+\) v\d/', $out[0] ?? ''));
