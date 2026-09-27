@@ -258,6 +258,12 @@ seen at once. A class that throws is logged and not asked for ten seconds.
 This is independent of `Q.web.cache.enabled`. Exponential's role-aware HTTP
 cache is configured this way by `exp:velocity` when it is enabled.
 
+**Which answers first.** A request with a session cookie (one of
+`Q.web.cache.skip.cookies`) or credentials goes to the application's cache
+only — this cache would skip it anyway. Any other request is answered by this
+cache first, the faster of the two, and the application's cache is asked when
+it misses.
+
 ### Response headers
 
 | Header | When |
