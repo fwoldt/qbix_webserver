@@ -151,6 +151,9 @@ $opts = array(
 	'conf-dir' => null, // Debian Apache-style configuration directory (/etc/qbix, plus overlays), or auto
 	'distribution' => null, // --distribution=NAME : a distribution's additions (Q_WebServer_Distribution_NAME)
 	'layout'  => false, // --layout : print the configuration files that would be loaded, and exit
+	'user'    => null,  // --user=NAME : the user the workers run as (Apache's User)
+	'group'   => null,  // --group=NAME : the group the workers run as (Apache's Group)
+	'allow-root-workers' => false, // --allow-root-workers : permit --user=root
 );
 
 
@@ -189,9 +192,9 @@ if (!function_exists('qbix_normalize_argv')) {
 $argv = qbix_normalize_argv($argv,
 	array('root', 'app', 'host', 'port', 'https-port', 'socket', 'socket-mode', 'workers', 'config',
 		'preset', 'sign', 'verify', 'key', 'key-id', 'generate-key', 'policy', 'pid', 'pack', 'output',
-		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer', 'm'),
+		'keep-globals', 'conf-dir', 'distribution', 'deploy', 'signer', 'm', 'user', 'group'),
 	array('help', 'version', 'stop', 'reload', 'debug', 'quiet', 'verbose', 'hotreload', 'layout', 'gui', 'open', 'watchdog',
-		'sign-binary', 'verify-binary', 'publish-rekor'));
+		'sign-binary', 'verify-binary', 'publish-rekor', 'allow-root-workers'));
 
 foreach ($argv as $i => $arg) {
 	if ($i === 0) continue;
@@ -218,6 +221,11 @@ foreach ($argv as $i => $arg) {
 		echo "  --layout         Print the configuration files that would be loaded, and exit\n";
 		echo "  --preset=NAME    Framework preset (laravel, symfony, wordpress, drupal, exponential)\n";
 		echo "  --pid=PATH       PID file path\n";
+		echo "  --user=NAME      User the workers run as when started as root\n";
+		echo "                   (default: Q.webserver.user, QBIX_RUN_USER, else the\n";
+		echo "                   owner of the document root; never root unless\n";
+		echo "                   --allow-root-workers)\n";
+		echo "  --group=NAME     Group the workers run as (Q.webserver.group, QBIX_RUN_GROUP)\n";
 		echo "  --hotreload      Watch files, auto-restart on changes\n";
 		echo "  --debug          Verbose logging\n";
 		echo "  --verbose        Also report every certificate provider tried\n";
@@ -275,6 +283,10 @@ foreach ($argv as $i => $arg) {
 	}
 	if ($arg === '--layout') {
 		$opts['layout'] = true;
+		continue;
+	}
+	if ($arg === '--allow-root-workers') {
+		$opts['allow-root-workers'] = true;
 		continue;
 	}
 	if ($arg === '--gui') {
@@ -713,6 +725,9 @@ if (file_exists($appConfig)) {
 // when asked for (--conf-dir, QBIX_CONF_DIR/VC_CONF_DIR, or a --config inside
 // its sites-* directory); see Q_WebServer_Layout.
 require_once __DIR__ . '/src/Q/WebServer/Layout.php';
+// The user and group the workers run as (--user, --group; see Q_WebServer_RunAs).
+require_once __DIR__ . '/src/Q/WebServer/RunAs.php';
+Q_WebServer_RunAs::setCommandLine($opts);
 // A distribution of the engine can add to it without changing it: named by
 // --distribution, QBIX_DISTRIBUTION or a DISTRIBUTION file in the source
 // tree, its class Q_WebServer_Distribution_<Name> is asked to register what
@@ -1131,6 +1146,8 @@ Q_Config::set('Q', 'webserver', 'startOptions', array(
 	'root' => isset($webDir) ? (string) $webDir : null,
 	'pid' => $opts['pid'] ? (string) $opts['pid'] : null,
 	'distribution' => $opts['distribution'] ? (string) $opts['distribution'] : null,
+	'user' => $opts['user'] ? (string) $opts['user'] : null,
+	'group' => $opts['group'] ? (string) $opts['group'] : null,
 	'server' => __FILE__,
 ));
 if ($opts['keep-globals'] !== null) {

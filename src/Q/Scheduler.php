@@ -156,6 +156,7 @@ class Q_Scheduler
 		$pid = pcntl_fork();
 		if ($pid === 0) {
 			// CHILD
+			if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::dropOrExit('scheduled task');
 			$result = null;
 			try {
 				Q::event($handler, array('task' => $name, 'scheduled' => true), false, false, $result);

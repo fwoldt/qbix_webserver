@@ -519,6 +519,26 @@ class Q_WebServer
 		// ── Worker pool ──────────────────────────────────
 		// Workers are auto-detected in qbixserver.php before start() is called.
 		// If $workers > 0, create the pool.
+		// Who runs the application: the master stays root when started as
+		// root (ports, certificates, reloads); every process that runs
+		// application code drops to this user first (Q_WebServer_RunAs).
+		// A configured user that cannot be used stops the start here rather
+		// than leaving workers to fail -- or to serve as root.
+		if (!class_exists('Q_WebServer_RunAs', false)) require_once __DIR__ . '/WebServer/RunAs.php';
+		$runAs = Q_WebServer_RunAs::plan(true);
+		if ($runAs['error']) {
+			fwrite(STDERR, "Error: " . $runAs['error'] . "; not starting (workers never run as root by accident)\n");
+			exit(1);
+		}
+		echo '  Workers as: ' . Q_WebServer_RunAs::describe() . "\n";
+		if ($runAs['warning']) fwrite(STDERR, '  Warning: ' . $runAs['warning'] . "\n");
+		if ($runAs['switch'] and !Q_WebServer_Fork::available()) {
+			fwrite(STDERR, "  Warning: no fork here, so PHP runs in the server process, as root\n");
+		}
+		foreach (Q_WebServer_RunAs::prepare() as $dir => $n) {
+			if ($n > 0) echo "  Handed to {$runAs['user']}: $dir ($n entries were root's)\n";
+		}
+
 		if ($workers > 0 && Q_WebServer_Fork::available()) {
 			self::$pool = new Q_WebServer_Pool($workers);
 		}
@@ -3544,6 +3564,7 @@ class Q_WebServer
 			$pid = Q_WebServer_Fork::fork();
 			if ($pid === 0) {
 				// ── CHILD: run dispatch pipeline ──
+				if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::dropOrExit('request child');
 				self::dropOutputBuffers();
 				ob_start();
 				$status = 200;
@@ -3747,6 +3768,7 @@ class Q_WebServer
 				// Fork failed — fall through to in-process execution
 			} elseif ($pid === 0) {
 				// ── CHILD: handle request, write response to client, exit ──
+				if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::dropOrExit('request child');
 				$parsed['_scriptPath'] = $scriptPath;
 				$parsed['_client'] = $client; // for SSE/streaming in dispatchToQ
 

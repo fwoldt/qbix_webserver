@@ -64,6 +64,8 @@ class Q_WebServer_Distribution_Vc
 	static function register()
 	{
 		Q_WebServer_Layout::addOverlay(self::ETC, self::ENV, self::STATE);
+		// VC_RUN_USER / VC_RUN_GROUP (envvars) ahead of QBIX_RUN_*.
+		if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::addEnvPrefix('VC');
 		// Exponential installations, any release, in the panel's Apps and
 		// Frameworks tabs and the autohost: ahead of the generic detectors.
 		if (!class_exists('Q_WebServer_Framework', false)) {

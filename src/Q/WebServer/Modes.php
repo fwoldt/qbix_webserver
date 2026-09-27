@@ -104,12 +104,54 @@ class Q_WebServer_Modes
 	 */
 	static function open($path, $fopenMode, $mode)
 	{
-		if ($mode === null) return fopen($path, $fopenMode);
+		if ($mode === null) { $fp = fopen($path, $fopenMode); if ($fp) self::own($path); return $fp; }
 		$old = self::narrow($mode);
 		$fp = fopen($path, $fopenMode);
 		self::restore($old);
-		if ($fp) self::chmod($path, $mode);
+		if ($fp) { self::chmod($path, $mode); self::own($path); }
 		return $fp;
+	}
+
+	/**
+	 * Directories whose new files and directories belong to another user:
+	 * prefix => array(uid, gid). A server running as root hands the
+	 * directories its unprivileged workers share with it to their user
+	 * (Q_WebServer_RunAs), and what it writes there itself goes the same way,
+	 * so a worker can replace or remove it.
+	 * @property $owners
+	 * @type {array}
+	 */
+	static $owners = array();
+
+	/**
+	 * Give what is created under $dir to $uid:$gid from now on.
+	 * @method ownUnder
+	 * @static
+	 */
+	static function ownUnder($dir, $uid, $gid)
+	{
+		$dir = rtrim((string) $dir, '/');
+		if ($dir === '') return;
+		self::$owners[$dir] = array((int) $uid, (int) $gid);
+	}
+
+	/**
+	 * Chown $path to the owner of the ownUnder() directory it is in, when
+	 * root created it. Nothing to do anywhere else, or when not root.
+	 * @method own
+	 * @static
+	 * @param {string} $path
+	 */
+	static function own($path)
+	{
+		if (!self::$owners or !function_exists('posix_geteuid') or posix_geteuid() !== 0) return;
+		$path = (string) $path;
+		foreach (self::$owners as $dir => $o) {
+			if ($path !== $dir and strncmp($path, $dir . '/', strlen($dir) + 1) !== 0) continue;
+			$st = @lstat($path);
+			if ($st and $st['uid'] === 0 and !is_link($path)) { @chown($path, $o[0]); @chgrp($path, $o[1]); }
+			return;
+		}
 	}
 
 	/**
@@ -125,11 +167,15 @@ class Q_WebServer_Modes
 	 */
 	static function put($path, $data, $flags, $mode)
 	{
-		if ($mode === null) return @file_put_contents($path, $data, $flags);
+		if ($mode === null) {
+			$written = @file_put_contents($path, $data, $flags);
+			if ($written !== false) self::own($path);
+			return $written;
+		}
 		$old = self::narrow($mode);
 		$written = @file_put_contents($path, $data, $flags);
 		self::restore($old);
-		if ($written !== false) self::chmod($path, $mode);
+		if ($written !== false) { self::chmod($path, $mode); self::own($path); }
 		return $written;
 	}
 
@@ -211,6 +257,7 @@ class Q_WebServer_Modes
 				self::chmod($created, $mode);
 			}
 		}
+		if (self::$owners) foreach ($missing as $created) self::own($created);
 		return true;
 	}
 

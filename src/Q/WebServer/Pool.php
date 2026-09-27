@@ -468,6 +468,14 @@ class Q_WebServer_Pool
 			$__run = static function ($__warmupFile) {
 				require $__warmupFile;
 			};
+			// As the worker user (effective ids only, root comes back after):
+			// the caches and compiled files the warm-up writes are then the
+			// workers' to replace, not root's. Q.webserver.warmupAsUser false
+			// runs it as root, as before.
+			if (class_exists('Q_WebServer_RunAs', false) and Q_Config::get('Q', 'webserver', 'warmupAsUser', true) !== false) {
+				$__inner = $__run;
+				$__run = static function ($f) use ($__inner) { return Q_WebServer_RunAs::asUser(function () use ($__inner, $f) { return $__inner($f); }); };
+			}
 			try {
 				$__run($warmup);
 				// The warm-up is a request as far as the file wrapper is
@@ -661,6 +669,10 @@ class Q_WebServer_Pool
 				Q_WebServer_CompatFileWrapper::rememberExistence(true);
 			}
 
+			// Last before any application code: give up root (Q_WebServer_RunAs).
+			// The sockets above are closed first, so a worker that cannot
+			// switch leaves holding nothing of the server's.
+			if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::dropOrExit('worker');
 			self::childRun($pair[1], $this->octane, $this->maxRequests);
 			exit(0);
 		}
@@ -733,6 +745,9 @@ class Q_WebServer_Pool
 				Q_WebServer::closeInheritedDescriptors();
 			}
 			self::closeInheritedSockets(null);
+			// The zygote gives up root itself, so every worker it forks is born
+			// as the worker user and never held root at all.
+			if (class_exists('Q_WebServer_RunAs', false)) Q_WebServer_RunAs::dropOrExit('zygote');
 			self::zygoteMain($ctl[1], $this->octane, $this->maxRequests);
 			exit(0);
 		}
