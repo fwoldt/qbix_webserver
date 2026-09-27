@@ -615,6 +615,10 @@ class Q_WebServer_Cache
 	 */
 	static function get($parsed, $allowHead = false)
 	{
+		// Paused (Q.web.cache.pauseFile exists): neither cache answers, the
+		// application does -- a site in maintenance shows its maintenance page,
+		// not the pages stored before it went offline.
+		if (self::paused()) return null;
 		// The application's own cache (Q.web.appCache) knows who the visitor
 		// is, so it answers the requests with a session cookie that this cache
 		// skips: asked first for those. For the rest this cache answers first
@@ -651,6 +655,31 @@ class Q_WebServer_Cache
 			return $app;
 		}
 		return $own;
+	}
+
+	/**
+	 * Whether the cache is paused: Q.web.cache.pauseFile names a file, and it
+	 * exists. An application puts it there while it must answer every request
+	 * itself (a maintenance window, an installation rebuilding the database).
+	 * Looked at no more than twice a second per worker.
+	 * @method paused
+	 * @static
+	 * @return {boolean}
+	 */
+	static function paused()
+	{
+		static $file = null, $checked = 0.0, $state = false;
+		if ($file === null) {
+			$file = class_exists('Q_Config', false) ? (string) Q_Config::get('Q', 'web', 'cache', 'pauseFile', '') : '';
+		}
+		if ($file === '') return false;
+		$now = microtime(true);
+		if ($now - $checked >= 0.5) {
+			clearstatcache(true, $file);
+			$state = is_file($file);
+			$checked = $now;
+		}
+		return $state;
 	}
 
 	/** This cache's own lookup (get() asks the application's cache around it). */
