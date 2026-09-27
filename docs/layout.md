@@ -40,7 +40,9 @@ made or removed by the console.
 
 Every file holds a JSON object in the engine's usual configuration format, under
 Apache's file names. `envvars` holds `export NAME=value` lines, as Apache's does;
-the server reads it, and never runs it as a script.
+the server reads it, and never runs it as a script. `QBIX_RUN_USER` and
+`QBIX_RUN_GROUP` there set the workers' user and group, as `APACHE_RUN_USER` and
+`APACHE_RUN_GROUP` do (see [workers.md](workers.md#the-user-the-workers-run-as)).
 
 Only `*.conf` and `*.json` files in an `-enabled` directory are loaded, as Apache
 includes only `*.conf`, so an editor's backup file is never read as a setting. A

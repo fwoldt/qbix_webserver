@@ -283,6 +283,51 @@ reload: an idle worker is replaced at once, a busy one after its current request
 
 ---
 
+### The user the workers run as
+
+A server started as root -- to bind ports below 1024, or to read a certificate only
+root may read -- keeps root in the server process only. Every process that runs
+application code gives it up right after it is forked and before it runs anything:
+each worker, the zygote (so the workers it forks never held root at all), a
+fork-per-request child and a scheduled task. The order is `setgid`, `initgroups`,
+`setuid`; the process then checks that it is no longer root and that root cannot be
+regained, and is ended if either is not so. It never serves as root because a
+switch failed. The TLS handshake stays in the server process, so the workers never
+need the certificate files.
+
+Who, first match wins -- like Apache's `User`/`Group` and Debian's
+`APACHE_RUN_USER`/`APACHE_RUN_GROUP` in `envvars`:
+
+| Where | User | Group |
+|---|---|---|
+| command line | `--user=NAME` | `--group=NAME` |
+| configuration | `Q.webserver.user` | `Q.webserver.group` |
+| environment, then the `envvars` file of the configuration tree | `QBIX_RUN_USER` | `QBIX_RUN_GROUP` |
+| default | owner of the document root | group of the document root |
+
+A distribution may add its own names ahead of `QBIX_` (Exponential Velocity reads
+`VC_RUN_USER`/`VC_RUN_GROUP` first). Names or numbers (`#1000`) are accepted; with
+a user and no group, the user's primary group is used.
+
+- A user or group that does not exist stops the server at start, with the reason.
+- `root` is refused unless `Q.webserver.allowRootWorkers` is `true`
+  (`--allow-root-workers`, `QBIX_RUN_ALLOW_ROOT=1`).
+- With nothing configured and a document root that belongs to root, the workers stay
+  root as before, and the start-up says so.
+- The warm-up (`Q.webserver.warmup`) runs with the worker user's effective ids, so the
+  caches it writes are the workers' to replace; `Q.webserver.warmupAsUser: false`
+  runs it as root.
+- The server's own cache directories (`Q.web.cache.dir`, `Q.web.appCache.dir`,
+  `Q.webserver.precompress.dir`, plus any listed in `Q.webserver.writable`) are handed
+  to the worker user at start, with whatever root owned in them, and what the server
+  writes there later goes to that user too. The logs and the pid file stay root's.
+- The worker user must be able to read the engine's own source tree: classes are
+  loaded lazily by the workers.
+
+The start-up prints the choice: `Workers as: alpha:psaserv (default: owner of /srv/site)`.
+
+---
+
 ### Settings reference
 
 Every setting, with its default. All are under `Q.webserver`.
@@ -299,6 +344,10 @@ Every setting, with its default. All are under `Q.webserver`.
 | `warmup` | — | A script run once in the parent before the workers are forked. See [reset.md](reset.md#warming-the-pool-in-the-parent-and-the-one-trap-in-it). |
 | `keepGlobals` | `[]` | Globals a worker keeps between requests. `--keep-globals` sets it too. |
 | `maxConnections` | `1024` | Connections open at once; beyond it the server answers `503`. |
+| `user`, `group` | owner and group of the document root | Who the workers run as when the server is root. See [The user the workers run as](#the-user-the-workers-run-as). |
+| `allowRootWorkers` | `false` | Permit `user` root. |
+| `warmupAsUser` | `true` | Run the warm-up with the worker user's effective ids. |
+| `writable` | `[]` | More directories to hand to the worker user at start. |
 
 The pool size itself is given with `--workers`.
 

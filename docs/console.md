@@ -36,6 +36,8 @@ php qbixserver.php --help
 | `--layout` | Print the configuration files that would be loaded, as JSON, and exit. |
 | `--preset=NAME` | Framework preset: `laravel`, `symfony`, `wordpress`, `drupal`, `exponential`. |
 | `--pid=PATH` | The pid file. |
+| `--user=NAME`, `--group=NAME` | The user and group the workers run as when the server is started as root (Apache's `User`/`Group`). See [workers.md](workers.md#the-user-the-workers-run-as). |
+| `--allow-root-workers` | Permit `--user=root`. |
 | `--stop`, `--reload` | Stop the running server, or re-exec it, through its pid file. |
 | `-t` | Test the configuration and exit. |
 | `--hotreload` | Watch files and restart when they change. |
