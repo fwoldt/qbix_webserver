@@ -1145,6 +1145,12 @@ class Q_WebServer
 				'rawHeaders' => array(),
 				'body' => $request['body'],
 				'httpVersion' => '2',
+				// HTTP/2 is only served over TLS here. Without these the worker
+				// set no HTTPS variable and the application rendered every
+				// HTTP/2 page as plain HTTP (its absolute URLs, its own
+				// "is this secure" answers), and stored it under http://.
+				'https' => true,
+				'_https' => true,
 				// Carried so the worker and the log see what the HTTP/1.1 path
 				// gives them.
 				'clientIp' => $clientIp,

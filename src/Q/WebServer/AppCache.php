@@ -101,7 +101,9 @@ class Q_WebServer_AppCache
 			$cache = $class::fromDir(self::$dir);
 			if (!$cache) return null;
 			$answer = $cache->serve(array(
-				'scheme' => !empty($parsed['_https']) || !empty($parsed['https']) ? 'https' : 'http',
+				// HTTP/2 is served over TLS only here, and its request carries no _https.
+				'scheme' => !empty($parsed['_https']) || !empty($parsed['https'])
+					|| ($parsed['httpVersion'] ?? '') === '2' ? 'https' : 'http',
 				'host' => (string) ($headers['host'] ?? ''),
 				'uri' => (string) $uri,
 				'method' => $method,
