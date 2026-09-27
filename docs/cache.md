@@ -231,6 +231,33 @@ Every setting, with its default. All are under `Q.web.cache`.
 
 ---
 
+### An application's own cache
+
+This cache skips every request with a session cookie, because it cannot tell
+one visitor from another. An application that keeps rendered pages itself,
+keyed by who the visitor is, can be asked first, in the server process, so a
+hit never wakes a worker — for signed-in visitors too:
+
+```json
+{ "Q": { "web": { "appCache": {
+    "file":  "/path/to/app/lib/PageCache.php",
+    "class": "PageCache",
+    "dir":   "/path/to/app/var/page-cache"
+} } } }
+```
+
+`class` needs a static `fromDir($dir)` that returns an object (or `null` when
+the application has switched its cache off), whose `serve(array $request)`
+returns `[status, headers, body]` for a hit and `null` otherwise. `$request`
+holds `scheme`, `host`, `uri` (with the query), `method`, `cookies`,
+`acceptEncoding` and `ifNoneMatch`. Only GET and HEAD are asked about; HEAD is
+answered without the body.
+
+A new object is made for every request, so a purge or a switched-off cache is
+seen at once. A class that throws is logged and not asked for ten seconds.
+This is independent of `Q.web.cache.enabled`. Exponential's role-aware HTTP
+cache is configured this way by `exp:velocity` when it is enabled.
+
 ### Response headers
 
 | Header | When |

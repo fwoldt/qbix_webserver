@@ -301,6 +301,7 @@ class Q_WebServer
 			fwrite(STDERR, '  cache: panel settings not applied (' . $e->getMessage() . ")\n");
 		}
 		Q_WebServer_Cache::init();
+		Q_WebServer_AppCache::init();
 		// Q.web.cache.components.enabled was read by nothing: init() was never
 		// called, so the setting did nothing and the layer stayed off.
 		Q_WebServer_Cache_Components::init();

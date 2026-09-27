@@ -608,6 +608,13 @@ class Q_WebServer_Cache
 	 */
 	static function get($parsed, $allowHead = false)
 	{
+		// The application's own cache first: it knows who the visitor is,
+		// so it can answer requests with a session cookie, which this cache
+		// skips. Independent of this cache being enabled.
+		if (($allowHead or ($parsed['method'] ?? '') === 'GET') and class_exists('Q_WebServer_AppCache', false)) {
+			$app = Q_WebServer_AppCache::get($parsed);
+			if ($app !== null) return $app;
+		}
 		if (!self::$enabled) return null;
 		if ($parsed['method'] !== 'GET'
 		and !($allowHead and $parsed['method'] === 'HEAD')) return null;
