@@ -160,7 +160,7 @@ class Q_WebServer_About
 		// From a checkout the server defines the build date as the time it
 		// started; the commit's own date is what says how old the code is.
 		if ($ownCheckout and function_exists('shell_exec')) {
-			$commit = trim((string) @shell_exec('git -C ' . escapeshellarg($root) . " log -1 --format=%cd --date=format-local:'%Y-%m-%d %H:%M:%S' 2>/dev/null"));
+			$commit = trim((string) @shell_exec('TZ=UTC git -C ' . escapeshellarg($root) . " log -1 --format=%cd --date=format-local:'%Y-%m-%d %H:%M:%S' 2>/dev/null"));
 			if ($commit !== '') $date = $commit . ' UTC (commit)';
 		}
 		if (($version === '' or $build === '') and !$ownCheckout and is_file($root . '/qbix-build.php')) {
