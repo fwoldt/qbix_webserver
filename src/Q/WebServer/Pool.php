@@ -255,7 +255,65 @@ class Q_WebServer_Pool
 			and function_exists('socket_recvmsg') and function_exists('socket_import_stream')
 			and function_exists('socket_export_stream') and function_exists('socket_cmsg_space')
 			and function_exists('pcntl_fork') and function_exists('posix_kill')
-			and defined('SCM_RIGHTS') and defined('AF_UNIX');
+			and defined('SCM_RIGHTS') and defined('AF_UNIX')
+			and self::socketPassingWorks();
+	}
+
+	/** @var boolean|null the answer of socketPassingWorks(), asked once */
+	private static $socketPassingWorks = null;
+
+	/**
+	 * Whether a socket passed to another process with SCM_RIGHTS arrives as
+	 * that socket. Tried once, by passing one to this very process and
+	 * writing through the copy that comes back.
+	 *
+	 * Before PHP 8.4, socket_recvmsg() hands back a socket that is not the
+	 * one that was sent (another inode): everything seems to work -- the send,
+	 * the receive, the write -- and nothing ever arrives. With the zygote on,
+	 * every worker it forked talked into that dead end and every request after
+	 * the first was a 502. It is PHP's to fix, and 8.4 did; this finds out
+	 * what the running PHP does, whatever its version says.
+	 * @method socketPassingWorks
+	 * @static
+	 * @return {boolean}
+	 */
+	static function socketPassingWorks()
+	{
+		if (self::$socketPassingWorks !== null) return self::$socketPassingWorks;
+		$ok = false;
+		$ctl = $pair = null;
+		// Never allowed to stop the server from starting: whatever goes
+		// wrong here -- including PHP handing back a stream where a Socket
+		// was sent, which the affected versions also do -- only means "no".
+		try {
+			if (@socket_create_pair(AF_UNIX, SOCK_STREAM, 0, $ctl)
+			and @socket_create_pair(AF_UNIX, SOCK_STREAM, 0, $pair)) {
+				$sent = @socket_sendmsg($ctl[0], array('iov' => array('z'),
+					'control' => array(array('level' => SOL_SOCKET, 'type' => SCM_RIGHTS, 'data' => array($pair[1])))), 0);
+				$msg = array('name' => array(), 'buffer_size' => 8,
+					'controllen' => socket_cmsg_space(SOL_SOCKET, SCM_RIGHTS, 1));
+				if ($sent !== false and @socket_recvmsg($ctl[1], $msg, 0) !== false) {
+					$copy = $msg['control'][0]['data'][0] ?? null;
+					$wrote = false;
+					if ($copy instanceof \Socket) $wrote = @socket_write($copy, 'z') === 1;
+					elseif (is_resource($copy)) $wrote = @fwrite($copy, 'z') === 1;
+					if ($wrote) {
+						$r = array($pair[0]); $w = $e = null;
+						if (@socket_select($r, $w, $e, 0, 200000) > 0) {
+							$ok = @socket_read($pair[0], 1) === 'z';
+						}
+					}
+					if ($copy instanceof \Socket) @socket_close($copy);
+					elseif (is_resource($copy)) @fclose($copy);
+				}
+			}
+		} catch (\Throwable $e) {
+			$ok = false;
+		}
+		foreach (array_merge((array) $ctl, (array) $pair) as $s) {
+			if ($s instanceof \Socket) @socket_close($s);
+		}
+		return self::$socketPassingWorks = $ok;
 	}
 
 	/**
@@ -451,8 +509,13 @@ class Q_WebServer_Pool
 		}
 		// Still before the first connection is accepted: the zygote forked
 		// now holds no client, and neither will any worker it forks.
-		if (Q_Config::get('Q', 'webserver', 'zygote', true) and self::zygoteSupported()) {
-			$this->startZygote();
+		if (Q_Config::get('Q', 'webserver', 'zygote', true)) {
+			if (self::zygoteSupported()) {
+				$this->startZygote();
+			} elseif (function_exists('socket_recvmsg') and !self::socketPassingWorks()) {
+				fwrite(STDERR, sprintf("  zygote off: PHP %s does not pass sockets between processes intact"
+					. " (SCM_RIGHTS, fixed in PHP 8.4); workers are forked from the server\n", PHP_VERSION));
+			}
 		}
 		$pool = $this;
 		Q_Evented::repeat(2.0, function () use ($pool) {

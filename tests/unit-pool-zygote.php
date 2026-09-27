@@ -32,6 +32,13 @@ require __DIR__ . '/fixtures/race-harness.php';
 rh_require_pool();
 if (!function_exists('openssl_pkey_new')) { printf("  skip  needs openssl\n"); exit(0); }
 if (!function_exists('socket_sendmsg') or !defined('SCM_RIGHTS')) { printf("  skip  needs ext-sockets with SCM_RIGHTS\n"); exit(0); }
+require_once __DIR__ . '/../src/Q/WebServer/Pool.php';
+if (!Q_WebServer_Pool::socketPassingWorks()) {
+	// PHP before 8.4 hands back another socket from SCM_RIGHTS; the server then
+	// runs without the zygote (unit-zygote-socket-passing checks that it does).
+	printf("  skip  PHP %s does not pass sockets between processes intact; the zygote is off here\n", PHP_VERSION);
+	exit(0);
+}
 list($base, $root) = rh_setup('zygote');
 file_put_contents($root . DS . 'index.php', '<?php
 if (isset($_GET["sleep"])) usleep((int) $_GET["sleep"] * 1000);

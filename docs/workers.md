@@ -153,6 +153,23 @@ zombie does not count), rather than with `waitpid()`, and leaves the reaping to
 the zygote. On stop, the pool asks every worker to exit, waits for them, and then
 stops the zygote.
 
+**Where it cannot run.** The hand-off depends on PHP passing a socket to
+another process with `SCM_RIGHTS`, and before **PHP 8.4** that is broken:
+`socket_recvmsg()` gives back a different socket from the one sent, so a worker
+forked from the zygote would talk into a dead end and every request after the
+first would be a 502. The server therefore tries a hand-off to itself at start,
+and uses the zygote only when the socket arrives intact. On PHP 8.2 and 8.3 it
+runs without it -- workers are forked from the server, as with `zygote: false` --
+and says so in the log:
+
+```
+  zygote off: PHP 8.3.33 does not pass sockets between processes intact (SCM_RIGHTS, fixed in PHP 8.4); workers are forked from the server
+```
+
+v0.0.4.29 turned the zygote on by default without this check, so on PHP 8.2 and
+8.3 its pool answered only the first request of each worker; set `zygote` to
+`false` there, or upgrade to a later version.
+
 **When the zygote fails.** If a hand-off fails -- the zygote was killed, a send
 or the reply fails, or five seconds pass -- the zygote is stopped and the console
 log says so:
