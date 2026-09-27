@@ -197,6 +197,13 @@ class Q_WebServer_Cache
 		if ($now !== self::$generationChecked) {
 			self::$generationChecked = $now;
 			clearstatcache(true, self::$generationFile);
+			// The server process has the compat file wrapper too (it warms up
+			// the application before forking workers), and the wrapper keeps
+			// its own memo of file stats that clearstatcache() in engine code
+			// does not reach. Read through it, a purge's new mtime stayed
+			// unseen until the memo was next forgotten: with four servers on
+			// one port, pages purged by a publish were served for ~4 s more.
+			if (class_exists('Q_WebServer_Compat', false) and method_exists('Q_WebServer_Compat', 'forgetPath')) Q_WebServer_Compat::forgetPath(self::$generationFile);
 			$mtime = @filemtime(self::$generationFile);
 			self::$generation = $mtime === false ? 0 : (int) $mtime;
 		}

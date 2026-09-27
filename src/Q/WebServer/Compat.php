@@ -3094,6 +3094,23 @@ class Q_WebServer_CompatFileWrapper
 		self::$existMemo = array();
 	}
 
+	/**
+	 * Forget what is remembered about one file, leaving every other stat
+	 * alone: for a caller outside a request's own includes that must see a
+	 * file's current mtime (the response cache's generation marker), where
+	 * dropStats() would also forget the running request's includes.
+	 * @method forgetPath
+	 * @static
+	 * @param {string} $path
+	 */
+	static function forgetPath($path)
+	{
+		$real = @realpath($path);
+		foreach (array_unique(array_filter(array((string) $path, (string) $real))) as $p) {
+			unset(self::$statMemo[$p], self::$existMemo[$p], self::$includeMemo[$p]);
+		}
+	}
+
 	/** @var float when forgetStats() last forgot, for Q.compat.statTtl */
 	private static $statsSince = 0.0;
 
