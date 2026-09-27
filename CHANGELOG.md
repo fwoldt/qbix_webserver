@@ -65,6 +65,32 @@ edited down to what a reader actually needs.
 
 ---
 
+## v0.0.4.30 — v0.0.4.29's worker pool fixed for PHP 8.2 and 8.3
+
+2026-09-27
+
+### What was wrong with v0.0.4.29
+
+**On PHP 8.2 and 8.3, v0.0.4.29's worker pool answered only the first request
+of each worker it forked after start; the rest were 502.** v0.0.4.29 turned the
+zygote on by default (`Q.webserver.zygote`), and the zygote hands each new
+worker its connection with `SCM_RIGHTS`, which is broken in PHP before 8.4:
+`socket_recvmsg()` gives back a different socket from the one sent. On PHP 8.4
+and 8.5 v0.0.4.29 works as released. If you run v0.0.4.29 on PHP 8.2 or 8.3 and
+cannot upgrade yet, set `Q.webserver.zygote` to `false`.
+
+### Fixed
+
+- **The zygote is used only where PHP passes sockets intact.** The server hands
+  a socket to itself at start and starts the zygote only when it arrives
+  unchanged; otherwise workers are forked from the server as before, and the
+  log says why (`zygote off: PHP 8.3.x does not pass sockets between processes
+  intact`). The check can never stop the server from starting. PHP 8.2 and 8.3
+  run without the zygote, 8.4 and 8.5 with it; a pool that forks under load
+  answers every request on all four. See [docs/workers.md](docs/workers.md#forking-from-a-zygote).
+
+---
+
 ## v0.0.4.29 — a response cache that is faster and says what it is doing, a control panel to run it, and error pages a visitor can use
 
 2026-09-26
