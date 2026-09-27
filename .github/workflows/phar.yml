@@ -9,18 +9,12 @@ name: phar
 # ended in a 500), v0.0.2.6 shipped one without the cache fixes merged for that
 # release, and v0.0.2.7 one without the cache sweep.
 #
-# This rebuilds it whenever the sources it is built from change, so a tag cut
-# from this branch always carries a current phar.
+# The tests workflow rebuilds it whenever the sources it is built from change,
+# before its suites run, and commits it back to main, so a tag cut from this
+# branch always carries a current phar and every push is tested with it. This
+# workflow stays for a rebuild started by hand.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'web/**'
-      - 'qbixserver.php'
-      - 'build-phar.php'
   workflow_dispatch:
 
 permissions:

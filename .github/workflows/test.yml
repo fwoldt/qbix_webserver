@@ -5,11 +5,67 @@ on:
   pull_request:
 
 jobs:
+  # The phar is rebuilt first and the suites below test the rebuilt one, so a
+  # push that changes the sources is tested with the phar that ends up on main
+  # (tests/phar-is-current.php is part of the main suite). On a push to main a
+  # drifted phar is also committed back; that commit is made with the workflow
+  # token, which starts no further runs, and its tree is exactly the one tested
+  # here. Other branches and pull requests only test the rebuilt phar.
+  phar:
+    name: rebuild bin/qbixserver.phar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          ini-values: phar.readonly=0
+          coverage: none
+
+      - name: Rebuild if the contents drifted
+        run: |
+          # Bytes are no guide here: two builds of identical sources differ in
+          # the phar's own metadata, so committing on every push would churn
+          # the repository. tests/phar-is-current.php compares what is inside.
+          if php tests/phar-is-current.php; then
+            echo "nothing to do"
+            exit 0
+          fi
+          php -d phar.readonly=0 build-phar.php
+          php tests/phar-is-current.php
+          echo "REBUILT=1" >> "$GITHUB_ENV"
+
+      - name: Commit to main
+        if: env.REBUILT == '1' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin/qbixserver.phar
+          git commit -m "Rebuild bin/qbixserver.phar from ${GITHUB_SHA::7}"
+          git push || { git pull --rebase && git push; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qbixserver-phar
+          path: bin/qbixserver.phar
+          retention-days: 3
+
   standalone:
+    needs: phar
     name: standalone mode
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Use the phar rebuilt for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: qbixserver-phar
+          path: bin
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -69,10 +125,17 @@ jobs:
         continue-on-error: true
 
   cgi:
+    needs: phar
     name: php-cgi carveout
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Use the phar rebuilt for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: qbixserver-phar
+          path: bin
 
       - name: Set up PHP (with CGI binary)
         uses: shivammathur/setup-php@v2
@@ -88,10 +151,17 @@ jobs:
         run: bash tests/run-cgi.sh
 
   platform:
+    needs: phar
     name: --app mode (against real Platform)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Use the phar rebuilt for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: qbixserver-phar
+          path: bin
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
