@@ -620,7 +620,21 @@ class Q_WebServer_Cache
 		}
 		$own = self::getOwn($parsed, $allowHead);
 		if ($own === null and $askApp) {
-			return Q_WebServer_AppCache::get($parsed);
+			$app = Q_WebServer_AppCache::get($parsed);
+			// Kept here too, so the next such request is answered from this
+			// cache: otherwise a page the application already holds is never
+			// rendered, this cache never sees it, and every request pays both
+			// lookups. put() applies this cache's own rules (the response's
+			// Cache-Control above all); a compressed answer is left to the
+			// application's cache, which compresses per request.
+			if ($app !== null and self::$enabled and ($parsed['method'] ?? '') === 'GET') {
+				$encoded = false;
+				foreach ((array) ($app['headers'] ?? array()) as $name => $value) {
+					if (strtolower((string) $name) === 'content-encoding' and strtolower((string) $value) !== 'identity') $encoded = true;
+				}
+				if (!$encoded) $app = self::put($parsed, $app);
+			}
+			return $app;
 		}
 		return $own;
 	}

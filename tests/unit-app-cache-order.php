@@ -30,7 +30,9 @@ class OrderAppCache
 	function serve(array $request)
 	{
 		self::$asked++;
-		return array(200, array('X-From' => 'app'), 'app page');
+		$h = array('X-From' => 'app', 'Content-Type' => 'text/html', 'Cache-Control' => 'public, max-age=300');
+		if (strpos($request['uri'], 'gz') !== false) $h['Content-Encoding'] = 'gzip';
+		return array(200, $h, 'app page');
 	}
 }
 
@@ -59,6 +61,20 @@ OrderAppCache::$asked = 0;
 $r = $C::get(cache_req('/stored', array('authorization' => 'Bearer x')));
 check('with credentials: the application cache answers', $r['headers']['X-From'] ?? null, 'app');
 
+
+// The application's answer to a request without a session is kept here, so
+// the next one does not ask it again.
+OrderAppCache::$asked = 0;
+$C::get(cache_req('/fill-me'));
+$r = $C::get(cache_req('/fill-me'));
+check('after the application answered once, this cache answers', OrderAppCache::$asked, 1);
+check('...the same page', $r['body'] ?? null, 'app page');
+
+// A compressed answer is left to the application's cache.
+OrderAppCache::$asked = 0;
+$C::get(cache_req('/gz-page'));
+$C::get(cache_req('/gz-page'));
+check('a compressed answer is not kept here', OrderAppCache::$asked, 2);
 Q_WebServer_AppCache::$class = null;
 check('no application cache, session cookie: nothing', $C::get(cache_req('/stored', array('cookie' => 'eZSESSIDab12=x'))), null);
 check('no application cache, no cookie: the server cache still answers', is_array($C::get(cache_req('/stored'))), true);
