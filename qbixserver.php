@@ -116,6 +116,10 @@ if (!function_exists('qbix_version_label')) {
 		return $v;
 	}
 }
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once __DIR__ . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'qbixserver'), 'the web server: serves files and PHP applications over HTTP, HTTPS and HTTP/2', __DIR__);
 define('QBIX_SERVER_DIR', __DIR__);
 
 // ── Parse CLI args ──────────────────────────────────
@@ -232,17 +236,13 @@ foreach ($argv as $i => $arg) {
 		echo "  --output=FILE    Output path for --pack (default: ./myapp)\n";
 		echo "  --gui            With --pack: mark binary as GUI app (no console on Windows)\n";
 		echo "  --open[=/path]   Open browser when server is ready (default: /)\n";
-		echo "  --version        Print version\n";
+		echo "  --version, -v    Version, build, copyright and license (also --about, --copyright)\n";
 		echo "\nValues may be given as --name=V, --name V, -name=V or -name V;\n";
 		echo "flags as --name or -name, and turned off with --no-name.\n";
 		echo "\nQuick start:\n";
 		echo "  mkdir -p web && echo '<?php echo \"Hello!\";' > web/index.php\n";
 		echo "  $me\n";
 		echo "\nDocs: https://github.com/Qbix/webserver\n";
-		exit(0);
-	}
-	if ($arg === '--version' || $arg === '-v') {
-		echo "Qbix Server " . qbix_version_label(true) . "\n";
 		exit(0);
 	}
 	if ($arg === '-t') {

@@ -7,6 +7,10 @@
  * Output: bin/qbixserver.phar
  */
 
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once __DIR__ . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'build-phar'), 'builds bin/qbixserver.phar, the server as one archive, from the sources', __DIR__);
 if (ini_get('phar.readonly')) {
 	echo "Error: phar.readonly is enabled.\n";
 	echo "Run with: php -d phar.readonly=0 build-phar.php\n";

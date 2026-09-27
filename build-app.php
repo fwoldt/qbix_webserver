@@ -21,6 +21,10 @@
  *   php myapp.phar --port=8080
  */
 
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once __DIR__ . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'build-app'), 'builds a self-contained server archive that includes an application', __DIR__);
 if (ini_get('phar.readonly')) {
     fwrite(STDERR, "Error: phar.readonly is enabled.\n");
     fwrite(STDERR, "Run with: php -d phar.readonly=0 " . $argv[0] . "\n");

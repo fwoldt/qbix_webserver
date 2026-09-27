@@ -20,6 +20,10 @@ require_once __DIR__ . '/src/Q/Console.php';
 require_once __DIR__ . '/src/Q/WebServer/Layout.php';
 require_once __DIR__ . '/src/Q/WebServer/Ctl.php';
 
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once __DIR__ . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'qbixconsole'), 'the command console: runs the server commands (server, cache, certificates, sites, panel ...)', __DIR__);
 Q_Console::$program = basename($argv[0] ?? 'qbixconsole');
 Q_Console::$title = 'Qbix server console' . (function_exists('qbix_version_label') ? ' ' . qbix_version_label(true) : '');
 Q_WebServer_Ctl::register(__DIR__);

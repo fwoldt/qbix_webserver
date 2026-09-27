@@ -1265,7 +1265,55 @@ static void do_read(int fd) {
     }
 }
 
+/* The release and build, given when it is compiled:
+ *   gcc -O2 -DUWEB_VERSION="\"$(git describe --tags --abbrev=0)\"" \
+ *       -DUWEB_BUILD="\"$(git rev-parse --short HEAD)\"" -o bin/uwebserver bin/uwebserver.c ...
+ * so the source never states a version that has gone out of date. */
+#ifndef UWEB_VERSION
+#define UWEB_VERSION "(version not given at build time)"
+#endif
+#ifndef UWEB_BUILD
+#define UWEB_BUILD "source"
+#endif
+
+/* --version, -v, -V, --about, --copyright ...: what this program is, the way
+ * the PHP programs of the server say it (Q_WebServer_About), GNU style. */
+static int uweb_about(int argc, char **argv) {
+    static const char *flags[] = { "--version", "-version", "-v", "-V", "--about", "-about", "--copyright", "-copyright" };
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) return 0;
+        for (size_t f = 0; f < sizeof(flags) / sizeof(flags[0]); f++) {
+            if (strcmp(argv[i], flags[f]) != 0) continue;
+            printf("uwebserver (Exponential Velocity) %s\n"
+                   "A small web server in C for benchmarks and tests beside Exponential Velocity:\n"
+                   "static files over HTTP and HTTPS with keep-alive and pipelining.\n\n"
+                   "  Program:      uwebserver -- a minimal static web server, compiled\n"
+                   "  Version:      %s+%s\n"
+                   "  Built:        %s %s, %s\n"
+                   "  Options:      [--port N] [--tls-port N --cert FILE --key FILE]\n"
+                   "  Home page:    https://github.com/se7enxweb/exponential-velocity\n\n"
+                   "Copyright (C) 2026 7x (se7enx.com) -- Exponential Velocity\n"
+                   "Copyright (C) 2024-2026 Qbix, Inc.\n"
+                   "License MIT: <https://opensource.org/license/mit>; the full text is in\n"
+                   "the LICENSE file that comes with the program.\n"
+                   "This is free software: you are free to change and redistribute it.\n"
+                   "There is NO WARRANTY, to the extent permitted by law.\n\n"
+                   "Written by 7x (se7enx.com), on the Qbix Server by Qbix, Inc. and contributors.\n",
+                   UWEB_VERSION, UWEB_VERSION, UWEB_BUILD, __DATE__, __TIME__,
+#ifdef __VERSION__
+                   "compiler " __VERSION__
+#else
+                   "unknown compiler"
+#endif
+                   );
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (uweb_about(argc, argv)) return 0;
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
     signal(SIGPIPE, SIG_IGN);

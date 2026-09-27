@@ -13,6 +13,10 @@
  * @package Q
  */
 
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once dirname(__DIR__) . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'qbix-appinfo'), 'reports what a Qbix application installed in a directory is made of', dirname(__DIR__));
 $rootDir = null;
 if (is_file('config/app.json') or is_file('web/Q.php')) {
     $rootDir = getcwd();

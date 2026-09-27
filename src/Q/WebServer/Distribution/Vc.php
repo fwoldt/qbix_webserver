@@ -38,6 +38,25 @@ class Q_WebServer_Distribution_Vc
 	const STATE = '/var/lib/vc';
 
 	/**
+	 * This distribution's name, description and copyright for --version,
+	 * --about and --copyright (Q_WebServer_About), above the engine's own.
+	 * @method about
+	 * @static
+	 * @return {array}
+	 */
+	static function about()
+	{
+		return array(
+			'product'     => 'Exponential Velocity (vc)',
+			'short'       => 'Exponential Velocity',
+			'description' => "7x's distribution of the Qbix web server for Exponential: one program that serves the site, its static files and HTTPS, runs PHP in persistent workers, caches responses, and comes with a control panel -- no Apache, nginx or php-fpm needed.",
+			'homepage'    => 'https://github.com/se7enxweb/exponential-velocity',
+			'copyright'   => array('Copyright (C) 2026 7x (se7enx.com) -- Exponential Velocity'),
+			'authors'     => '7x (se7enx.com), on the Qbix Server by Qbix, Inc. and contributors',
+		);
+	}
+
+	/**
 	 * Called once at start-up when this distribution is selected.
 	 * @method register
 	 * @static

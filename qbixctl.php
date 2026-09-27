@@ -24,6 +24,10 @@ $map = array(
 	'enmod' => 'mod:enable', 'dismod' => 'mod:disable',
 );
 $args = array_slice($argv, 1);
+
+// --version, --about, --copyright and the rest: GNU-style, before anything else.
+require_once __DIR__ . '/src/Q/WebServer/About.php';
+Q_WebServer_About::handle(array_slice($argv, 1), basename($argv[0] ?? 'qbixctl'), 'controls the server the apachectl way: start, stop, restart, status, configtest, sites, conf and modules', __DIR__);
 if (!$args or in_array($args[0], array('-h', '--help', 'help'), true)) {
 	fwrite(STDOUT, "Usage: qbixctl start|stop|restart|graceful|status|-t|-S|ensite|dissite|enconf|disconf|enmod|dismod [options]\n"
 		. "Run `qbixconsole list` for every command and `qbixconsole help <command>` for its options.\n");
