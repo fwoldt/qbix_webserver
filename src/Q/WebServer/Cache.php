@@ -203,7 +203,7 @@ class Q_WebServer_Cache
 			// does not reach. Read through it, a purge's new mtime stayed
 			// unseen until the memo was next forgotten: with four servers on
 			// one port, pages purged by a publish were served for ~4 s more.
-			if (class_exists('Q_WebServer_Compat', false) and method_exists('Q_WebServer_Compat', 'forgetPath')) Q_WebServer_Compat::forgetPath(self::$generationFile);
+			if (class_exists('Q_WebServer_CompatFileWrapper', false)) Q_WebServer_CompatFileWrapper::forgetPath(self::$generationFile);
 			$mtime = @filemtime(self::$generationFile);
 			self::$generation = $mtime === false ? 0 : (int) $mtime;
 		}
