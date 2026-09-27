@@ -65,6 +65,46 @@ edited down to what a reader actually needs.
 
 ---
 
+## v0.0.4.31 — pages over HTTP/2 known as secure, sessions where PHP is told to keep them, an application's own page cache asked first, and --version in every program
+
+2026-09-27
+
+### Fixed
+
+- **Pages served over HTTP/2 were rendered as plain HTTP.** HTTP/2 is only
+  served over TLS, but its requests carried no HTTPS flag, so the worker set no
+  `HTTPS` variable: an application's absolute URLs and its own answer to "is
+  this request secure" were wrong, and a page cache keyed by scheme stored
+  HTTP/2 pages under `http://`.
+- **Sessions went to the temporary directory.** The compatibility layer runs
+  sessions itself and read `session.save_path` as a plain directory, so PHP's
+  `N;MODE;/path` form (the usual way to make session files readable for the
+  site's group) named no directory; set with `-d`, where `;` starts a comment,
+  it arrived as `0` and every session went to `/tmp`. Files were created with
+  the umask (0644) instead of PHP's 0600. The path is now read as PHP's files
+  handler reads it: subdirectory levels, the mode for new files, and no
+  collection with levels, which PHP leaves to a cron job.
+- **A checkout reported the release and build of its last phar build.**
+  `qbix-build.php`, written beside the sources by every phar build, outlived the
+  build it described in a checkout of its own. It is now read only where the
+  directory has no `.git` of its own.
+
+### Added
+
+- **An application's own page cache is asked before a worker**
+  (`Q.web.appCache`: `file`, `class`, `dir`). The response cache skips every
+  request with a session cookie; an application that keeps rendered pages per
+  visitor or permission set can now answer those in the server process, so a
+  hit never wakes a worker. See [docs/cache.md](docs/cache.md#an-applications-own-cache).
+- **`--version`, `-version`, `-v`, `-V`, `--about`, `--copyright` in every
+  program** — qbixserver, qbixctl, qbixconsole, qshell, qbix-appinfo, build-phar,
+  build-app, the phar and static binaries, and `bin/uwebserver`: one GNU-style
+  text with the program, release and build, where it runs from, engine, PHP,
+  system and extensions, the copyright, the MIT licence and the warranty
+  disclaimer.
+
+---
+
 ## v0.0.4.30 — v0.0.4.29's worker pool fixed for PHP 8.2 and 8.3
 
 2026-09-27
