@@ -3231,10 +3231,16 @@ class Q_WebServer_CompatFileWrapper
 		// comparisons rather than two regular expressions per open.
 		$realPath = self::bare($path);
 
-		// Only PHP files opened for reading (include/require) are
-		// transformed. Cheapest test first: most opens are not reads of a
-		// .php file and are settled on the mode.
-		$shouldTransform = ($mode === 'r' || $mode === 'rb')
+		// Includes: one real stat per path per request, then the bytes from
+		// memory while that stat says the file has not changed.
+		$include = (($options & self::OPEN_FOR_INCLUDE) and ($mode === 'r' or $mode === 'rb'));
+
+		// Only PHP files being included or required are transformed. A plain
+		// read -- file_get_contents(), md5_file(), fopen() -- gets the file's
+		// own bytes: transforming those made an application that checks its
+		// own source see every such file as changed (Exponential's upgrade
+		// check listed ~350 kernel files as modified).
+		$shouldTransform = $include
 		  && substr_compare($realPath, '.php', -4, 4, true) === 0
 		  && Q_WebServer_Compat::isEnabled();
 
@@ -3244,9 +3250,6 @@ class Q_WebServer_CompatFileWrapper
 			self::forgetFile($realPath);
 		}
 
-		// Includes: one real stat per path per request, then the bytes from
-		// memory while that stat says the file has not changed.
-		$include = (($options & self::OPEN_FOR_INCLUDE) and ($mode === 'r' or $mode === 'rb'));
 		$stat = false;
 		if ($include) {
 			$stat = self::includeStat($realPath);
