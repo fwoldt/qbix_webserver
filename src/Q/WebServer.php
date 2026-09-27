@@ -4809,7 +4809,7 @@ WORKER;
 			'gif'=>'image/gif', 'webp'=>'image/webp', 'svg'=>'image/svg+xml',
 			'bmp'=>'image/bmp', 'ico'=>'image/x-icon', 'avif'=>'image/avif',
 			'woff'=>'font/woff', 'woff2'=>'font/woff2',
-			'ttf'=>'font/ttf', 'otf'=>'font/otf',
+			'ttf'=>'font/ttf', 'otf'=>'font/otf', 'eot'=>'application/vnd.ms-fontobject',
 			'mp3'=>'audio/mpeg', 'wav'=>'audio/wav', 'ogg'=>'audio/ogg',
 			'mp4'=>'video/mp4', 'webm'=>'video/webm',
 			'pdf'=>'application/pdf', 'zip'=>'application/zip',
@@ -6849,7 +6849,7 @@ WORKER;
 		'html','htm','txt','md','json','xml','yaml','yml','csv','tsv',
 		'css','js','mjs','map','wasm',
 		'png','gif','webp','jpg','jpeg','svg','bmp','ico','avif',
-		'woff','woff2','ttf','otf',
+		'woff','woff2','ttf','otf','eot',
 		'mp3','wav','ogg','mp4','webm',
 		'pdf','zip'
 	);
