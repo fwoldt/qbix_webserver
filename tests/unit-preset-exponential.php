@@ -44,6 +44,41 @@ check('...and the notification registry that publishing needs',
 check('the private _webserver key did not leak into Q.compat',
 	Q_Config::get('Q', 'compat', '_webserver', 'absent'), 'absent');
 
+// The access lists: with nothing configured, the preset serves only what the
+// application's .htaccess_root serves and runs only its front controllers.
+$static = Q_Config::get('Q', 'web', 'static', 'paths', null);
+check('the static paths reached Q.web.static.paths as a list', is_array($static) && count($static) === 1, true);
+check('the private _unlessSet key did not leak into Q.compat',
+	Q_Config::get('Q', 'compat', '_unlessSet', 'absent'), 'absent');
+check('only the front controllers run',
+	Q_Config::get('Q', 'webserver', 'scripts', null),
+	array('/index.php', '/index_rest.php', '/index_treemenu.php'));
+check('/api/ goes to index_rest.php',
+	Q_Config::get('Q', 'webserver', 'frontControllers', array())['^/(api/|index_rest\.php)'] ?? null,
+	'index_rest.php');
+$served = function ($path) use ($static) { return preg_match('~' . $static[0] . '~', $path) === 1; };
+foreach (array('/design/standard/stylesheets/core.css', '/var/site/storage/images/a/b.jpg',
+		'/var/site/storage/original/image/logo.svg', '/var/site/cache/public/javascript/x.js',
+		'/extension/x/design/standard/vendor/ace/ace.js', '/var/storage/packages/7x/a/thumbnail.png',
+		'/share/icons/crystal/a.png', '/favicon.ico', '/robots.txt', '/sw.js') as $path) {
+	check("served as a file: $path", $served($path), true);
+}
+foreach (array('/var/tmp/notes.txt', '/var/tmp/x.css', '/var/log/error.log', '/var/cache/ini/x.php',
+		'/var/site/cache/template/compiled/x.php', '/var/storage/sqlite3/sqlite.db',
+		'/var/storage/packages/7x/a/package.xml', '/var/storage/packages/7x/a/preview.svg',
+		'/var/site/storage/original/application/contract.pdf', '/var/site/storage/original/image/x.php',
+		'/settings/site.ini', '/extension/x/settings/x.ini', '/composer.json', '/README.md',
+		'/sw.js.bak', '/share/filelist.md5') as $path) {
+	check("not served as a file: $path", $served($path), false);
+}
+
+// Lists the configuration names win: the preset never widens or replaces them.
+Q_Config::set('Q', 'web', 'static', 'paths', array('^/only/'));
+Q_Config::set('Q', 'webserver', 'scripts', array('/app.php'));
+Q_WebServer_Compat::loadPreset('exponential');
+check('configured static paths are kept', Q_Config::get('Q', 'web', 'static', 'paths', null), array('^/only/'));
+check('configured scripts are kept', Q_Config::get('Q', 'webserver', 'scripts', null), array('/app.php'));
+
 // An unknown preset is refused, not silently ignored.
 check('an unknown preset returns false',
 	Q_WebServer_Compat::loadPreset('nonesuch'), false);

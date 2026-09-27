@@ -2342,6 +2342,31 @@ class Q_WebServer_Compat
 						'eZNotificationEventTypeAllowedTypes',
 					),
 				),
+				// What may be served as a file and what may run, as the
+				// application's own .htaccess_root has it. Without these the
+				// server hands out every file with a served extension and runs
+				// any .php asked for by name -- and Exponential's document root
+				// is the whole installation: var/tmp, var/log, the caches, the
+				// SQLite database, the package store, the kernel sources.
+				// Applied only where the configuration names nothing, so the
+				// lists an application writes for itself always win.
+				'_unlessSet' => array(
+					'web.static.paths' => array(
+						'^/(design/[^/]+/(stylesheets|images|javascript|fonts)/|share/icons/'
+						. '|extension/[^/]+/design/[^/]+/(stylesheets|flash|images|lib|javascripts?|fonts|vendor|media)/'
+						. '|var/([^/]+/)?storage/images(-versioned)?/'
+						. '|var/([^/]+/)?storage/original/image/.+\.(png|jpe?g|gif|webp|svg)$'
+						. '|var/([^/]+/)?cache/(texttoimage|public)/'
+						. '|packages/styles/.+/(stylesheets|images|javascript)/[^/]+/|packages/styles/.+/thumbnail/'
+						. '|var/storage/packages/.+\.(png|jpe?g|gif|webp)$'
+						. '|favicon\.ico$|design/standard/images/favicon\.ico$|robots\.txt$|sw\.js$|w3c/p3p\.xml$)',
+					),
+					'webserver.scripts' => array('/index.php', '/index_rest.php', '/index_treemenu.php'),
+					'webserver.frontControllers' => array(
+						'^/(api/|index_rest\.php)' => 'index_rest.php',
+						'^/([^/]+/)?content/treemenu' => 'index_treemenu.php',
+					),
+				),
 			),
 		);
 
@@ -2360,11 +2385,27 @@ class Q_WebServer_Compat
 			$webserver = $conf['_webserver'];
 			unset($conf['_webserver']);
 		}
+		// Defaults the configuration may already have decided: set only
+		// where it names nothing. The preset is loaded after the
+		// configuration files, so merging these would widen or replace an
+		// application's own lists.
+		$unlessSet = array();
+		if (isset($conf['_unlessSet'])) {
+			$unlessSet = $conf['_unlessSet'];
+			unset($conf['_unlessSet']);
+		}
 		Q_Config::merge(array('Q' => array('compat' => $conf)));
 		// Which preset is in force, for the panel's Apps and Frameworks tabs.
 		Q_Config::set('Q', 'webserver', 'preset', $preset);
 		if (is_array($webserver)) {
 			Q_Config::merge(array('Q' => array('webserver' => $webserver)));
+		}
+		foreach ($unlessSet as $dotted => $value) {
+			$keys = array_merge(array('Q'), explode('.', $dotted));
+			if (call_user_func_array(array('Q_Config', 'get'), array_merge($keys, array(null))) !== null) {
+				continue;
+			}
+			call_user_func_array(array('Q_Config', 'set'), array_merge($keys, array($value)));
 		}
 		return true;
 	}
