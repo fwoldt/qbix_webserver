@@ -65,6 +65,71 @@ edited down to what a reader actually needs.
 
 ---
 
+## v0.0.4.32 — several servers on one port, browsers answered from the response cache, purges seen at once, and the zygote on PHP 8.2 and 8.3
+
+2026-09-27
+
+### Fixed
+
+- **The zygote runs on PHP 8.2 and 8.3.** v0.0.4.30 turned it off there, because
+  a socket handed to it with `SCM_RIGHTS` arrived as another one. The fault is
+  in how PHP puts a `Socket` object into the message; sent as a stream
+  resource, the same socket arrives intact on PHP 8.1 and later. Each worker's
+  connection is now handed over as the stream it is, the start-up self-test
+  checks that same path, and the zygote runs on 8.2, 8.3, 8.4 and 8.5. See
+  [docs/workers.md](docs/workers.md#forking-from-a-zygote).
+- **One refused download no longer holds a release back.** v0.0.4.30 waited on
+  a package job whose Docker Hub token request was refused and on a PHP 8.3
+  lite build whose doctor had not fetched the musl toolchain; both now retry.
+- **Browsers are answered from the response cache when the application's
+  cache holds the page.** Its answers were kept in the response cache only
+  when uncompressed, and a browser always asks for gzip, so no browser request
+  was answered from there: one front page served 724 pages a second at 1.38 ms
+  of CPU each. A gzip answer is now kept when gzip is the coding the response
+  cache stores for that request (br and zstd are still left to the
+  application's cache): 2,637 pages a second at 0.38 ms, and 2,965 at 64
+  concurrent (was 741).
+- **A purge reaches the response cache within the second.** The server process
+  read the generation marker's mtime through the compat file wrapper, which
+  remembered it: after a publish, purged pages were served for up to 8 s more.
+  The marker's remembered stat is now forgotten before each once-a-second check.
+- **Every server holds the same copy of a page.** A compressed answer from the
+  application's cache was kept as it came, while a rendered page is minified
+  first, so the same page existed in two forms with two ETags, and a browser
+  revalidating against another server sharing the port got the whole page
+  again. Such an answer is now decompressed, minified and compressed once.
+- **PHP 8.5 full binaries build.** The `memcache` extension does not compile
+  against PHP 8.5, so every 8.5 full build failed and none has shipped. An
+  extension can now be marked unavailable for a PHP version
+  (`unavailablePhp` in `build/extensions.json`, static builds only);
+  `memcache` is, for 8.5.
+
+### Added
+
+- **`Q.webserver.reusePort`**: several servers can listen on the same port and
+  the kernel spreads connections across them, so cached pages use more than
+  one core: one server about 3,500 cached pages a second, two 6,600-6,900,
+  four 12,200-13,100 (measured on 12 cores, TLS, gzip). See
+  [architecture.md](docs/architecture.md#several-servers-on-one-port).
+
+### Updated
+
+- **Requests without a session cookie are answered from the response cache
+  before the application's cache** (`Q.web.appCache`), and the application's
+  answer to such a request is kept in the response cache (under its own
+  rules), so the next one does not ask it again. Requests with a session
+  cookie or credentials still go to the application's cache alone. An
+  application whose purges should reach the response cache points
+  `Q.web.cache.generationFile` at a file each purge rewrites. See
+  [docs/cache.md](docs/cache.md#an-applications-own-cache).
+- **The Revolt event loop is documented**: which extension each of its drivers
+  needs (`ev`, `event`, `uv`), installing one system-wide, configuring and
+  forcing the backend, and a measurement: up to 2,000 connections Revolt with
+  `ev` was 2-12 % slower than `stream_select`, so `select` stays the
+  recommendation. See [architecture.md](docs/architecture.md#revolt).
+
+---
+
 ## v0.0.4.31 — pages over HTTP/2 known as secure, sessions where PHP is told to keep them, an application's own page cache asked first, and --version in every program
 
 2026-09-27
