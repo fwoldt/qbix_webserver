@@ -98,10 +98,14 @@ class Q_WebServer_Headers
 		$status = $response['status'] ?? 200;
 		$body = $response['body'] ?? '';
 		$headers = $response['headers'] ?? array();
-		// HSTS for a domain that asks for it, on HTTPS responses only.
-		if (class_exists('Q_WebServer_Domains', false) and is_array($headers)) {
+		// HSTS on HTTPS responses only, for a domain that asks for it or from
+		// Q.webserver.hsts, and Q.webserver.headers. A script's response,
+		// unless the caller marked it as the server's own (_server: an image
+		// variant, say).
+		if (is_array($headers)) {
 			$meta = is_resource($client) ? @stream_get_meta_data($client) : array();
-			Q_WebServer_Domains::addHsts($headers, $requestHeaders['host'] ?? '', !empty($meta['crypto']));
+			Q_WebServer_ResponseHeaders::apply($headers, $requestHeaders['host'] ?? '', !empty($meta['crypto']),
+				empty($response['_server']));
 		}
 
 		// RFC 9110 §9.3.2: a HEAD response is identical to GET except that it

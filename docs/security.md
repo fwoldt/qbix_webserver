@@ -166,6 +166,48 @@ other six concatenated by hand. `tests/unit-header-injection.php` therefore
 checks the filter **and reads the source tree**, so a newly hand-written header
 loop fails the suite rather than quietly reopening the hole.
 
+## Headers on every response
+
+A front end such as Apache (`Header always set`) or nginx (`add_header ...
+always`) usually puts a few security headers on every answer. An application
+sets them on its own pages, but a static file never reaches the application,
+so behind this server alone a stylesheet or an image went out without them,
+and there was no Strict-Transport-Security at all unless a domain record in
+the panel store asked for it.
+
+```json
+{ "Q": { "webserver": {
+    "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), payment=(), usb=()"
+    },
+    "headersOnScripts": true,
+    "hsts": { "maxAge": 300 }
+} } }
+```
+
+- `headers` go on every response the server builds itself: static files over
+  HTTP/1.1 and HTTP/2 (the in-memory copy included), 304s, image variants, its
+  own error pages and redirects.
+- `headersOnScripts` adds them to a script's response too, each only where the
+  script did not send that header: an application's own `X-Frame-Options:
+  DENY` stays `DENY`.
+- `hsts` puts `Strict-Transport-Security` on every response sent over TLS,
+  script responses included, and never on plain HTTP (RFC 6797 section 7.2). A
+  domain with an HSTS record of its own gets that record's value. Mind the
+  max-age: a browser that has seen it refuses plain HTTP to the host name, on
+  every port, for that long.
+
+Nothing is ever sent twice or replaced: a header already present, in any
+letter case, is left alone. Names that are not HTTP tokens, values with CR, LF
+or NUL, and the framing headers the server works out itself (`Content-Length`,
+`Content-Type`, `Connection`, `Transfer-Encoding`, `Date` ...) are ignored, so
+a typo in the configuration cannot write a header of its own into every
+response. `tests/unit-response-headers.php` checks each kind of response over
+HTTP/1.1, HTTP/1.1 with TLS and HTTP/2.
+
 ---
 
 ## The control panel's password

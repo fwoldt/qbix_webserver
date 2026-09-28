@@ -884,9 +884,12 @@ class Q_WebServer
 				(microtime(true) - $started) * 1000,
 				false
 			);
-			// HSTS for a domain that asks for it (HTTP/2 is TLS here).
+			// HSTS (HTTP/2 is TLS here) and Q.webserver.headers: the server's
+			// own answers, or a script's answer from the response cache.
 			if (!isset($response['headers']) or !is_array($response['headers'])) $response['headers'] = array();
-			Q_WebServer_Domains::addHsts($response['headers'], $request['headers']['host'] ?? '', true);
+			Q_WebServer_ResponseHeaders::apply($response['headers'], $request['headers']['host'] ?? '', true,
+				!empty($response['_script']));
+			unset($response['_script']);
 		}
 		return $response;
 	}
@@ -1197,7 +1200,10 @@ class Q_WebServer
 				// the page; without it a reload is a round trip and a couple of
 				// hundred bytes, whatever the page weighs.
 				$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
-				return $fresh !== null ? $fresh : $cached;
+				$hit = $fresh !== null ? $fresh : $cached;
+				// A script's answer: http2Request() adds headers to it as to one.
+				$hit['_script'] = true;
+				return $hit;
 			}
 
 			self::$pool->dispatch($conn->socket, $parsed, $scriptPath,
@@ -1215,7 +1221,7 @@ class Q_WebServer
 					// request pays the full render.
 					$resp = Q_WebServer_Cache::put($parsed, $resp);
 					if (!isset($resp['headers']) or !is_array($resp['headers'])) $resp['headers'] = array();
-					Q_WebServer_Domains::addHsts($resp['headers'], $parsed['headers']['host'] ?? '', true);
+					Q_WebServer_ResponseHeaders::apply($resp['headers'], $parsed['headers']['host'] ?? '', true, true);
 					Q_WebServer::$http2[$key]->respond($stream, $resp);
 				}
 			);
@@ -2956,11 +2962,12 @@ class Q_WebServer
 				$fresh = Q_WebServer_Cache::notModified($cached, $parsed['headers']);
 				if ($fresh !== null) $cached = $fresh;
 				if (!isset($cached['headers']) or !is_array($cached['headers'])) $cached['headers'] = array();
-				Q_WebServer_Domains::addHsts($cached['headers'], $parsed['headers']['host'] ?? '', !empty($parsed['_https']));
+				Q_WebServer_ResponseHeaders::apply($cached['headers'], $parsed['headers']['host'] ?? '',
+					!empty($parsed['_https']), true);
 				self::sendResponse($client, $cached['status'],
 					$cached['body'],
 					$cached['headers']['Content-Type'] ?? 'text/html',
-					$cached['headers'], $method === 'HEAD');
+					$cached['headers'], $method === 'HEAD', true);
 				return false;
 			}
 		}
@@ -3416,6 +3423,7 @@ class Q_WebServer
 				) {
 					$imgResponse = Q_WebServer_Image::handle($fsPath, $path, $parsed);
 					if ($imgResponse) {
+						$imgResponse['_server'] = true;
 						Q_WebServer_Headers::processResponse($client, $imgResponse, $parsed['headers']);
 						return false;
 					}
@@ -3431,6 +3439,7 @@ class Q_WebServer
 			&& self::servedAsFile($path)) {
 			$imgResponse = Q_WebServer_Image::handle(null, $path, $parsed);
 			if ($imgResponse) {
+				$imgResponse['_server'] = true;
 				Q_WebServer_Headers::processResponse($client, $imgResponse, $parsed['headers']);
 				return false;
 			}
@@ -4289,6 +4298,8 @@ WORKER;
 
 		// Build and send response
 		// We bypass processResponse for Set-Cookie to handle multiples
+		$cgiMeta = is_resource($client) ? @stream_get_meta_data($client) : array();
+		Q_WebServer_ResponseHeaders::apply($headers, $parsed['headers']['host'] ?? '', !empty($cgiMeta['crypto']), true);
 		$headers['Content-Length'] = strlen($body);
 		$headers['Connection'] = 'close';
 
@@ -4349,14 +4360,10 @@ WORKER;
 		// The domain's HSTS header is part of the stored response, so it is
 		// part of the key too: two domains can share a root, and the same
 		// file goes out over HTTP (never with it) and HTTPS.
-		$hsts = null;
-		if (class_exists('Q_WebServer_Domains', false)) {
-			$staticMeta = is_resource($client) ? @stream_get_meta_data($client) : array();
-			$hsts = Q_WebServer_Domains::hstsHeader(
-				Q_WebServer_Domains::normalize($reqHeaders['host'] ?? ''), !empty($staticMeta['crypto'])
-			);
-			if ($hsts !== null) $cacheKey .= '|' . $hsts;
-		}
+		// Without a domain record, Q.webserver.hsts gives it, on HTTPS only.
+		$staticMeta = is_resource($client) ? @stream_get_meta_data($client) : array();
+		$hsts = Q_WebServer_ResponseHeaders::hstsFor($reqHeaders['host'] ?? '', !empty($staticMeta['crypto']));
+		if ($hsts !== null) $cacheKey .= '|' . $hsts;
 
 		// ── Try response cache ──
 		if (isset(self::$fileCache[$cacheKey])) {
@@ -4434,6 +4441,11 @@ WORKER;
 			. "Last-Modified: " . gmdate('D, d M Y H:i:s', $mtime) . " GMT\r\n"
 			. "Cache-Control: " . self::staticCacheControl($fsPath) . "\r\n";
 		if ($hsts !== null) $baseHeaders .= "Strict-Transport-Security: $hsts\r\n";
+		// Q.webserver.headers. The same for every file this process serves,
+		// so the in-memory copy below may keep them.
+		$baseHeaders .= Q_WebServer_ResponseHeaders::lines(
+			array('content-type', 'etag', 'last-modified', 'cache-control')
+		);
 
 		// ── Large file fork ──
 		// Files over 1MB are served by a forked child process so the parent's
@@ -5085,6 +5097,9 @@ WORKER;
 					foreach (Q_WebServer_State::cookieHeaders() as $ch) {
 						$hdrs['Set-Cookie'] = $ch;
 					}
+					$streamMeta = is_resource($_streamingClient) ? @stream_get_meta_data($_streamingClient) : array();
+					Q_WebServer_ResponseHeaders::apply($hdrs, $parsed['headers']['host'] ?? '',
+						!empty($streamMeta['crypto']), true);
 					$out = "HTTP/1.1 $status " . Q_WebServer::statusText($status) . "\r\n";
 					$out .= Q_WebServer::headerLines($hdrs);
 					$out .= "\r\n";
@@ -5809,7 +5824,14 @@ WORKER;
 		return ($keepAlive && $status < 500) ? 'keep-alive' : 'close';
 	}
 
-	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array(), $headOnly = false)
+	/**
+	 * Write a whole HTTP/1.1 response.
+	 *
+	 * $fromScript says the response is a script's (a response cache hit)
+	 * rather than one of the server's own pages, which decides whether
+	 * Q.webserver.headers go on it (see Q_WebServer_ResponseHeaders).
+	 */
+	static function sendResponse($client, $status, $body, $type = 'text/plain; charset=utf-8', $extra = array(), $headOnly = false, $fromScript = false)
 	{
 		static $reasons = array(
 			200=>'OK', 301=>'Moved Permanently', 302=>'Found', 304=>'Not Modified',
@@ -5837,11 +5859,14 @@ WORKER;
 			$body = Q_WebServer_Headers::maybeCompress($body, $ct, self::$compressFor, $extra);
 		}
 		self::$lastBytes = strlen($body);
-		// The server's own pages (404, 403 ...) for a domain with HSTS: the
-		// host is the one the gate saw for this request.
-		if (class_exists('Q_WebServer_Domains', false) and Q_WebServer_Domains::$currentHost !== null
-			and is_resource($client) and !empty(@stream_get_meta_data($client)['crypto'])) {
-			Q_WebServer_Domains::addHsts($extra, Q_WebServer_Domains::$currentHost, true);
+		// The server's own pages (404, 403 ...): HSTS over TLS, for a domain
+		// with a record of its own (the host is the one the gate saw for this
+		// request) or from Q.webserver.hsts, and Q.webserver.headers.
+		if (class_exists('Q_WebServer_ResponseHeaders')) {
+			Q_WebServer_ResponseHeaders::apply($extra,
+				class_exists('Q_WebServer_Domains', false) ? Q_WebServer_Domains::$currentHost : null,
+				is_resource($client) and !empty(@stream_get_meta_data($client)['crypto']),
+				$fromScript);
 		}
 
 		// Content-Type was written from the argument and the caller's headers
@@ -6217,7 +6242,9 @@ WORKER;
 	static function sendRedirect($client, $loc, $permanent = false) {
 		$code = $permanent ? 301 : 302;
 		$text = $permanent ? 'Moved Permanently' : 'Found';
-		self::writeAll($client, "HTTP/1.1 $code $text\r\nLocation: $loc\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+		self::writeAll($client, "HTTP/1.1 $code $text\r\nLocation: $loc\r\n"
+			. Q_WebServer_ResponseHeaders::serverLines($client, array('location'))
+			. "Content-Length: 0\r\nConnection: close\r\n\r\n");
 		self::$lastStatus = $code;
 	}
 
@@ -6225,7 +6252,9 @@ WORKER;
 		$conn = $keepAlive ? 'keep-alive' : 'close';
 		self::writeAll($client, "HTTP/1.1 304 Not Modified\r\nETag: $etag\r\n"
 			. "Last-Modified: " . gmdate('D, d M Y H:i:s', $mtime) . " GMT\r\n"
-			. "Cache-Control: " . self::staticCacheControl() . "\r\nContent-Length: 0\r\nConnection: $conn\r\n\r\n");
+			. "Cache-Control: " . self::staticCacheControl() . "\r\n"
+			. Q_WebServer_ResponseHeaders::serverLines($client, array('etag', 'last-modified', 'cache-control'))
+			. "Content-Length: 0\r\nConnection: $conn\r\n\r\n");
 		self::$lastStatus = 304;
 	}
 
