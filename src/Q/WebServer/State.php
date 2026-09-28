@@ -158,6 +158,11 @@ class Q_WebServer_State
 		} else {
 			self::$headers[$name] .= ', ' . $value;
 		}
+		// As PHP's header(): a WWW-Authenticate challenge makes the answer a
+		// 401, unless the call names its own code.
+		if (!$code && strcasecmp($name, 'WWW-Authenticate') === 0) {
+			self::$code = 401;
+		}
 		if ($code) { self::$code = $code; }
 	}
 

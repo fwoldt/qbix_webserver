@@ -1202,6 +1202,20 @@ class Q_WebServer_Compat
 			}
 		}
 
+		// header('WWW-Authenticate: ...') means 401. PHP's own header() sets
+		// it whatever status the script chose before (only an explicit
+		// $response_code wins), and applications rely on it: a REST API that
+		// writes its status line first and the challenge after answered 401
+		// under mod_php and fpm, and the status line's own code here.
+		if ($response_code === null
+		and preg_match('/^\s*WWW-Authenticate\s*:/i', $string)) {
+			if (class_exists('Q_WebServer_State', false)) {
+				Q_WebServer_State::responseCode(401);
+			} else {
+				Q_Response::code(401);
+			}
+		}
+
 		Q_Response::header($string, $replace);
 	}
 
@@ -1785,6 +1799,13 @@ class Q_WebServer_Compat
 	 */
 	static function _getallheaders()
 	{
+		// A pool worker hands the request's headers to
+		// Q_WebServer_GetAllHeaders, not to setRequestHeaders(). Without this
+		// the call came back empty there, and a script reading its
+		// Authorization header through apache_request_headers() saw none.
+		if (!self::$requestHeaders and class_exists('Q_WebServer_GetAllHeaders', false)) {
+			return Q_WebServer_GetAllHeaders::getAll();
+		}
 		$result = array();
 		foreach (self::$requestHeaders as $key => $value) {
 			// Convert 'content-type' → 'Content-Type'
